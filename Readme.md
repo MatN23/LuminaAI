@@ -1,50 +1,72 @@
-Overview
+🧠 LuminaAI — Character-Level Transformer
 
-This project implements a character-level Transformer model trained on conversational datasets (e.g., OpenAssistant). Built with PyTorch, it supports CUDA GPUs and Apple Silicon MPS devices.
+A lightweight, character-level Transformer model implemented in PyTorch, designed to train on custom conversational datasets (e.g. OpenAssistant). Built for experimentation, learning, and development of simple AI chatbots and NLP models from the ground up.
 
-Features
+🚀 Features
 
-Character-level Transformer architecture
-Dataset loading and preprocessing from JSONL files
-Training with configurable hyperparameters
-Supports CUDA and MPS acceleration
-Saves model and vocab mappings for reuse
-Requirements
+🔡 Character-Level Modeling – Fine-grained language understanding without tokenizers.
+⚙️ Transformer Encoder – Multi-head attention, positional encodings, feed-forward layers.
+🧪 Training Loop – Supports gradient clipping, batching, custom sequence lengths.
+💻 Hardware Support – Runs on CPU, CUDA (NVIDIA GPUs), and MPS (Apple Silicon).
+🧾 Custom Dataset Support – Load datasets in JSONL or plain text for dialogue training.
+🧠 Open-Source Learning Tool – Easy to read, modify, and experiment with.
+📂 Project Structure
 
-Python 3.10+
-PyTorch 2.0+
-CUDA-enabled GPU (recommended) or Apple Silicon MPS
-Dataset files in JSONL format
+main/
+│
+├── src/                  # Core model code
+│   ├── model.py          # Transformer model definition
+│   ├── dataset.py        # Data loading and preprocessing
+│   └── train.py          # Training loop
+│      
+├── LICENSE
+├── README.md
+└── requirements.txt
+⚡ Quick Start
 
-Download and prepare the dataset:
+🧠 How It Works
 
-python Dataset_download.py
-Usage
+This model uses a simplified Transformer encoder that learns from characters rather than full words or tokens. It predicts the next character based on a sequence of previous ones, making it highly flexible and easy to train on smaller datasets.
 
-Train the model:
+You can modify:
 
-python train_transformer.py
-The script will automatically use CUDA if available, then MPS, or fallback to CPU.
+hidden_size
+num_layers
+seq_len
+batch_size
+learning_rate
+All in train.py or via CLI arguments.
 
-Configuration
+🧪 Example Dataset Format
 
-Adjust hyperparameters in train_transformer.py:
+Supports JSONL conversational format:
 
-hidden_size = 256
-num_layers = 4
-nhead = 8
-batch_size = 64
-seq_length = 128
-learning_rate = 5e-4
-epochs = 500
-License and Commercial Use
+{ "user": "Hello!", "bot": "Hi there!" }
+Or simple text format:
 
-This project is licensed under the MIT License for personal, educational, and research purposes.
+<|user|> How are you?
+<|bot|> I'm fine, thank you.
+📜 License
 
-Commercial use requires a separate license and royalty agreement.
+This project is licensed under a custom commercial-restricted license:
 
-Please contact Matias Nielsen at matiasnhmb@gmail.com for commercial licensing inquiries.
+✅ Free for personal and non-commercial use
+🚫 Commercial use requires a paid license and written permission
+⚖️ Legal protection under U.S. (California) law
+See LICENSE for full terms.
 
-Contact:
+🔒 Security
 
-For questions or support, email: matiasnhmb@gmail.com
+If you discover a vulnerability, please report it privately. See SECURITY.md for guidelines.
+
+🤝 Contributing
+
+Contributions are welcome!
+
+Fork the repo
+Create a new branch
+Submit a PR with a clear explanation of changes
+📬 Contact
+
+For questions, licensing, or commercial inquiries:
+📧 matiasnhmb@gmail.com
