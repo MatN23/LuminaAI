@@ -1,29 +1,48 @@
+# Copywrite (c) 2025 Matias Nielsen. All rights reserved.
+# Licensed under the Custom License below.
+
 from datasets import load_dataset
 import os
 
-print("🚀 Running dataset download script...")
+def main():
+    print("🚀 Running dataset download script...")
 
-# --- Load dataset from Hugging Face ---
-print("📦 Loading OpenAssistant dataset (oasst1)...")
-ds = load_dataset("OpenAssistant/oasst1")
-print("✅ Dataset loaded!")
+    # Get absolute path of script folder
+    script_dir = os.path.dirname(os.path.abspath(__file__))
 
-# --- Print basic info ---
-print(f"📊 Train split: {len(ds['train'])} examples")
-print(f"📊 Validation split: {len(ds['validation'])} examples")
+    # Assuming your project root is 3 levels up from script (adjust as needed)
+    project_root = os.path.abspath(os.path.join(script_dir, "..", "..", ".."))
+    print("Detected project root:", project_root)
 
-# --- Define output directory ---
-output_dir = "oasst1_data"
-os.makedirs(output_dir, exist_ok=True)
+    # Desired output directory inside project
+    output_dir = os.path.join(project_root, "main", "src", "oasst1_data")
+    print(f"Output directory: {output_dir}")
+    os.makedirs(output_dir, exist_ok=True)
 
-# --- Save splits to JSONL format ---
-train_path = os.path.join(output_dir, "oasst1_train.jsonl")
-val_path = os.path.join(output_dir, "oasst1_validation.jsonl")
+    # Load dataset
+    print("📦 Loading OpenAssistant dataset (oasst1)...")
+    ds = load_dataset("OpenAssistant/oasst1")
+    print("✅ Dataset loaded!")
 
-print(f"💾 Saving train split to: {train_path}")
-ds["train"].to_json(train_path, orient="records", lines=True)
+    print(f"📊 Full train split size: {len(ds['train'])}")
+    print(f"📊 Full validation split size: {len(ds['validation'])}")
 
-print(f"💾 Saving validation split to: {val_path}")
-ds["validation"].to_json(val_path, orient="records", lines=True)
+    # Limit train split size to 20,000 examples (adjust as needed)
+    max_train_examples = 20000
+    train_subset = ds["train"].select(range(min(max_train_examples, len(ds["train"]))))
+    print(f"📊 Using train subset size: {len(train_subset)}")
 
-print("✅ All done! Dataset saved successfully.")
+    # Save subset train split
+    train_path = os.path.join(output_dir, "oasst1_train.jsonl")
+    print(f"💾 Saving train subset to: {train_path}")
+    train_subset.to_json(train_path, orient="records", lines=True)
+
+    # Save full validation split (usually smaller, but can also subset if needed)
+    val_path = os.path.join(output_dir, "oasst1_validation.jsonl")
+    print(f"💾 Saving validation split to: {val_path}")
+    ds["validation"].to_json(val_path, orient="records", lines=True)
+
+    print("✅ Dataset saved successfully.")
+
+if __name__ == "__main__":
+    main()
