@@ -1,0 +1,129 @@
+📘 Fine-Tuning Script Documentation (Char-Level Transformer on OpenAssistant oasst1)
+
+This script fine-tunes a character-level Transformer model on the OpenAssistant oasst1 dataset using PyTorch.
+
+🧱 Project Structure
+
+your_project/
+│
+├── Model.pth                     # Pre-trained character-level model checkpoint
+├── oasst1_data/
+│   ├── oasst1_train.jsonl        # Fine-tuning data (generated separately)
+│
+└── fine_tune.py                  # This script
+🔧 What This Script Does
+
+Selects device (MPS, CUDA, or CPU).
+Loads fine-tuning text data from the OpenAssistant dataset (oasst1_train.jsonl).
+Loads a pre-trained character-level Transformer model (Model.pth).
+Adapts the model’s vocabulary to support new characters from the new dataset.
+Fine-tunes the model using the oasst1 data.
+Tracks and prints metrics (loss, accuracy, learning rate).
+Saves the best-performing fine-tuned model to FineTuned_Model.pth.
+🧠 Key Components
+
+Device Setup
+if torch.backends.mps.is_available() ...
+Selects best available hardware backend:
+Apple MPS (Metal)
+NVIDIA CUDA
+CPU fallback
+CharDataset
+class CharDataset(Dataset)
+Converts character-level text into input/target sequences:
+Input: seq_length characters
+Target: same sequence shifted one position to the right
+Used with torch.utils.data.DataLoader for batching.
+load_text_data(path)
+Reads training text from either:
+.jsonl: Loads OpenAssistant chats, extracting "text" field.
+.txt: Loads raw plain text (fallback).
+Returns a single concatenated string of text.
+PositionalEncoding
+Adds sinusoidal position information to the token embeddings:
+
+class PositionalEncoding(nn.Module)
+Required for Transformers to understand order in sequences.
+Precomputes sine/cosine values and adds them to input embeddings.
+CharTransformer
+class CharTransformer(nn.Module)
+Character-level decoder-only Transformer model:
+
+Embedding layer (char → vector)
+Positional encoding
+Transformer decoder (multi-head self-attention)
+Layer norm, dropout, final linear projection to vocab size
+load_pretrained_model(model_path, device)
+Loads a .pth checkpoint:
+
+Restores model architecture and weights.
+Loads the char_to_ix (char to int) and ix_to_char vocab mappings.
+adapt_vocabulary(...)
+Compares current training data with pre-trained vocabulary.
+Adds any new characters to vocab and updates mappings.
+extend_model_vocabulary(...)
+Dynamically increases:
+
+nn.Embedding layer size
+Final output nn.Linear layer size
+Preserves old weights and initializes new parameters.
+
+WarmupCosineScheduler
+class WarmupCosineScheduler
+Custom learning rate scheduler:
+
+Linear warmup for warmup_steps
+Then cosine decay until total_steps
+Prevents unstable learning early on
+🔁 Fine-Tuning Flow
+
+Parameters:
+pretrained_model_path = "Model.pth"
+data_path = "oasst1_data/oasst1_train.jsonl"
+output_model_path = "FineTuned_Model.pth"
+learning_rate = 1e-4
+epochs = 50
+batch_size = 16
+Steps:
+Load training text from JSONL
+Load pre-trained model and vocab
+Adapt vocab and extend model if needed
+Create CharDataset and DataLoader
+Initialize optimizer, scheduler, loss
+Train loop:
+Forward pass
+CrossEntropy loss
+Backprop & weight update
+Accuracy tracking
+Save best model
+💾 Saved Checkpoint Structure (FineTuned_Model.pth)
+
+{
+  "model_state_dict": model.state_dict(),
+  "char_to_ix": char_to_ix,
+  "ix_to_char": ix_to_char,
+  "hidden_size": ...,
+  "num_layers": ...,
+  "nhead": ...,
+  "vocab_size": ...,
+  "seq_length": ...,
+  "epoch": ...,   # Best epoch
+  "loss": ...     # Best loss
+}
+📝 Requirements
+
+PyTorch
+datasets (HuggingFace)
+Python 3.9+ recommended
+pip install torch datasets
+✅ Output
+
+Prints training metrics every epoch
+Saves best-performing model to:
+FineTuned_Model.pth
+🗂️ Notes
+
+Make sure to run the dataset download script beforehand:
+It should generate oasst1_data/oasst1_train.jsonl.
+You can fine-tune on any other dataset—just replace the path and ensure format compatibility.
+This is a character-level model—fine for dialog modeling, text generation, etc.

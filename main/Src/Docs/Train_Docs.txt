@@ -1,0 +1,165 @@
+🔎 Character-Level Transformer Language Model — Full Code Documentation
+
+This script trains a character-level Transformer-based language model on a plain text dataset (e.g., books, chats, code). It includes components for:
+
+Data preprocessing
+Model architecture (Transformer with causal masking)
+Training with scheduler, logging, checkpoints
+Text generation
+📦 Imports
+
+import time, math, json, argparse
+import torch, torch.nn as nn, torch.nn.functional as F
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
+from pathlib import Path
+Purpose: Import all modules for file handling, math, PyTorch (modeling/training), JSON handling, and command-line args.
+
+⚙️ Thread and Device Configuration
+
+torch.set_num_threads(2)
+torch.set_num_interop_threads(1)
+Limits CPU threading for better performance on constrained machines.
+
+# Device selection
+if torch.backends.mps.is_available() and torch.backends.mps.is_built():
+    device = torch.device("mps")
+elif torch.cuda.is_available():
+    device = torch.device("cuda")
+else:
+    device = torch.device("cpu")
+Selects compute backend:
+
+MPS: Apple Silicon acceleration
+CUDA: NVIDIA GPU
+CPU: fallback if no GPU
+📚 CharDataset: Custom Dataset
+
+class CharDataset(Dataset):
+    ...
+Prepares sequences of character indices and their next-character targets:
+
+__getitem__ returns (input_seq, target_seq)
+Sequences are of fixed seq_length
+Used for training in batches
+📖 load_text_data(path)
+
+Loads plain text:
+
+From .jsonl (like OASST) by extracting "text" fields
+From .txt or other formats directly
+🌈 PositionalEncoding
+
+class PositionalEncoding(nn.Module):
+    ...
+Adds sinusoidal positional information to character embeddings (important for transformers to track token order).
+
+🧠 CharTransformer: Transformer Decoder Model
+
+class CharTransformer(nn.Module):
+    ...
+Key components:
+Embedding: Maps char IDs to vectors
+PositionalEncoding: Adds position info
+TransformerDecoder: Layered transformer with causal masking
+fc_out: Projects back to vocabulary size for classification
+generate_square_subsequent_mask()
+Creates a triangular mask to ensure tokens don’t “see” future ones during training.
+
+📏 Training Utilities
+
+def count_parameters(model): ...
+Counts trainable parameters for model size logging.
+
+def save_checkpoint(...), load_checkpoint(...)
+Saves and loads intermediate model checkpoints (for resuming or debugging).
+
+📉 WarmupCosineScheduler
+
+class WarmupCosineScheduler:
+    ...
+Implements warmup followed by cosine decay:
+
+Smooths learning rate to stabilize training
+Frequently used in transformer training
+📝 generate_text(...)
+
+Generates new text based on a prompt:
+
+Uses the model to predict next characters
+Applies softmax + sampling (with temperature)
+Stops at \n or after max_length characters
+🚂 Main Training Pipeline
+
+def main():
+    ...
+🧮 Hyperparameters
+hidden_size = 512
+seq_length = 512
+batch_size = 16
+num_layers = 6
+nhead = 8
+...
+🔡 Text Preprocessing
+text = load_text_data(...)
+chars = sorted(set(text))
+char_to_ix = {ch: i ...}
+ix_to_char = {i: ch ...}
+Builds:
+
+Vocabulary of unique characters
+Mappings from char ↔️ index
+📊 DataLoader
+dataset = CharDataset(...)
+dataloader = DataLoader(...)
+Wraps dataset into batches, shuffling and loading in parallel.
+
+🏗️ Model Initialization
+model = CharTransformer(...).to(device)
+Also sets:
+
+CrossEntropyLoss for next-token prediction
+AdamW optimizer (with weight decay for regularization)
+WarmupCosineScheduler for learning rate
+🔁 Training Loop
+for epoch in range(1, epochs + 1):
+    for inputs, targets in dataloader:
+        ...
+For every batch:
+
+Move data to device
+Forward pass
+Compute loss
+Backpropagate
+Clip gradients
+Optimizer step
+Scheduler step
+Track accuracy/loss
+After each epoch:
+
+Print training stats
+Save best model
+Every 10 epochs: generate sample text
+Every 25 epochs: save checkpoint
+🧪 Example Output (Sample Text Generation)
+
+prompt = text[:20]
+sample = generate_text(model, char_to_ix, ix_to_char, prompt)
+Useful to monitor how well the model is learning syntax, structure, or imitation of training data.
+
+🧠 Training Summary
+
+if __name__ == "__main__":
+    main()
+At the end:
+Saves best model to Model.pth
+Trained on a single text corpus
+Generates character-by-character outputs
+✅ Summary
+
+Component	Purpose
+CharDataset	Prepares character-level sequences
+CharTransformer	Transformer model with decoder-only architecture
+generate_text	Inference: generate text from prompt
+WarmupCosineScheduler	Custom learning rate schedule
+main()	Ties everything together for training

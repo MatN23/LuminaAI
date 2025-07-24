@@ -1,0 +1,89 @@
+🧠 Transformer Chatbot Project — Summary
+
+This project implements a character-level Transformer chatbot, capable of generating conversational responses. It includes scripts for dataset preparation, model training, interactive inference, and supports top-k, nucleus (top-p), and greedy sampling.
+
+🔹 1. Dataset Download Script (download_dataset.py)
+
+This script fetches the OpenAssistant OASST1 dataset from Hugging Face and saves it in .jsonl format for downstream training.
+
+Key Features:
+Uses datasets library to download OpenAssistant data.
+Saves both train and validation splits into oasst1_data/ as oasst1_train.jsonl and oasst1_validation.jsonl.
+ds = load_dataset("OpenAssistant/oasst1")
+ds["train"].to_json("oasst1_data/oasst1_train.jsonl", lines=True)
+🔹 2. Model Training Script (train_transformer.py)
+
+Trains a Transformer decoder on character-level data using autoregressive modeling.
+
+Key Components:
+🔸 Dataset & DataLoader
+
+CharDataset converts text into overlapping input–target pairs.
+Supports .txt and .jsonl input (e.g., from OASST dataset).
+🔸 Model: CharTransformer
+
+Decoder-only Transformer with:
+Sinusoidal PositionalEncoding
+Causal masking (generate_square_subsequent_mask)
+Embedding → Decoder → LayerNorm → Output projection
+Trained with CrossEntropyLoss for next-token prediction.
+🔸 Training Setup
+
+Optimizer: AdamW
+Scheduler: WarmupCosineScheduler for stable learning rate ramp-up and decay
+Device-aware execution (MPS, CUDA, or CPU)
+Checkpointing and automatic best-model saving
+Sample text generation every 10 epochs
+🔸 Output
+
+Model saved to Model.pth
+Intermediate checkpoints saved every 25 epochs
+🔹 3. Interactive Chatbot Script (chatbot.py)
+
+Loads a trained model checkpoint and provides a command-line chatbot interface.
+
+Key Features:
+🔸 Sampling Strategies:
+
+Greedy: deterministic argmax
+Top-k Sampling: random sampling from top k logits
+Nucleus (Top-p): sample from smallest subset of logits summing to probability ≥ p
+🔸 CLI Commands:
+
+Command	Description
+exit	Quit the chatbot
+clear	Clear the chat history
+temp 0.7	Set temperature to 0.7
+topk 10	Set top-k to 10
+nucleus	Switch to nucleus sampling
+topk_mode	Switch back to top-k sampling
+🔸 Architecture & Usage:
+
+Appends <|user|> and <|bot|> tokens to preserve persona
+Tracks and limits context history for memory efficiency
+Dynamically adjusts temperature and sampling strategy
+Cleans generated output before displaying to user
+⚙️ Technical Stack Overview
+
+Component	Details
+Framework	PyTorch
+Model Type	Decoder-only Transformer (GPT-style)
+Tokenization	Character-level
+Input Format	`<
+Sampling Modes	Greedy, Top-k, Top-p (nucleus)
+Scheduler	Warmup + Cosine decay
+Dataset Source	OpenAssistant/oasst1 (HuggingFace Datasets)
+Output	Model.pth, sample generations, and CLI-based chatbot interface
+✅ What You Have
+
+Script	Purpose
+download_dataset.py	Fetches and saves OASST1 dataset
+train_transformer.py	Trains the Transformer model
+chatbot.py	Runs the interactive chatbot
+🚀 Optional Next Steps
+
+✅ Add a GUI using Gradio or Streamlit
+✅ Export model to ONNX or TorchScript for deployment
+✅ Add multi-turn memory management (history truncation, persona memory)
+✅ Integrate a tokenizer for subword-level training
+✅ Switch from char-level to word-level or byte-level modeling (e.g., GPT2 tokenizer)
