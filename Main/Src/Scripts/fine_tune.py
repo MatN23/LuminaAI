@@ -1,12 +1,20 @@
+import os
 import time
+import math
+import json
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
+import torch.nn.functional as F
 
-# --- Device selection with fallback ---
+torch.set_num_threads(2)
+torch.set_num_interop_threads(1)
+
+# --- Device selection ---
 if torch.backends.mps.is_available() and torch.backends.mps.is_built():
     device = torch.device("mps")
-    print("Using device: MPS (Apple Silicon GPU)")
+    print("Using device: MPS (Apple Silicon)")
 elif torch.cuda.is_available():
     device = torch.device("cuda")
     print("Using device: CUDA (NVIDIA GPU)")
@@ -14,132 +22,278 @@ else:
     device = torch.device("cpu")
     print("Using device: CPU")
 
-# --- Load and process dataset ---
-def load_dataset(path):
-    with open(path, "r", encoding="utf-8") as f:
-        lines = f.readlines()
-    text = ""
-    for line in lines:
-        line = line.strip()
-        if line.startswith("### User:"):
-            text += "<|user|>" + line[len("### User:"):].strip() + "\n"
-        elif line.startswith("### Bot:"):
-            text += "<|bot|>" + line[len("### Bot:"):].strip() + "\n"
-        else:
-            text += line + "\n"
-    return text
+# --- Dataset class ---
+class CharDataset(Dataset):
+    def __init__(self, text, seq_length, char_to_ix):
+        self.seq_length = seq_length
+        self.data = [char_to_ix[c] for c in text]
 
-# --- Hyperparameters (use same as original or modify) ---
-hidden_size = 1024
-seq_length = 500
-batch_size = 256
-learning_rate = 1e-4  # Usually lower for fine-tuning
-epochs = 100  # Fewer epochs for fine-tuning
-num_layers = 12
+    def __len__(self):
+        return len(self.data) - self.seq_length
 
-# --- Model class (same as original) ---
-class CharLSTM(nn.Module):
-    def __init__(self, vocab_size, hidden_size, num_layers=3):
-        super().__init__()
-        self.hidden_size = hidden_size
-        self.num_layers = num_layers
-        self.embed = nn.Embedding(vocab_size, hidden_size)
-        self.lstm = nn.LSTM(hidden_size, hidden_size, num_layers=num_layers, batch_first=True)
-        self.fc = nn.Linear(hidden_size, vocab_size)
-
-    def forward(self, x, hidden):
-        x = self.embed(x)
-        out, hidden = self.lstm(x, hidden)
-        out = self.fc(out)
-        return out, hidden
-
-    def init_hidden(self, batch_size):
+    def __getitem__(self, idx):
         return (
-            torch.zeros(self.num_layers, batch_size, self.hidden_size, device=device),
-            torch.zeros(self.num_layers, batch_size, self.hidden_size, device=device),
+            torch.tensor(self.data[idx:idx + self.seq_length], dtype=torch.long),
+            torch.tensor(self.data[idx + 1:idx + self.seq_length + 1], dtype=torch.long)
         )
 
-# --- Load your saved model checkpoint ---
-checkpoint = torch.load("model.pth", map_location=device)
+# --- Load and process dataset ---
+def load_text_data(path):
+    """Load plain text data from jsonl or txt"""
+    if path.endswith('.jsonl'):
+        text = ""
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                record = json.loads(line)
+                content = record.get("text", "").strip()
+                if content:
+                    text += content + " "
+        return text
+    else:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
 
-vocab_size = checkpoint["vocab_size"]
-hidden_size = checkpoint["hidden_size"]
-num_layers = checkpoint["num_layers"]
-char_to_ix = checkpoint["char_to_ix"]
-ix_to_char = checkpoint["ix_to_char"]
+# --- Positional Encoding ---
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_len=5000, dropout=0.1):
+        super().__init__()
+        self.dropout = nn.Dropout(dropout)
 
-model = CharLSTM(vocab_size, hidden_size, num_layers).to(device)
-model.load_state_dict(checkpoint["model_state_dict"])
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len).unsqueeze(1).float()
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe.unsqueeze(0))
 
-# Optimize with IPEX if CPU and available
+    def forward(self, x):
+        x = x + self.pe[:, :x.size(1)]
+        return self.dropout(x)
 
-criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+# --- Transformer Model ---
+class CharTransformer(nn.Module):
+    def __init__(self, vocab_size, hidden_size, seq_length, num_layers, nhead, dropout=0.1):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.embedding = nn.Embedding(vocab_size, hidden_size)
+        self.pos_enc = PositionalEncoding(hidden_size, seq_length, dropout)
 
-# --- Load new fine-tuning data ---
-data_path = "fine_tune_data.txt"  # Change this path to your fine-tune dataset
-text = load_dataset(data_path)
+        decoder_layer = nn.TransformerDecoderLayer(
+            d_model=hidden_size,
+            nhead=nhead,
+            dropout=dropout,
+            batch_first=True
+        )
+        self.decoder = nn.TransformerDecoder(decoder_layer, num_layers)
+        self.layer_norm = nn.LayerNorm(hidden_size)
+        self.fc_out = nn.Linear(hidden_size, vocab_size)
+        self.dropout = nn.Dropout(dropout)
+        self.init_weights()
 
-# Make sure vocab matches original — if not, you may need vocab update or error handling
-# Here we assume same vocab, so convert chars to indices with char_to_ix
-data_ix = [char_to_ix.get(c, 0) for c in text]  # Use 0 index for unknown chars if any
+    def init_weights(self):
+        initrange = 0.1
+        self.embedding.weight.data.uniform_(-initrange, initrange)
+        self.fc_out.bias.data.zero_()
+        self.fc_out.weight.data.uniform_(-initrange, initrange)
 
-# --- Prepare batches ---
-def get_batches(data, batch_size, seq_length):
-    total_length = len(data)
-    num_batches = total_length // (batch_size * seq_length)
-    data = data[:num_batches * batch_size * seq_length]
-    data = torch.tensor(data, dtype=torch.long).to(device)
-    data = data.view(batch_size, -1)
+    def generate_square_subsequent_mask(self, sz):
+        mask = torch.triu(torch.ones(sz, sz), diagonal=1)
+        return mask.masked_fill(mask == 1, float('-inf'))
 
-    for i in range(0, data.size(1) - seq_length, seq_length):
-        inputs = data[:, i:i+seq_length]
-        targets = data[:, i+1:i+seq_length+1]
-        yield inputs, targets
+    def forward(self, x):
+        seq_len = x.size(1)
+        mask = self.generate_square_subsequent_mask(seq_len).to(x.device)
+        x = self.embedding(x) * math.sqrt(self.hidden_size)
+        x = self.pos_enc(x)
+        x = self.decoder(x, x, tgt_mask=mask)
+        x = self.layer_norm(x)
+        x = self.dropout(x)
+        return self.fc_out(x)
 
-# --- Fine-tuning loop ---
-start_time = time.time()
+# --- Load pre-trained model for fine-tuning ---
+def load_pretrained_model(model_path, device):
+    print(f"Loading pre-trained model from {model_path}")
+    checkpoint = torch.load(model_path, map_location=device)
 
-for epoch in range(1, epochs + 1):
-    model.train()
-    hidden = model.init_hidden(batch_size)
-    total_loss = 0
-    total_correct = 0
-    total_chars = 0
+    model_config = {
+        'vocab_size': checkpoint['vocab_size'],
+        'hidden_size': checkpoint['hidden_size'],
+        'seq_length': checkpoint['seq_length'],
+        'num_layers': checkpoint['num_layers'],
+        'nhead': checkpoint['nhead']
+    }
 
-    for inputs, targets in get_batches(data_ix, batch_size, seq_length):
-        optimizer.zero_grad()
-        output, hidden = model(inputs, hidden)
-        hidden = (hidden[0].detach(), hidden[1].detach())
+    char_to_ix = checkpoint['char_to_ix']
+    ix_to_char = checkpoint['ix_to_char']
 
-        loss = criterion(output.reshape(-1, vocab_size), targets.reshape(-1))
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1)
-        optimizer.step()
+    return model_config, char_to_ix, ix_to_char, checkpoint
 
-        total_loss += loss.item() * inputs.numel()
-        preds = output.argmax(dim=2)
-        total_correct += (preds == targets).sum().item()
-        total_chars += targets.numel()
+# --- Adapt vocab ---
+def adapt_vocabulary(pretrained_char_to_ix, pretrained_ix_to_char, new_text):
+    new_chars = set(new_text)
+    pretrained_chars = set(pretrained_char_to_ix.keys())
+    new_vocab_chars = new_chars - pretrained_chars
 
-    elapsed = time.time() - start_time
-    epochs_done = epoch
-    est_total = elapsed / epochs_done * epochs
-    est_remaining = est_total - elapsed
+    if new_vocab_chars:
+        print(f"Found {len(new_vocab_chars)} new chars: {sorted(new_vocab_chars)}")
+        extended_char_to_ix = pretrained_char_to_ix.copy()
+        extended_ix_to_char = pretrained_ix_to_char.copy()
+        next_idx = len(pretrained_char_to_ix)
+        for c in sorted(new_vocab_chars):
+            extended_char_to_ix[c] = next_idx
+            extended_ix_to_char[next_idx] = c
+            next_idx += 1
+        return extended_char_to_ix, extended_ix_to_char, len(new_vocab_chars)
+    else:
+        print("No new chars found. Using original vocab.")
+        return pretrained_char_to_ix, pretrained_ix_to_char, 0
 
-    if epoch % 5 == 0 or epoch == 1:
+# --- Extend model vocab layers ---
+def extend_model_vocabulary(model, old_vocab_size, new_vocab_size):
+    if new_vocab_size > old_vocab_size:
+        print(f"Extending model vocab from {old_vocab_size} to {new_vocab_size}")
+        old_emb = model.embedding.weight.data
+        new_emb = nn.Embedding(new_vocab_size, model.hidden_size).to(device)
+        new_emb.weight.data[:old_vocab_size] = old_emb
+        nn.init.uniform_(new_emb.weight.data[old_vocab_size:], -0.1, 0.1)
+        model.embedding = new_emb
+
+        old_fc_w = model.fc_out.weight.data
+        old_fc_b = model.fc_out.bias.data
+        new_fc = nn.Linear(model.hidden_size, new_vocab_size).to(device)
+        new_fc.weight.data[:old_vocab_size] = old_fc_w
+        new_fc.bias.data[:old_vocab_size] = old_fc_b
+        nn.init.uniform_(new_fc.weight.data[old_vocab_size:], -0.1, 0.1)
+        nn.init.zeros_(new_fc.bias.data[old_vocab_size:])
+        model.fc_out = new_fc
+
+# --- Learning rate scheduler ---
+class WarmupCosineScheduler:
+    def __init__(self, optimizer, warmup_steps, total_steps, min_lr=1e-6):
+        self.optimizer = optimizer
+        self.warmup_steps = warmup_steps
+        self.total_steps = total_steps
+        self.min_lr = min_lr
+        self.base_lr = optimizer.param_groups[0]['lr']
+
+    def step(self, step):
+        if step < self.warmup_steps:
+            lr = self.base_lr * step / self.warmup_steps
+        else:
+            progress = (step - self.warmup_steps) / (self.total_steps - self.warmup_steps)
+            lr = self.min_lr + (self.base_lr - self.min_lr) * 0.5 * (1 + math.cos(math.pi * progress))
+
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = lr
+        return lr
+
+# --- Training ---
+def main():
+    pretrained_model_path = "Model.pth"  # your pretrained model path
+    data_path = os.path.join("oasst1_data", "oasst1_train.jsonl")  # path to train JSONL
+    output_model_path = "FineTuned_Model.pth"
+
+    learning_rate = 1e-4
+    epochs = 50
+    batch_size = 16
+    dropout = 0.1
+    warmup_steps = 500
+    weight_decay = 0.01
+
+    print("Loading fine-tuning dataset...")
+    text = load_text_data(data_path)
+    print(f"Dataset loaded. Length: {len(text):,} chars")
+
+    model_config, pretrained_char_to_ix, pretrained_ix_to_char, checkpoint = load_pretrained_model(pretrained_model_path, device)
+    char_to_ix, ix_to_char, new_vocab_count = adapt_vocabulary(pretrained_char_to_ix, pretrained_ix_to_char, text)
+
+    model = CharTransformer(
+        vocab_size=model_config['vocab_size'],
+        hidden_size=model_config['hidden_size'],
+        seq_length=model_config['seq_length'],
+        num_layers=model_config['num_layers'],
+        nhead=model_config['nhead'],
+        dropout=dropout
+    ).to(device)
+
+    model.load_state_dict(checkpoint['model_state_dict'])
+
+    if new_vocab_count > 0:
+        extend_model_vocabulary(model, model_config['vocab_size'], len(char_to_ix))
+
+    vocab_size = len(char_to_ix)
+    seq_length = model_config['seq_length']
+
+    print(f"Fine-tuning model:")
+    print(f"  Original vocab size: {model_config['vocab_size']}")
+    print(f"  New vocab size: {vocab_size}")
+    print(f"  Architecture: hidden size {model_config['hidden_size']}, layers {model_config['num_layers']}, heads {model_config['nhead']}")
+    print(f"  Parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
+
+    dataset = CharDataset(text, seq_length, char_to_ix)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=2)
+    print(f"Dataset sequences: {len(dataset):,}")
+
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    total_steps = len(dataloader) * epochs
+    scheduler = WarmupCosineScheduler(optimizer, warmup_steps, total_steps)
+
+    step = 0
+    best_loss = float('inf')
+    global_start = time.time()
+
+    for epoch in range(1, epochs + 1):
+        model.train()
+        epoch_start = time.time()
+        total_loss = 0
+        total_correct = 0
+        total_chars = 0
+
+        for inputs, targets in dataloader:
+            inputs = inputs.to(device)
+            targets = targets.to(device)
+
+            optimizer.zero_grad()
+            outputs = model(inputs)
+            loss = criterion(outputs.reshape(-1, vocab_size), targets.reshape(-1))
+            loss.backward()
+
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
+
+            current_lr = scheduler.step(step)
+            step += 1
+
+            total_loss += loss.item() * inputs.numel()
+            preds = outputs.argmax(dim=2)
+            total_correct += (preds == targets).sum().item()
+            total_chars += targets.numel()
+
         avg_loss = total_loss / total_chars
         accuracy = 100 * total_correct / total_chars
-        print(f"Fine-tune Epoch {epoch:4d} | Loss: {avg_loss:.4f} | Accuracy: {accuracy:.2f}% | "
-              f"Elapsed: {elapsed:.1f}s | Est Remaining: {est_remaining:.1f}s")
+        epoch_time = time.time() - epoch_start
+        elapsed = time.time() - global_start
 
-# --- Save fine-tuned model ---
-torch.save({
-    "model_state_dict": model.state_dict(),
-    "char_to_ix": char_to_ix,
-    "ix_to_char": ix_to_char,
-    "hidden_size": hidden_size,
-    "num_layers": num_layers,
-    "vocab_size": vocab_size
-}, "char_lstm_model_finetuned.pth")
-print("Fine-tuned model saved to 'FineTunedModel.pth'")
+        print(f"Epoch {epoch:3d} | Loss: {avg_loss:.4f} | Accuracy: {accuracy:.2f}% | LR: {current_lr:.2e} | "
+              f"Time: {epoch_time:.1f}s | Elapsed: {elapsed:.1f}s")
+
+        if avg_loss < best_loss:
+            best_loss = avg_loss
+            torch.save({
+                "model_state_dict": model.state_dict(),
+                "char_to_ix": char_to_ix,
+                "ix_to_char": ix_to_char,
+                "hidden_size": model_config['hidden_size'],
+                "num_layers": model_config['num_layers'],
+                "nhead": model_config['nhead'],
+                "vocab_size": vocab_size,
+                "seq_length": seq_length,
+                "epoch": epoch,
+                "loss": avg_loss
+            }, output_model_path)
+
+    print(f"Fine-tuning complete. Model saved to '{output_model_path}'")
+
+if __name__ == "__main__":
+    main()
