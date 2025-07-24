@@ -37,21 +37,42 @@ class CharDataset(Dataset):
             torch.tensor(self.data[idx + 1:idx + self.seq_length + 1], dtype=torch.long)
         )
 
-# --- Load and process dataset ---
+# --- Load and process dataset with role tokens and English filter ---
 def load_text_data(path):
-    """Load plain text data from jsonl or txt"""
-    if path.endswith('.jsonl'):
-        text = ""
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                record = json.loads(line)
-                content = record.get("text", "").strip()
-                if content:
-                    text += content + " "
-        return text
-    else:
-        with open(path, "r", encoding="utf-8") as f:
-            return f.read()
+    """
+    Load text from JSONL, filtering only English messages,
+    skipping deleted ones, and adding role special tokens:
+    <|user|> for "prompter", <|assistant|> for "assistant".
+    Returns a concatenated string with newline separation.
+    """
+    role_tokens = {
+        "prompter": "<|user|>",
+        "assistant": "<|assistant|>"
+    }
+
+    texts = []
+
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            record = json.loads(line)
+            if record.get("deleted", False):
+                continue  # Skip deleted messages
+            if record.get("lang") != "en":
+                continue  # Skip non-English messages
+
+            text = record.get("text", "").strip()
+            if not text:
+                continue
+
+            role = record.get("role", "").lower()
+            token = role_tokens.get(role, "")
+
+            if token:
+                texts.append(f"{token} {text}")
+            else:
+                texts.append(text)
+
+    return "\n".join(texts) + "\n"
 
 # --- Positional Encoding ---
 class PositionalEncoding(nn.Module):
@@ -164,7 +185,7 @@ def extend_model_vocabulary(model, old_vocab_size, new_vocab_size):
         new_fc.weight.data[:old_vocab_size] = old_fc_w
         new_fc.bias.data[:old_vocab_size] = old_fc_b
         nn.init.uniform_(new_fc.weight.data[old_vocab_size:], -0.1, 0.1)
-        nn.init.zeros_(new_fc.bias.data[old_vocab_size:])
+        nn.init.zeros_(new_fc.bias.data[new_vocab_size - (new_vocab_size - old_vocab_size):])
         model.fc_out = new_fc
 
 # --- Learning rate scheduler ---

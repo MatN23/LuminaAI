@@ -40,21 +40,44 @@ class CharDataset(Dataset):
 
 # --- Load and process dataset ---
 def load_text_data(path):
-    """Load plain text data from various formats"""
-    if path.endswith('.jsonl'):
-        # For OASST data, extract just the text content without chat formatting
-        text = ""
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                record = json.loads(line)
-                content = record.get("text", "").strip()
-                if content:
-                    text += content + " "
-        return text
-    else:
-        # For plain text files
-        with open(path, "r", encoding="utf-8") as f:
-            return f.read()
+    """
+    Load text from a JSONL file with structure similar to your snippet.
+    Only keeps English, non-deleted messages.
+    Prepends special tokens based on 'role' to help model distinguish speaker turns.
+    """
+    role_tokens = {
+        "prompter": "<|user|>",
+        "assistant": "<|assistant|>"
+    }
+
+    texts = []
+
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            record = json.loads(line)
+            if record.get("deleted", False):
+                continue  # Skip deleted entries
+            if record.get("lang") != "en":
+                continue  # Skip non-English
+
+            text = record.get("text") or record.get("content") or ""
+            if not text and "message" in record:
+                text = record["message"].get("text", "")
+
+            text = text.strip()
+            if not text:
+                continue
+
+            role = record.get("role", "").lower()
+            token = role_tokens.get(role, "")  # Default empty if role unknown
+
+            if token:
+                texts.append(f"{token} {text}")
+            else:
+                # If role missing or unknown, just append text
+                texts.append(text)
+
+    return "\n".join(texts) + "\n"
 
 # --- Improved Positional Encoding ---
 class PositionalEncoding(nn.Module):
@@ -205,7 +228,7 @@ def main():
     warmup_steps = 1000
     
     # --- Load dataset and encode ---
-    data_path = "your_text_data.txt"  # Change to your text file
+    data_path = "../oasst1_data/oasst1_train.jsonl"
     print("Loading dataset...")
     text = load_text_data(data_path)
     print(f"Dataset loaded. Text length: {len(text):,} characters")
