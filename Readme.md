@@ -465,5 +465,3 @@ If you encounter issues or have questions:
 ---
 
 **Happy Training! 🚀**
-
-*Built with ❤️ by the LuminaAI team*
