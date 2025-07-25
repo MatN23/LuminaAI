@@ -1,4 +1,4 @@
-# 🤖 Character-Level Transformer Chatbot
+# 🤖 LuminaAI: A charecter-level Chatbot
 
 A powerful character-level Transformer implementation for training conversational AI models from scratch. This project provides a complete pipeline for training, fine-tuning, and chatting with your own character-level language models.
 
