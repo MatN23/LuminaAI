@@ -2,28 +2,29 @@
 # Licensed under the Custom License below.
 
 import os
+import json
 import time
 import math
-import json
 import logging
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Tuple, Optional, Any
+from dataclasses import dataclass, asdict
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 import torch.nn.functional as F
-from pathlib import Path
-from typing import Dict, Tuple, Optional
 import gc
+
+# Import shared components
+from model_manager import ModelManager, ModelConfig, TrainingConfig, ModelMetadata
+from word_transformer import WordTransformer, WordTokenizer
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Optimized thread configuration
-torch.set_num_threads(4)
-torch.set_num_interop_threads(2)
-
-# Device selection
 def setup_device():
     """Setup the best available device with proper error handling."""
     if torch.backends.mps.is_available() and torch.backends.mps.is_built():
@@ -39,93 +40,97 @@ def setup_device():
 
 device = setup_device()
 
-class CharDataset(Dataset):
-    """Character-level dataset for fine-tuning."""
+class FineTuneDataset(Dataset):
+    """Dataset for fine-tuning with conversation formatting."""
     
-    def __init__(self, text: str, seq_length: int, char_to_ix: Dict[str, int]):
+    def __init__(self, texts: List[str], tokenizer: WordTokenizer, seq_length: int):
+        self.tokenizer = tokenizer
         self.seq_length = seq_length
-        # Convert to indices with proper error handling
-        self.data = []
-        for c in text:
-            if c in char_to_ix:
-                self.data.append(char_to_ix[c])
-            else:
-                # Handle unknown characters gracefully
-                self.data.append(char_to_ix.get(' ', 0))
+        self.sequences = []
         
-        self.data = torch.tensor(self.data, dtype=torch.long)
-        logger.info(f"Fine-tuning dataset created with {len(self.data):,} characters")
-
+        logger.info("Creating fine-tuning dataset...")
+        
+        for text in texts:
+            tokens = tokenizer.encode(text)
+            # Create overlapping sequences but with smaller stride for fine-tuning
+            stride = seq_length // 4  # More overlap for better fine-tuning
+            for i in range(0, len(tokens) - seq_length, stride):
+                if i + seq_length + 1 <= len(tokens):
+                    self.sequences.append(tokens[i:i + seq_length + 1])
+        
+        logger.info(f"Created {len(self.sequences):,} fine-tuning sequences")
+    
     def __len__(self):
-        return len(self.data) - self.seq_length
-
+        return len(self.sequences)
+    
     def __getitem__(self, idx):
+        seq = self.sequences[idx]
         return (
-            self.data[idx:idx + self.seq_length].clone(),
-            self.data[idx + 1:idx + self.seq_length + 1].clone()
+            torch.tensor(seq[:-1], dtype=torch.long),
+            torch.tensor(seq[1:], dtype=torch.long)
         )
 
-def load_text_data(path: str) -> str:
-    """
-    Load text from JSONL with improved error handling and filtering.
-    Supports both OASST format and plain text files.
-    """
-    path = Path(path)
-    if not path.exists():
-        raise FileNotFoundError(f"Data file not found: {path}")
+def load_fine_tune_data(data_path: str) -> List[str]:
+    """Load and process fine-tuning data with conversation formatting."""
+    data_path = Path(data_path)
+    if not data_path.exists():
+        raise FileNotFoundError(f"Fine-tuning data file not found: {data_path}")
     
-    logger.info(f"Loading fine-tuning data from: {path}")
+    logger.info(f"Loading fine-tuning data from: {data_path}")
     
-    role_tokens = {
-        "prompter": "<|user|>",
-        "assistant": "<|bot|>"
-    }
-
     texts = []
     processed_count = 0
     skipped_count = 0
-
+    
     try:
-        if path.suffix == '.jsonl':
-            with open(path, "r", encoding="utf-8") as f:
+        if data_path.suffix == '.jsonl':
+            conversations = []
+            current_conversation = []
+            
+            with open(data_path, 'r', encoding='utf-8') as f:
                 for line_num, line in enumerate(f, 1):
                     try:
                         line = line.strip()
                         if not line:
                             continue
-                            
+                        
                         record = json.loads(line)
                         processed_count += 1
                         
-                        # Skip deleted entries
-                        if record.get("deleted", False):
+                        # Skip deleted or non-English entries
+                        if record.get("deleted", False) or record.get("lang") != "en":
                             skipped_count += 1
                             continue
                         
-                        # Skip non-English entries
-                        if record.get("lang") != "en":
-                            skipped_count += 1
-                            continue
-
-                        # Extract text content with multiple fallbacks
                         text = (record.get("text") or 
                                record.get("content") or 
                                (record.get("message", {}).get("text") if isinstance(record.get("message"), dict) else ""))
                         
                         text = str(text).strip()
-                        if not text or len(text) < 5:  # Skip very short texts
+                        if not text or len(text.split()) < 3:
                             skipped_count += 1
                             continue
-
-                        # Add role tokens if available
+                        
                         role = str(record.get("role", "")).lower()
-                        token = role_tokens.get(role, "")
-
-                        if token:
-                            texts.append(f"{token} {text}")
-                        else:
-                            texts.append(text)
-                            
+                        
+                        if role == "prompter":
+                            # Start new conversation or add to current
+                            if current_conversation:
+                                # Save previous conversation
+                                if len(current_conversation) >= 2:  # At least one exchange
+                                    conversations.append(" ".join(current_conversation) + " </s>")
+                                current_conversation = []
+                            current_conversation.append(f"<user> {text}")
+                        
+                        elif role == "assistant":
+                            if current_conversation:  # Only if we have a user message
+                                current_conversation.append(f"<bot> {text}")
+                                # Complete conversation pair
+                                conversations.append(" ".join(current_conversation) + " </s>")
+                                current_conversation = []
+                            else:
+                                skipped_count += 1
+                    
                     except json.JSONDecodeError as e:
                         logger.warning(f"Skipping malformed JSON at line {line_num}: {e}")
                         skipped_count += 1
@@ -134,202 +139,98 @@ def load_text_data(path: str) -> str:
                         logger.warning(f"Error processing line {line_num}: {e}")
                         skipped_count += 1
                         continue
+            
+            # Add any remaining conversation
+            if current_conversation and len(current_conversation) >= 2:
+                conversations.append(" ".join(current_conversation) + " </s>")
+            
+            texts = conversations
+            
         else:
-            # Plain text file
-            with open(path, "r", encoding="utf-8") as f:
+            # Plain text file - split into chunks
+            with open(data_path, 'r', encoding='utf-8') as f:
                 content = f.read().strip()
                 if content:
-                    texts.append(content)
-                    processed_count = 1
-
+                    # Split by double newlines (paragraphs)
+                    chunks = [chunk.strip() for chunk in content.split('\n\n') if chunk.strip()]
+                    texts = [f"<user> {chunk} </s>" for chunk in chunks]
+                    processed_count = len(chunks)
+    
     except Exception as e:
-        logger.error(f"Error loading data: {e}")
+        logger.error(f"Error loading fine-tuning data: {e}")
         raise
-
+    
     if not texts:
-        raise ValueError(f"No valid text data found in {path}. Processed: {processed_count}, Skipped: {skipped_count}")
-
-    result = "\n".join(texts) + "\n"
-    logger.info(f"Loaded {len(texts):,} text entries ({len(result):,} characters)")
+        raise ValueError(f"No valid fine-tuning data found. Processed: {processed_count}, Skipped: {skipped_count}")
+    
+    logger.info(f"Loaded {len(texts):,} conversation pairs for fine-tuning")
+    logger.info(f"Average conversation length: {sum(len(text.split()) for text in texts) / len(texts):.1f} words")
     logger.info(f"Processed: {processed_count}, Skipped: {skipped_count}")
     
-    return result
+    return texts
 
-class PositionalEncoding(nn.Module):
-    """Sinusoidal positional encoding for transformer models."""
+def extend_vocabulary(base_tokenizer: WordTokenizer, new_texts: List[str], 
+                     max_new_tokens: int = 5000) -> Tuple[WordTokenizer, int]:
+    """Extend tokenizer vocabulary with new tokens from fine-tuning data."""
+    import collections
+    import re
     
-    def __init__(self, d_model: int, max_len: int = 5000, dropout: float = 0.1):
-        super().__init__()
-        self.dropout = nn.Dropout(dropout)
-
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len).unsqueeze(1).float()
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
-
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-
-        self.register_buffer('pe', pe.unsqueeze(0))
-
-    def forward(self, x):
-        x = x + self.pe[:, :x.size(1)]
-        return self.dropout(x)
-
-class CharTransformer(nn.Module):
-    """Fixed character-level transformer model."""
+    # Extract all words from new texts
+    all_text = " ".join(new_texts).lower()
+    new_words = re.findall(r'\S+', all_text)
+    word_counts = collections.Counter(new_words)
     
-    def __init__(self, vocab_size: int, hidden_size: int, seq_length: int, 
-                 num_layers: int, nhead: int, dropout: float = 0.1):
-        super().__init__()
-        self.hidden_size = hidden_size
-        self.seq_length = seq_length
-        
-        self.embedding = nn.Embedding(vocab_size, hidden_size)
-        self.pos_enc = PositionalEncoding(hidden_size, seq_length, dropout)
-
-        # Use TransformerEncoder with causal mask for decoder-only model
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=hidden_size,
-            nhead=nhead,
-            dim_feedforward=hidden_size * 4,
-            dropout=dropout,
-            activation='gelu',
-            batch_first=True,
-            norm_first=True
-        )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers)
-        
-        self.layer_norm = nn.LayerNorm(hidden_size)
-        self.fc_out = nn.Linear(hidden_size, vocab_size)
-        self.dropout = nn.Dropout(dropout)
-        
-        self.init_weights()
-
-    def init_weights(self):
-        """Initialize model weights properly."""
-        initrange = 0.1
-        self.embedding.weight.data.uniform_(-initrange, initrange)
-        self.fc_out.bias.data.zero_()
-        self.fc_out.weight.data.uniform_(-initrange, initrange)
-
-    def generate_square_subsequent_mask(self, sz: int) -> torch.Tensor:
-        """Generate causal mask for autoregressive generation."""
-        mask = torch.triu(torch.ones(sz, sz), diagonal=1)
-        return mask.masked_fill(mask == 1, float('-inf'))
-
-    def forward(self, x):
-        seq_len = x.size(1)
-        mask = self.generate_square_subsequent_mask(seq_len).to(x.device)
-        
-        x = self.embedding(x) * math.sqrt(self.hidden_size)
-        x = self.pos_enc(x)
-        x = self.transformer(x, mask=mask)
-        x = self.layer_norm(x)
-        x = self.dropout(x)
-        
-        return self.fc_out(x)
-
-def load_pretrained_model(model_path: str, device) -> Tuple[Dict, Dict[str, int], Dict[int, str], Dict]:
-    """Load pre-trained model with comprehensive error handling."""
-    model_path = Path(model_path)
-    if not model_path.exists():
-        raise FileNotFoundError(f"Pre-trained model not found: {model_path}")
+    # Find words not in base vocabulary
+    new_vocab_words = []
+    for word, count in word_counts.most_common():
+        if word not in base_tokenizer.vocab and len(new_vocab_words) < max_new_tokens:
+            if count >= 2:  # Only add words that appear at least twice
+                new_vocab_words.append(word)
     
-    logger.info(f"Loading pre-trained model from {model_path}")
+    if not new_vocab_words:
+        logger.info("No new vocabulary words needed for fine-tuning")
+        return base_tokenizer, 0
     
-    try:
-        checkpoint = torch.load(model_path, map_location=device)
-        
-        # Validate required keys
-        required_keys = ['char_to_ix', 'ix_to_char', 'model_state_dict']
-        missing_keys = [key for key in required_keys if key not in checkpoint]
-        if missing_keys:
-            raise KeyError(f"Missing required keys in checkpoint: {missing_keys}")
-        
-        # Extract configuration with fallbacks
-        if 'config' in checkpoint:
-            # New format with config dict
-            config = checkpoint['config'].copy()
-        else:
-            # Legacy format - reconstruct config
-            config = {
-                'vocab_size': checkpoint.get('vocab_size', len(checkpoint['char_to_ix'])),
-                'hidden_size': checkpoint.get('hidden_size', 512),
-                'seq_length': checkpoint.get('seq_length', 512),
-                'num_layers': checkpoint.get('num_layers', 6),
-                'nhead': checkpoint.get('nhead', 8)
-            }
-        
-        char_to_ix = checkpoint['char_to_ix']
-        ix_to_char = checkpoint['ix_to_char']
-        
-        logger.info(f"Pre-trained model loaded successfully:")
-        logger.info(f"  Vocabulary size: {config['vocab_size']}")
-        logger.info(f"  Architecture: {config['hidden_size']}d, {config['num_layers']}L, {config['nhead']}H")
-        
-        return config, char_to_ix, ix_to_char, checkpoint
-        
-    except Exception as e:
-        logger.error(f"Error loading pre-trained model: {e}")
-        raise
+    # Create extended tokenizer
+    extended_tokenizer = WordTokenizer(base_tokenizer.vocab.copy())
+    
+    # Add new words
+    for word in new_vocab_words:
+        extended_tokenizer.vocab[word] = extended_tokenizer.next_id
+        extended_tokenizer.id_to_token[extended_tokenizer.next_id] = word
+        extended_tokenizer.next_id += 1
+    
+    logger.info(f"Extended vocabulary by {len(new_vocab_words)} tokens")
+    logger.info(f"New vocabulary size: {extended_tokenizer.vocab_size()}")
+    
+    return extended_tokenizer, len(new_vocab_words)
 
-def adapt_vocabulary(pretrained_char_to_ix: Dict[str, int], pretrained_ix_to_char: Dict[int, str], 
-                    new_text: str) -> Tuple[Dict[str, int], Dict[int, str], int]:
-    """Adapt vocabulary to include new characters from fine-tuning data."""
-    new_chars = set(new_text)
-    pretrained_chars = set(pretrained_char_to_ix.keys())
-    new_vocab_chars = new_chars - pretrained_chars
-
-    if new_vocab_chars:
-        logger.info(f"Found {len(new_vocab_chars)} new characters: {sorted(list(new_vocab_chars))}")
-        
-        extended_char_to_ix = pretrained_char_to_ix.copy()
-        extended_ix_to_char = pretrained_ix_to_char.copy()
-        
-        next_idx = len(pretrained_char_to_ix)
-        for c in sorted(new_vocab_chars):
-            extended_char_to_ix[c] = next_idx
-            extended_ix_to_char[next_idx] = c
-            next_idx += 1
-            
-        return extended_char_to_ix, extended_ix_to_char, len(new_vocab_chars)
-    else:
-        logger.info("No new characters found. Using original vocabulary.")
-        return pretrained_char_to_ix, pretrained_ix_to_char, 0
-
-def extend_model_vocabulary(model: nn.Module, old_vocab_size: int, new_vocab_size: int):
-    """Extend model vocabulary layers while preserving existing weights."""
+def extend_model_embeddings(model: WordTransformer, old_vocab_size: int, new_vocab_size: int):
+    """Extend model embedding layers for new vocabulary."""
     if new_vocab_size <= old_vocab_size:
         return
     
-    logger.info(f"Extending model vocabulary from {old_vocab_size} to {new_vocab_size}")
+    logger.info(f"Extending model embeddings from {old_vocab_size} to {new_vocab_size}")
     
-    # Extend embedding layer
-    old_emb_weight = model.embedding.weight.data
-    new_embedding = nn.Embedding(new_vocab_size, model.hidden_size).to(device)
+    # Extend token embedding
+    old_embeddings = model.token_embedding.weight.data
+    new_embedding = nn.Embedding(new_vocab_size, model.config.hidden_size).to(device)
     
-    # Copy old weights and initialize new ones
+    # Copy old embeddings and initialize new ones
     with torch.no_grad():
-        new_embedding.weight[:old_vocab_size] = old_emb_weight
-        nn.init.uniform_(new_embedding.weight[old_vocab_size:], -0.1, 0.1)
+        new_embedding.weight[:old_vocab_size] = old_embeddings
+        # Initialize new embeddings with small random values
+        nn.init.normal_(new_embedding.weight[old_vocab_size:], mean=0.0, std=0.02)
     
-    model.embedding = new_embedding
+    model.token_embedding = new_embedding
     
-    # Extend output layer
-    old_fc_weight = model.fc_out.weight.data
-    old_fc_bias = model.fc_out.bias.data
-    new_fc_out = nn.Linear(model.hidden_size, new_vocab_size).to(device)
+    # Since we tied weights, the lm_head will automatically use the new embeddings
+    model.lm_head.weight = model.token_embedding.weight
     
-    # Copy old weights and initialize new ones
-    with torch.no_grad():
-        new_fc_out.weight[:old_vocab_size] = old_fc_weight
-        new_fc_out.bias[:old_vocab_size] = old_fc_bias
-        nn.init.uniform_(new_fc_out.weight[old_vocab_size:], -0.1, 0.1)
-        nn.init.zeros_(new_fc_out.bias[old_vocab_size:])
+    # Update config
+    model.config.vocab_size = new_vocab_size
     
-    model.fc_out = new_fc_out
-    
-    logger.info("Vocabulary extension completed successfully")
+    logger.info("Model embedding extension completed")
 
 class WarmupCosineScheduler:
     """Learning rate scheduler with warmup and cosine decay."""
@@ -341,7 +242,7 @@ class WarmupCosineScheduler:
         self.min_lr = min_lr
         self.base_lr = optimizer.param_groups[0]['lr']
         self.current_step = 0
-
+    
     def step(self) -> float:
         """Update learning rate and return current LR."""
         self.current_step += 1
@@ -353,54 +254,78 @@ class WarmupCosineScheduler:
             # Cosine decay
             progress = (self.current_step - self.warmup_steps) / (self.total_steps - self.warmup_steps)
             lr = self.min_lr + (self.base_lr - self.min_lr) * 0.5 * (1 + math.cos(math.pi * progress))
-
+        
         for param_group in self.optimizer.param_groups:
             param_group['lr'] = lr
-            
+        
         return lr
 
-def train_epoch(model, dataloader, criterion, optimizer, scheduler, epoch: int, vocab_size: int) -> Tuple[float, float]:
-    """Train one epoch with proper error handling and memory management."""
+def fine_tune_epoch(model, dataloader, criterion, optimizer, scheduler, epoch: int,
+                   gradient_accumulation_steps: int = 1) -> Tuple[float, float]:
+    """Fine-tune for one epoch with careful learning rate and gradient management."""
     model.train()
     total_loss = 0
     total_correct = 0
-    total_chars = 0
+    total_tokens = 0
+    accumulation_steps = 0
     
     try:
+        optimizer.zero_grad()
+        
         for batch_idx, (inputs, targets) in enumerate(dataloader):
             inputs = inputs.to(device, non_blocking=True)
             targets = targets.to(device, non_blocking=True)
-
-            optimizer.zero_grad()
             
-            outputs = model(inputs)
-            loss = criterion(outputs.reshape(-1, vocab_size), targets.reshape(-1))
+            # Forward pass
+            logits = model(inputs)
+            loss = criterion(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
+            loss = loss / gradient_accumulation_steps
             
+            # Backward pass
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
             
-            current_lr = scheduler.step()
-
+            # Accumulate gradients
+            accumulation_steps += 1
+            
+            if accumulation_steps >= gradient_accumulation_steps:
+                # Gradient clipping (more conservative for fine-tuning)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
+                
+                # Optimizer step
+                optimizer.step()
+                current_lr = scheduler.step()
+                optimizer.zero_grad()
+                
+                accumulation_steps = 0
+            
             # Statistics
-            total_loss += loss.detach().item() * inputs.numel()
-            preds = outputs.argmax(dim=2)
-            total_correct += (preds == targets).sum().detach().item()
-            total_chars += targets.numel()
-
-            # Memory cleanup
+            total_loss += loss.detach().item() * gradient_accumulation_steps * inputs.numel()
+            
+            with torch.no_grad():
+                preds = logits.argmax(dim=2)
+                total_correct += (preds == targets).sum().item()
+                total_tokens += targets.numel()
+            
+            # Progress logging (less frequent for fine-tuning)
             if batch_idx % 50 == 0:
+                current_loss = total_loss / total_tokens if total_tokens > 0 else 0
+                accuracy = total_correct / total_tokens if total_tokens > 0 else 0
+                logger.info(f"Fine-tune Epoch {epoch} | Batch {batch_idx} | Loss: {current_loss:.4f} | "
+                           f"Acc: {accuracy*100:.2f}% | LR: {current_lr:.2e}")
+            
+            # Memory cleanup
+            if batch_idx % 25 == 0:
                 if device.type == 'cuda':
                     torch.cuda.empty_cache()
                 elif device.type == 'mps':
                     torch.mps.empty_cache()
                 gc.collect()
             
-            del inputs, targets, outputs, loss, preds
-            
+            del inputs, targets, logits, loss, preds
+    
     except RuntimeError as e:
         if "out of memory" in str(e):
-            logger.error(f"OOM at epoch {epoch}, batch {batch_idx}")
+            logger.error(f"OOM during fine-tuning at epoch {epoch}")
             if device.type == 'cuda':
                 torch.cuda.empty_cache()
             elif device.type == 'mps':
@@ -409,148 +334,257 @@ def train_epoch(model, dataloader, criterion, optimizer, scheduler, epoch: int, 
             raise e
         else:
             raise e
-
-    avg_loss = total_loss / total_chars
-    accuracy = total_correct / total_chars
+    
+    avg_loss = total_loss / total_tokens if total_tokens > 0 else float('inf')
+    accuracy = total_correct / total_tokens if total_tokens > 0 else 0
     
     return avg_loss, accuracy
+
+def calculate_perplexity(loss: float) -> float:
+    """Calculate perplexity from loss."""
+    return math.exp(min(loss, 20))
 
 def main():
     """Main fine-tuning function."""
     
-    # Configuration
-    config = {
-        'pretrained_model_path': "Model.pth",
-        'data_path': "oasst1_data/oasst1_train.jsonl",
-        'output_model_path': "FineTuned_Model.pth",
-        'learning_rate': 1e-4,  # Lower LR for fine-tuning
-        'epochs': 50,
-        'batch_size': 16,
-        'dropout': 0.1,
-        'warmup_ratio': 0.1,
-        'weight_decay': 0.01
-    }
+    # Fine-tuning configuration (more conservative than training)
+    fine_tune_config = TrainingConfig(
+        learning_rate=5e-5,  # Much lower learning rate for fine-tuning
+        weight_decay=0.01,
+        batch_size=2,  # Smaller batch size for fine-tuning
+        gradient_accumulation_steps=16,  # Higher accumulation to maintain effective batch size
+        max_epochs=10,  # Fewer epochs for fine-tuning
+        warmup_ratio=0.05,  # Less warmup needed
+        save_every=500,
+        eval_every=250,
+        max_grad_norm=0.5,  # More conservative gradient clipping
+        label_smoothing=0.05,  # Less smoothing for fine-tuning
+        beta1=0.9,
+        beta2=0.95
+    )
     
-    logger.info("Starting fine-tuning with configuration:")
-    for key, value in config.items():
+    logger.info("🎯 Starting Word-Level Transformer Fine-tuning")
+    logger.info("=" * 60)
+    logger.info("Fine-tuning Configuration:")
+    for key, value in asdict(fine_tune_config).items():
         logger.info(f"  {key}: {value}")
-
+    logger.info("=" * 60)
+    
+    # Initialize model manager
+    model_manager = ModelManager("models")
+    
     try:
-        # Load fine-tuning dataset
-        text = load_text_data(config['data_path'])
+        # List available base models
+        available_models = model_manager.list_models()
+        if not available_models:
+            raise ValueError("No base models found. Please train a base model first using Train.py")
         
-        # Load pre-trained model
-        model_config, pretrained_char_to_ix, pretrained_ix_to_char, checkpoint = load_pretrained_model(
-            config['pretrained_model_path'], device
-        )
+        logger.info("📋 Available base models:")
+        for i, model in enumerate(available_models):
+            logger.info(f"  {i+1}. {model['name']} {model['version']} "
+                       f"(Loss: {model['best_loss']:.4f}, Size: {model['size_mb']:.2f}MB)")
         
-        # Adapt vocabulary
-        char_to_ix, ix_to_char, new_vocab_count = adapt_vocabulary(
-            pretrained_char_to_ix, pretrained_ix_to_char, text
-        )
-
-        # Initialize model with original vocabulary size
-        model = CharTransformer(
-            vocab_size=model_config['vocab_size'],
-            hidden_size=model_config['hidden_size'],
-            seq_length=model_config['seq_length'],
-            num_layers=model_config['num_layers'],
-            nhead=model_config['nhead'],
-            dropout=config['dropout']
-        ).to(device)
-
-        # Load pre-trained weights
-        model.load_state_dict(checkpoint['model_state_dict'])
-
+        # Select base model (auto-select best or let user choose)
+        try:
+            choice = input(f"\nSelect base model (1-{len(available_models)}) or press Enter for best: ").strip()
+            if choice:
+                model_idx = int(choice) - 1
+                if 0 <= model_idx < len(available_models):
+                    base_model_info = available_models[model_idx]
+                else:
+                    logger.warning("Invalid selection, using best model.")
+                    base_model_info = min(available_models, key=lambda x: x['best_loss'])
+            else:
+                base_model_info = min(available_models, key=lambda x: x['best_loss'])
+        except (ValueError, KeyboardInterrupt):
+            logger.info("Using best available model.")
+            base_model_info = min(available_models, key=lambda x: x['best_loss'])
+        
+        logger.info(f"🎯 Selected base model: {base_model_info['name']} {base_model_info['version']}")
+        
+        # Load base model
+        logger.info("📥 Loading base model...")
+        base_model, base_tokenizer, base_metadata = model_manager.load_model(base_model_info['id'])
+        
+        logger.info(f"✅ Base model loaded:")
+        logger.info(f"  Parameters: {base_metadata.total_parameters:,}")
+        logger.info(f"  Vocabulary: {base_metadata.model_config.vocab_size:,}")
+        logger.info(f"  Best Loss: {base_metadata.best_loss:.4f}")
+        
+        # Load fine-tuning data
+        fine_tune_data_path = input("\nEnter fine-tuning data path (default: oasst1_data/oasst1_train.jsonl): ").strip()
+        if not fine_tune_data_path:
+            fine_tune_data_path = "oasst1_data/oasst1_train.jsonl"
+        
+        texts = load_fine_tune_data(fine_tune_data_path)
+        
         # Extend vocabulary if needed
-        if new_vocab_count > 0:
-            extend_model_vocabulary(model, model_config['vocab_size'], len(char_to_ix))
-
-        final_vocab_size = len(char_to_ix)
-
-        logger.info(f"Fine-tuning setup completed:")
-        logger.info(f"  Original vocab size: {model_config['vocab_size']}")
-        logger.info(f"  Final vocab size: {final_vocab_size}")
-        logger.info(f"  Model parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}")
-
-        # Create dataset and dataloader
-        dataset = CharDataset(text, model_config['seq_length'], char_to_ix)
+        logger.info("🔤 Checking vocabulary coverage...")
+        extended_tokenizer, new_tokens_count = extend_vocabulary(base_tokenizer, texts, max_new_tokens=2000)
+        
+        # Extend model if vocabulary was extended
+        if new_tokens_count > 0:
+            extend_model_embeddings(base_model, base_metadata.model_config.vocab_size, extended_tokenizer.vocab_size())
+            logger.info(f"📈 Model extended with {new_tokens_count} new tokens")
+        
+        # Create fine-tuning dataset
+        dataset = FineTuneDataset(texts, extended_tokenizer, base_metadata.model_config.seq_length)
         dataloader = DataLoader(
-            dataset, 
-            batch_size=config['batch_size'], 
-            shuffle=True, 
-            num_workers=2,
+            dataset,
+            batch_size=fine_tune_config.batch_size,
+            shuffle=True,
+            num_workers=1,  # Fewer workers for fine-tuning
             pin_memory=True if device.type == 'cuda' else False
         )
-
-        logger.info(f"Fine-tuning dataset: {len(dataset):,} sequences")
-
-        # Initialize training components
-        criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+        
+        logger.info(f"📚 Fine-tuning dataset: {len(dataset):,} sequences, {len(dataloader):,} batches per epoch")
+        
+        # Setup fine-tuning components
+        # Use lower learning rate and different optimizer settings for fine-tuning
         optimizer = optim.AdamW(
-            model.parameters(), 
-            lr=config['learning_rate'], 
-            weight_decay=config['weight_decay']
+            base_model.parameters(),
+            lr=fine_tune_config.learning_rate,
+            weight_decay=fine_tune_config.weight_decay,
+            betas=(fine_tune_config.beta1, fine_tune_config.beta2),
+            eps=1e-8
         )
         
-        total_steps = len(dataloader) * config['epochs']
-        warmup_steps = int(total_steps * config['warmup_ratio'])
-        scheduler = WarmupCosineScheduler(optimizer, warmup_steps, total_steps)
-
-        logger.info(f"Training steps: {total_steps:,} (warmup: {warmup_steps:,})")
-
+        criterion = nn.CrossEntropyLoss(
+            label_smoothing=fine_tune_config.label_smoothing,
+            ignore_index=extended_tokenizer.vocab.get("<pad>", 0)
+        )
+        
+        # Learning rate scheduler
+        total_steps = len(dataloader) * fine_tune_config.max_epochs // fine_tune_config.gradient_accumulation_steps
+        warmup_steps = int(total_steps * fine_tune_config.warmup_ratio)
+        scheduler = WarmupCosineScheduler(optimizer, warmup_steps, total_steps, min_lr=1e-6)
+        
+        logger.info(f"📊 Fine-tuning schedule:")
+        logger.info(f"  Total steps: {total_steps:,}")
+        logger.info(f"  Warmup steps: {warmup_steps:,}")
+        logger.info(f"  Effective batch size: {fine_tune_config.batch_size * fine_tune_config.gradient_accumulation_steps}")
+        
         # Fine-tuning loop
+        logger.info("🚀 Starting fine-tuning...")
+        fine_tune_start_time = time.time()
         best_loss = float('inf')
-        global_start = time.time()
-
-        for epoch in range(1, config['epochs'] + 1):
+        global_step = 0
+        
+        for epoch in range(1, fine_tune_config.max_epochs + 1):
             epoch_start = time.time()
             
-            avg_loss, accuracy = train_epoch(
-                model, dataloader, criterion, optimizer, scheduler, epoch, final_vocab_size
+            # Fine-tune epoch
+            avg_loss, accuracy = fine_tune_epoch(
+                base_model, dataloader, criterion, optimizer, scheduler, epoch,
+                fine_tune_config.gradient_accumulation_steps
             )
-
+            
+            # Calculate metrics
+            perplexity = calculate_perplexity(avg_loss)
             epoch_time = time.time() - epoch_start
-            elapsed = time.time() - global_start
+            elapsed_time = time.time() - fine_tune_start_time
             current_lr = optimizer.param_groups[0]['lr']
-
-            logger.info(
-                f"Epoch {epoch:3d} | Loss: {avg_loss:.4f} | Accuracy: {accuracy*100:.2f}% | "
-                f"LR: {current_lr:.2e} | Time: {epoch_time:.1f}s | Elapsed: {elapsed:.1f}s"
-            )
-
+            global_step = epoch * len(dataloader) // fine_tune_config.gradient_accumulation_steps
+            
+            # Log epoch results
+            logger.info(f"📊 Fine-tune Epoch {epoch}/{fine_tune_config.max_epochs} Summary:")
+            logger.info(f"   Loss: {avg_loss:.4f} | Perplexity: {perplexity:.2f}")
+            logger.info(f"   Accuracy: {accuracy*100:.2f}% | LR: {current_lr:.2e}")
+            logger.info(f"   Time: {epoch_time:.1f}s | Total: {elapsed_time/3600:.2f}h")
+            
             # Save best model
             if avg_loss < best_loss:
                 best_loss = avg_loss
-                torch.save({
-                    "model_state_dict": model.state_dict(),
-                    "char_to_ix": char_to_ix,
-                    "ix_to_char": ix_to_char,
-                    "config": {
-                        'vocab_size': final_vocab_size,
-                        'hidden_size': model_config['hidden_size'],
-                        'seq_length': model_config['seq_length'],
-                        'num_layers': model_config['num_layers'],
-                        'nhead': model_config['nhead']
-                    },
-                    "epoch": epoch,
-                    "loss": avg_loss,
-                    "accuracy": accuracy,
-                    "fine_tuned": True,
-                    "original_vocab_size": model_config['vocab_size'],
-                    "extended_vocab_size": final_vocab_size
-                }, config['output_model_path'])
                 
-                logger.info(f"New best model saved: {config['output_model_path']}")
-
-        logger.info(f"✅ Fine-tuning completed successfully!")
-        logger.info(f"Best loss: {best_loss:.4f}")
-        logger.info(f"Final model saved to: {config['output_model_path']}")
+                # Create fine-tuned model metadata
+                fine_tuned_metadata = ModelMetadata(
+                    model_name=f"{base_metadata.model_name}_FineTuned",
+                    version=f"v1.0_epoch_{epoch}",
+                    created_at=datetime.now().isoformat(),
+                    last_modified=datetime.now().isoformat(),
+                    model_config=ModelConfig(
+                        vocab_size=extended_tokenizer.vocab_size(),
+                        hidden_size=base_metadata.model_config.hidden_size,
+                        num_layers=base_metadata.model_config.num_layers,
+                        num_heads=base_metadata.model_config.num_heads,
+                        seq_length=base_metadata.model_config.seq_length,
+                        dropout=base_metadata.model_config.dropout,
+                        model_type=base_metadata.model_config.model_type,
+                        tokenizer_type=base_metadata.model_config.tokenizer_type
+                    ),
+                    training_config=fine_tune_config,
+                    dataset_info={
+                        "base_model": f"{base_metadata.model_name} {base_metadata.version}",
+                        "fine_tune_samples": len(texts),
+                        "total_tokens": sum(len(extended_tokenizer.encode(text)) for text in texts[:1000]),
+                        "avg_tokens": sum(len(extended_tokenizer.encode(text)) for text in texts[:1000]) / min(1000, len(texts)),
+                        "source": fine_tune_data_path,
+                        "vocabulary_extended": new_tokens_count > 0,
+                        "new_tokens_added": new_tokens_count
+                    },
+                    performance_metrics={
+                        "loss": avg_loss,
+                        "perplexity": perplexity,
+                        "accuracy": accuracy,
+                        "base_model_loss": base_metadata.best_loss,
+                        "improvement": base_metadata.best_loss - avg_loss,
+                        "tokens_per_second": global_step * fine_tune_config.batch_size * base_metadata.model_config.seq_length / elapsed_time
+                    },
+                    model_size_mb=0,  # Will be calculated by model_manager
+                    total_parameters=base_metadata.total_parameters + (new_tokens_count * base_metadata.model_config.hidden_size * 2 if new_tokens_count > 0 else 0),
+                    trainable_parameters=base_metadata.trainable_parameters + (new_tokens_count * base_metadata.model_config.hidden_size * 2 if new_tokens_count > 0 else 0),
+                    training_time_hours=elapsed_time / 3600,
+                    epochs_trained=epoch,
+                    best_loss=best_loss,
+                    best_perplexity=calculate_perplexity(best_loss),
+                    hardware_used=f"{device.type.upper()}: {torch.cuda.get_device_name() if device.type == 'cuda' else 'CPU'}",
+                    pytorch_version=torch.__version__,
+                    cuda_version=torch.version.cuda if device.type == 'cuda' else None,
+                    model_hash="",  # Will be calculated by model_manager
+                    tokenizer_hash="",  # Will be calculated by model_manager
+                    notes=f"Fine-tuned from {base_metadata.model_name} {base_metadata.version}. "
+                          f"Extended vocabulary by {new_tokens_count} tokens. "
+                          f"Loss improved from {base_metadata.best_loss:.4f} to {best_loss:.4f}.",
+                    tags=["fine-tuned", "word-level", "transformer", "chat", f"epoch-{epoch}", 
+                          f"base-{base_metadata.model_name}", "best"]
+                )
+                
+                # Save fine-tuned model
+                model_id = model_manager.save_model(base_model, extended_tokenizer, fine_tuned_metadata, optimizer, scheduler)
+                logger.info(f"💾 New best fine-tuned model saved: {model_id}")
+                logger.info(f"   Loss improvement: {base_metadata.best_loss:.4f} → {best_loss:.4f} "
+                           f"({base_metadata.best_loss - best_loss:+.4f})")
+        
+        # Fine-tuning completed
+        total_time = time.time() - fine_tune_start_time
+        logger.info("=" * 60)
+        logger.info("✅ Fine-tuning completed successfully!")
+        logger.info(f"🎯 Best loss: {best_loss:.4f} (Perplexity: {calculate_perplexity(best_loss):.2f})")
+        logger.info(f"📈 Improvement: {base_metadata.best_loss:.4f} → {best_loss:.4f} "
+                   f"({base_metadata.best_loss - best_loss:+.4f})")
+        logger.info(f"⏱️  Fine-tuning time: {total_time/3600:.2f} hours")
+        
+        if new_tokens_count > 0:
+            logger.info(f"🔤 Vocabulary extended by {new_tokens_count} tokens")
+        
+        # List available models
+        logger.info("\n📋 Available models after fine-tuning:")
+        for model_info in model_manager.list_models():
+            tags_str = f"[{', '.join(model_info['tags'])}]" if model_info['tags'] else ""
+            logger.info(f"   {model_info['id']}: {model_info['name']} {model_info['version']} {tags_str}")
+            logger.info(f"      Loss: {model_info['best_loss']:.4f}, Size: {model_info['size_mb']:.2f}MB")
+        
+        logger.info("\n🚀 Ready for chat! Run: python ChatAI.py")
         
         return 0
-
+        
+    except KeyboardInterrupt:
+        logger.info("❌ Fine-tuning interrupted by user")
+        return 1
     except Exception as e:
         logger.error(f"❌ Fine-tuning failed: {e}")
+        import traceback
+        traceback.print_exc()
         return 1
     finally:
         # Cleanup

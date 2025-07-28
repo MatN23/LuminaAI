@@ -1,28 +1,34 @@
 # Copyright (c) 2025 Matias Nielsen. All rights reserved.
 # Licensed under the Custom License below.
 
+import os
+import json
 import time
 import math
-import json
 import logging
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Tuple, Optional, Any
+from dataclasses import dataclass, asdict
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 import torch.nn.functional as F
-from pathlib import Path
-from typing import Dict, Tuple, Optional, List
 import gc
+
+# Import shared components
+from model_manager import ModelManager, ModelConfig, TrainingConfig, ModelMetadata
+from word_transformer import WordTransformer, WordTokenizer
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # Optimized thread configuration
-torch.set_num_threads(4)  # Increased from 2
-torch.set_num_interop_threads(2)  # Increased from 1
+torch.set_num_threads(4)
+torch.set_num_interop_threads(2)
 
-# Device selection with better error handling
 def setup_device():
     """Setup the best available device with proper error handling."""
     if torch.backends.mps.is_available() and torch.backends.mps.is_built():
@@ -35,221 +41,127 @@ def setup_device():
     else:
         device = torch.device("cpu")
         logger.info("Using device: CPU")
-    
     return device
 
 device = setup_device()
 
-class CharDataset(Dataset):
-    """Optimized character-level dataset with better memory usage."""
+class WordDataset(Dataset):
+    """Word-level dataset for training."""
     
-    def __init__(self, text: str, seq_length: int, char_to_ix: Dict[str, int]):
+    def __init__(self, texts: List[str], tokenizer: WordTokenizer, seq_length: int):
+        self.tokenizer = tokenizer
         self.seq_length = seq_length
-        logger.info(f"Creating character dataset with sequence length: {seq_length}")
+        self.sequences = []
         
-        # Convert to indices once and store
-        self.data = torch.tensor([char_to_ix[c] for c in text], dtype=torch.long)
-        logger.info(f"Dataset created with {len(self.data):,} characters")
+        logger.info("Creating word-level dataset...")
         
+        for text in texts:
+            tokens = tokenizer.encode(text)
+            # Create overlapping sequences for better data utilization
+            for i in range(0, len(tokens) - seq_length, seq_length // 2):
+                if i + seq_length + 1 <= len(tokens):
+                    self.sequences.append(tokens[i:i + seq_length + 1])
+        
+        logger.info(f"Created {len(self.sequences):,} training sequences")
+    
     def __len__(self):
-        return len(self.data) - self.seq_length
+        return len(self.sequences)
     
     def __getitem__(self, idx):
+        seq = self.sequences[idx]
         return (
-            self.data[idx:idx + self.seq_length].clone(),
-            self.data[idx + 1:idx + self.seq_length + 1].clone()
+            torch.tensor(seq[:-1], dtype=torch.long),  # Input
+            torch.tensor(seq[1:], dtype=torch.long)    # Target (shifted by 1)
         )
 
-def load_text_data(path: str) -> str:
-    """
-    Load and process text data from JSONL or plain text files.
-    Includes proper error handling and text filtering.
-    """
-    path = Path(path)
-    if not path.exists():
-        raise FileNotFoundError(f"Data file not found: {path}")
+def load_and_process_data(data_path: str) -> List[str]:
+    """Load and process training data from JSONL or plain text files."""
+    data_path = Path(data_path)
+    if not data_path.exists():
+        raise FileNotFoundError(f"Data file not found: {data_path}")
     
-    logger.info(f"Loading data from: {path}")
+    logger.info(f"Loading training data from: {data_path}")
     
     role_tokens = {
-        "prompter": "<|user|>",
-        "assistant": "<|bot|>"
+        "prompter": "<user>",
+        "assistant": "<bot>"
     }
     
     texts = []
+    processed_count = 0
+    skipped_count = 0
     
     try:
-        if path.suffix == '.jsonl':
-            with open(path, "r", encoding="utf-8") as f:
+        if data_path.suffix == '.jsonl':
+            with open(data_path, 'r', encoding='utf-8') as f:
                 for line_num, line in enumerate(f, 1):
                     try:
-                        record = json.loads(line.strip())
+                        line = line.strip()
+                        if not line:
+                            continue
+                        
+                        record = json.loads(line)
+                        processed_count += 1
                         
                         # Skip deleted entries
                         if record.get("deleted", False):
+                            skipped_count += 1
                             continue
                         
                         # Skip non-English entries
                         if record.get("lang") != "en":
+                            skipped_count += 1
                             continue
                         
                         # Extract text content
-                        text = record.get("text") or record.get("content") or ""
-                        if not text and "message" in record:
-                            text = record["message"].get("text", "")
+                        text = (record.get("text") or 
+                               record.get("content") or 
+                               (record.get("message", {}).get("text") if isinstance(record.get("message"), dict) else ""))
                         
-                        text = text.strip()
-                        if not text:
+                        text = str(text).strip()
+                        if not text or len(text.split()) < 5:  # Skip very short texts
+                            skipped_count += 1
                             continue
                         
                         # Add role tokens
-                        role = record.get("role", "").lower()
+                        role = str(record.get("role", "")).lower()
                         token = role_tokens.get(role, "")
                         
                         if token:
-                            texts.append(f"{token} {text}")
+                            texts.append(f"{token} {text} </s>")  # Add end token
                         else:
-                            texts.append(text)
-                            
+                            texts.append(f"{text} </s>")
+                        
                     except json.JSONDecodeError as e:
                         logger.warning(f"Skipping malformed JSON at line {line_num}: {e}")
+                        skipped_count += 1
                         continue
                     except Exception as e:
                         logger.warning(f"Error processing line {line_num}: {e}")
+                        skipped_count += 1
                         continue
         else:
             # Plain text file
-            with open(path, "r", encoding="utf-8") as f:
-                text_content = f.read()
-                texts.append(text_content)
+            with open(data_path, 'r', encoding='utf-8') as f:
+                content = f.read().strip()
+                if content:
+                    # Split into paragraphs or sentences
+                    paragraphs = [p.strip() for p in content.split('\n\n') if p.strip()]
+                    texts.extend([f"{p} </s>" for p in paragraphs])
+                    processed_count = len(paragraphs)
     
     except Exception as e:
         logger.error(f"Error loading data: {e}")
         raise
     
     if not texts:
-        raise ValueError("No valid text data found in file")
+        raise ValueError(f"No valid text data found in {data_path}. Processed: {processed_count}, Skipped: {skipped_count}")
     
-    result = "\n".join(texts) + "\n"
-    logger.info(f"Loaded {len(texts):,} text entries ({len(result):,} characters)")
+    logger.info(f"Loaded {len(texts):,} text entries")
+    logger.info(f"Total characters: {sum(len(text) for text in texts):,}")
+    logger.info(f"Processed: {processed_count}, Skipped: {skipped_count}")
     
-    return result
-
-class PositionalEncoding(nn.Module):
-    """Sinusoidal positional encoding for transformer models."""
-    
-    def __init__(self, d_model: int, max_len: int = 5000, dropout: float = 0.1):
-        super().__init__()
-        self.dropout = nn.Dropout(dropout)
-        
-        pe = torch.zeros(max_len, d_model)
-        position = torch.arange(0, max_len).unsqueeze(1).float()
-        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
-        
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        
-        self.register_buffer('pe', pe.unsqueeze(0))
-
-    def forward(self, x):
-        x = x + self.pe[:, :x.size(1)]
-        return self.dropout(x)
-
-class CharTransformer(nn.Module):
-    """Fixed character-level transformer using proper encoder architecture."""
-    
-    def __init__(self, vocab_size: int, hidden_size: int, seq_length: int, 
-                 num_layers: int, nhead: int, dropout: float = 0.1):
-        super().__init__()
-        self.hidden_size = hidden_size
-        self.seq_length = seq_length
-        
-        # Embedding layer
-        self.embedding = nn.Embedding(vocab_size, hidden_size)
-        self.pos_enc = PositionalEncoding(hidden_size, seq_length, dropout)
-        
-        # Use TransformerEncoder with causal mask for decoder-only model
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=hidden_size,
-            nhead=nhead,
-            dim_feedforward=hidden_size * 4,
-            dropout=dropout,
-            activation='gelu',
-            batch_first=True,
-            norm_first=True
-        )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers)
-        
-        # Output layers
-        self.layer_norm = nn.LayerNorm(hidden_size)
-        self.fc_out = nn.Linear(hidden_size, vocab_size)
-        self.dropout = nn.Dropout(dropout)
-        
-        # Initialize weights
-        self.init_weights()
-
-    def init_weights(self):
-        """Initialize model weights with proper scaling."""
-        initrange = 0.1
-        self.embedding.weight.data.uniform_(-initrange, initrange)
-        self.fc_out.bias.data.zero_()
-        self.fc_out.weight.data.uniform_(-initrange, initrange)
-
-    def generate_square_subsequent_mask(self, sz: int) -> torch.Tensor:
-        """Generate causal mask for autoregressive generation."""
-        mask = torch.triu(torch.ones(sz, sz), diagonal=1)
-        return mask.masked_fill(mask == 1, float('-inf'))
-
-    def forward(self, x):
-        seq_len = x.size(1)
-        
-        # Create causal mask
-        mask = self.generate_square_subsequent_mask(seq_len).to(x.device)
-        
-        # Embedding with scaling
-        x = self.embedding(x) * math.sqrt(self.hidden_size)
-        x = self.pos_enc(x)
-        
-        # Transformer with causal mask
-        x = self.transformer(x, mask=mask)
-        x = self.layer_norm(x)
-        x = self.dropout(x)
-        
-        return self.fc_out(x)
-
-def count_parameters(model) -> int:
-    """Count trainable parameters in the model."""
-    return sum(p.numel() for p in model.parameters() if p.requires_grad)
-
-def save_checkpoint(model, optimizer, scheduler, epoch: int, loss: float, path: str):
-    """Save training checkpoint with all necessary information."""
-    checkpoint = {
-        'epoch': epoch,
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'scheduler_state_dict': scheduler.state_dict() if hasattr(scheduler, 'state_dict') else None,
-        'loss': loss,
-        'timestamp': time.time()
-    }
-    torch.save(checkpoint, path)
-    logger.info(f"Checkpoint saved: {path}")
-
-def load_checkpoint(model, optimizer, scheduler, path: str) -> Tuple[int, float]:
-    """Load training checkpoint and restore training state."""
-    if not Path(path).exists():
-        raise FileNotFoundError(f"Checkpoint not found: {path}")
-    
-    checkpoint = torch.load(path, map_location=device)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    
-    if optimizer and 'optimizer_state_dict' in checkpoint:
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-    
-    if scheduler and 'scheduler_state_dict' in checkpoint and checkpoint['scheduler_state_dict']:
-        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-    
-    logger.info(f"Checkpoint loaded: {path}")
-    return checkpoint['epoch'], checkpoint['loss']
+    return texts
 
 class WarmupCosineScheduler:
     """Learning rate scheduler with warmup and cosine decay."""
@@ -261,9 +173,9 @@ class WarmupCosineScheduler:
         self.min_lr = min_lr
         self.base_lr = optimizer.param_groups[0]['lr']
         self.current_step = 0
-        
-    def step(self):
-        """Update learning rate based on current step."""
+    
+    def step(self) -> float:
+        """Update learning rate and return current LR."""
         self.current_step += 1
         
         if self.current_step < self.warmup_steps:
@@ -297,73 +209,70 @@ class WarmupCosineScheduler:
         self.min_lr = state_dict['min_lr']
         self.base_lr = state_dict['base_lr']
 
-def generate_text(model, char_to_ix: Dict[str, int], ix_to_char: Dict[int, str], 
-                 prompt: str = "<|user|>", max_length: int = 200, temperature: float = 0.8) -> str:
-    """Generate text using the trained model."""
-    model.eval()
-    
-    with torch.no_grad():
-        # Encode prompt
-        try:
-            input_ids = torch.tensor([char_to_ix.get(c, 0) for c in prompt], 
-                                   dtype=torch.long).unsqueeze(0).to(device)
-            generated = input_ids.clone()
-            
-            for _ in range(max_length):
-                # Use last seq_length tokens to avoid memory issues
-                input_seq = generated[:, -512:] if generated.size(1) > 512 else generated
-                
-                outputs = model(input_seq)
-                next_token_logits = outputs[0, -1, :] / temperature
-                
-                # Apply softmax and sample
-                probs = F.softmax(next_token_logits, dim=-1)
-                next_token = torch.multinomial(probs, 1)
-                
-                generated = torch.cat([generated, next_token.unsqueeze(0)], dim=1)
-                
-                # Stop if we generate newline
-                if next_token.item() == char_to_ix.get('\n', 0):
-                    break
-            
-            # Decode generated text
-            generated_text = ''.join([ix_to_char.get(idx.item(), '') for idx in generated[0]])
-            return generated_text
-            
-        except Exception as e:
-            logger.error(f"Error generating text: {e}")
-            return "Error generating text"
+def count_parameters(model: nn.Module) -> Tuple[int, int]:
+    """Count total and trainable parameters."""
+    total = sum(p.numel() for p in model.parameters())
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    return total, trainable
 
-def train_epoch(model, dataloader, criterion, optimizer, scheduler, epoch: int) -> Tuple[float, float]:
-    """Train for one epoch with proper memory management."""
+def calculate_perplexity(loss: float) -> float:
+    """Calculate perplexity from loss."""
+    return math.exp(min(loss, 20))  # Cap to prevent overflow
+
+def train_epoch(model, dataloader, criterion, optimizer, scheduler, epoch: int, 
+                gradient_accumulation_steps: int = 1) -> Tuple[float, float]:
+    """Train for one epoch with gradient accumulation and proper memory management."""
     model.train()
     total_loss = 0
     total_correct = 0
-    total_chars = 0
+    total_tokens = 0
+    accumulation_steps = 0
     
     try:
+        optimizer.zero_grad()
+        
         for batch_idx, (inputs, targets) in enumerate(dataloader):
             inputs = inputs.to(device, non_blocking=True)
             targets = targets.to(device, non_blocking=True)
-
-            optimizer.zero_grad()
             
-            outputs = model(inputs)
-            loss = criterion(outputs.reshape(-1, outputs.size(-1)), targets.reshape(-1))
+            # Forward pass
+            logits = model(inputs)
+            loss = criterion(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
+            loss = loss / gradient_accumulation_steps
             
+            # Backward pass
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
             
-            current_lr = scheduler.step()
-
+            # Accumulate gradients
+            accumulation_steps += 1
+            
+            if accumulation_steps >= gradient_accumulation_steps:
+                # Gradient clipping
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                
+                # Optimizer step
+                optimizer.step()
+                current_lr = scheduler.step()
+                optimizer.zero_grad()
+                
+                accumulation_steps = 0
+            
             # Statistics (detach to prevent memory accumulation)
-            total_loss += loss.detach().item() * inputs.numel()
-            preds = outputs.argmax(dim=2)
-            total_correct += (preds == targets).sum().detach().item()
-            total_chars += targets.numel()
+            total_loss += loss.detach().item() * gradient_accumulation_steps * inputs.numel()
             
-            # Memory cleanup every 50 batches
+            with torch.no_grad():
+                preds = logits.argmax(dim=2)
+                total_correct += (preds == targets).sum().item()
+                total_tokens += targets.numel()
+            
+            # Progress logging
+            if batch_idx % 100 == 0:
+                current_loss = total_loss / total_tokens if total_tokens > 0 else 0
+                accuracy = total_correct / total_tokens if total_tokens > 0 else 0
+                logger.info(f"Epoch {epoch} | Batch {batch_idx} | Loss: {current_loss:.4f} | "
+                           f"Acc: {accuracy*100:.2f}% | LR: {current_lr:.2e}")
+            
+            # Memory cleanup
             if batch_idx % 50 == 0:
                 if device.type == 'cuda':
                     torch.cuda.empty_cache()
@@ -372,8 +281,8 @@ def train_epoch(model, dataloader, criterion, optimizer, scheduler, epoch: int) 
                 gc.collect()
             
             # Clear intermediate tensors
-            del inputs, targets, outputs, loss, preds
-            
+            del inputs, targets, logits, loss, preds
+    
     except RuntimeError as e:
         if "out of memory" in str(e):
             logger.error(f"CUDA OOM at epoch {epoch}, batch {batch_idx}")
@@ -393,150 +302,244 @@ def train_epoch(model, dataloader, criterion, optimizer, scheduler, epoch: int) 
         torch.mps.empty_cache()
     gc.collect()
     
-    avg_loss = total_loss / total_chars
-    accuracy = total_correct / total_chars
+    avg_loss = total_loss / total_tokens if total_tokens > 0 else float('inf')
+    accuracy = total_correct / total_tokens if total_tokens > 0 else 0
     
     return avg_loss, accuracy
 
+def generate_sample_text(model, tokenizer, prompt: str = "<user> Hello", 
+                        max_length: int = 50, temperature: float = 0.8) -> str:
+    """Generate sample text for monitoring training progress."""
+    model.eval()
+    
+    try:
+        with torch.no_grad():
+            input_ids = torch.tensor(tokenizer.encode(prompt), dtype=torch.long).unsqueeze(0).to(device)
+            generated = input_ids.clone()
+            
+            for _ in range(max_length):
+                if generated.size(1) >= model.config.seq_length:
+                    break
+                
+                logits = model(generated)
+                next_token_logits = logits[0, -1, :] / temperature
+                
+                # Simple sampling
+                probs = F.softmax(next_token_logits, dim=-1)
+                next_token = torch.multinomial(probs, 1)
+                
+                generated = torch.cat([generated, next_token.unsqueeze(0)], dim=1)
+                
+                # Stop if we hit end token
+                if next_token.item() == tokenizer.vocab.get("</s>", -1):
+                    break
+            
+            # Decode response
+            response_ids = generated[0][input_ids.size(1):].tolist()
+            response = tokenizer.decode(response_ids)
+            
+            return response.strip()
+    
+    except Exception as e:
+        logger.error(f"Error generating sample: {e}")
+        return "Error generating sample"
+    finally:
+        model.train()
+
 def main():
-    """Main training function with comprehensive configuration."""
+    """Main training function with professional model management."""
     
-    # Hyperparameters
-    config = {
-        'hidden_size': 512,
-        'seq_length': 512,
-        'batch_size': 16,
-        'num_layers': 6,
-        'nhead': 8,
-        'learning_rate': 3e-4,
-        'epochs': 100,
-        'dropout': 0.1,
-        'warmup_ratio': 0.1,  # 10% of total steps for warmup
-        'weight_decay': 0.01,
-        'save_every': 25,
-        'generate_every': 10
-    }
+    # Configuration
+    model_config = ModelConfig(
+        vocab_size=32000,  # Will be updated after tokenizer training
+        hidden_size=768,
+        num_layers=12,
+        num_heads=12,
+        seq_length=1024,
+        dropout=0.1,
+        model_type="WordTransformer",
+        tokenizer_type="word"
+    )
     
-    logger.info("Starting training with configuration:")
-    for key, value in config.items():
+    training_config = TrainingConfig(
+        learning_rate=3e-4,
+        weight_decay=0.01,
+        batch_size=4,
+        gradient_accumulation_steps=8,
+        max_epochs=50,
+        warmup_ratio=0.1,
+        save_every=1000,
+        eval_every=500,
+        max_grad_norm=1.0,
+        label_smoothing=0.1,
+        beta1=0.9,
+        beta2=0.95
+    )
+    
+    logger.info("🚀 Starting Word-Level Transformer Training")
+    logger.info("=" * 60)
+    logger.info("Model Configuration:")
+    for key, value in asdict(model_config).items():
         logger.info(f"  {key}: {value}")
     
-    # Load dataset
-    data_path = "oasst1_data/oasst1_train.jsonl"
-    try:
-        text = load_text_data(data_path)
-    except Exception as e:
-        logger.error(f"Failed to load dataset: {e}")
-        return 1
+    logger.info("\nTraining Configuration:")
+    for key, value in asdict(training_config).items():
+        logger.info(f"  {key}: {value}")
+    logger.info("=" * 60)
     
-    # Create vocabulary
-    chars = sorted(set(text))
-    vocab_size = len(chars)
-    char_to_ix = {ch: i for i, ch in enumerate(chars)}
-    ix_to_char = {i: ch for i, ch in enumerate(chars)}
-    
-    logger.info(f"Vocabulary size: {vocab_size}")
-    logger.info(f"Sample characters: {chars[:20]}...")
-    
-    # Create dataset and dataloader
-    dataset = CharDataset(text, config['seq_length'], char_to_ix)
-    dataloader = DataLoader(
-        dataset, 
-        batch_size=config['batch_size'], 
-        shuffle=True, 
-        num_workers=2,
-        pin_memory=True if device.type == 'cuda' else False,
-        persistent_workers=True
-    )
-    
-    logger.info(f"Dataset size: {len(dataset):,} sequences")
-    logger.info(f"Batches per epoch: {len(dataloader):,}")
-    
-    # Initialize model
-    model = CharTransformer(
-        vocab_size=vocab_size,
-        hidden_size=config['hidden_size'],
-        seq_length=config['seq_length'],
-        num_layers=config['num_layers'],
-        nhead=config['nhead'],
-        dropout=config['dropout']
-    ).to(device)
-    
-    logger.info(f"Model parameters: {count_parameters(model):,}")
-    
-    # Initialize training components
-    criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
-    optimizer = optim.AdamW(
-        model.parameters(), 
-        lr=config['learning_rate'], 
-        weight_decay=config['weight_decay'],
-        betas=(0.9, 0.95)
-    )
-    
-    # Learning rate scheduler
-    total_steps = len(dataloader) * config['epochs']
-    warmup_steps = int(total_steps * config['warmup_ratio'])
-    scheduler = WarmupCosineScheduler(optimizer, warmup_steps, total_steps)
-    
-    logger.info(f"Total training steps: {total_steps:,}")
-    logger.info(f"Warmup steps: {warmup_steps:,}")
-    
-    # Training loop
-    logger.info("Starting training...")
-    global_start_time = time.time()
-    best_loss = float('inf')
+    # Initialize model manager
+    model_manager = ModelManager("models")
     
     try:
-        for epoch in range(1, config['epochs'] + 1):
+        # Load and process training data
+        texts = load_and_process_data("oasst1_data/oasst1_train.jsonl")
+        
+        # Create and train tokenizer
+        logger.info("📚 Training word-level tokenizer...")
+        tokenizer = WordTokenizer()
+        all_text = " ".join(texts)
+        tokenizer.train_from_text(all_text, vocab_size=model_config.vocab_size)
+        
+        # Update model config with actual vocab size
+        model_config.vocab_size = tokenizer.vocab_size()
+        logger.info(f"Final vocabulary size: {model_config.vocab_size:,}")
+        
+        # Create dataset and dataloader
+        dataset = WordDataset(texts, tokenizer, model_config.seq_length)
+        dataloader = DataLoader(
+            dataset,
+            batch_size=training_config.batch_size,
+            shuffle=True,
+            num_workers=2,
+            pin_memory=True if device.type == 'cuda' else False,
+            persistent_workers=True
+        )
+        
+        logger.info(f"Dataset: {len(dataset):,} sequences, {len(dataloader):,} batches per epoch")
+        
+        # Initialize model
+        model = WordTransformer(model_config).to(device)
+        total_params, trainable_params = count_parameters(model)
+        
+        logger.info(f"🧠 Model initialized:")
+        logger.info(f"  Total parameters: {total_params:,}")
+        logger.info(f"  Trainable parameters: {trainable_params:,}")
+        logger.info(f"  Model size: ~{total_params * 4 / 1024**2:.2f} MB")
+        
+        # Training components
+        optimizer = optim.AdamW(
+            model.parameters(),
+            lr=training_config.learning_rate,
+            weight_decay=training_config.weight_decay,
+            betas=(training_config.beta1, training_config.beta2)
+        )
+        
+        criterion = nn.CrossEntropyLoss(
+            label_smoothing=training_config.label_smoothing,
+            ignore_index=tokenizer.vocab.get("<pad>", 0)  # Ignore padding tokens
+        )
+        
+        # Learning rate scheduler
+        total_steps = len(dataloader) * training_config.max_epochs // training_config.gradient_accumulation_steps
+        warmup_steps = int(total_steps * training_config.warmup_ratio)
+        scheduler = WarmupCosineScheduler(optimizer, warmup_steps, total_steps)
+        
+        logger.info(f"📈 Training schedule:")
+        logger.info(f"  Total steps: {total_steps:,}")
+        logger.info(f"  Warmup steps: {warmup_steps:,}")
+        
+        # Training loop
+        logger.info("🎯 Starting training...")
+        training_start_time = time.time()
+        best_loss = float('inf')
+        global_step = 0
+        
+        for epoch in range(1, training_config.max_epochs + 1):
             epoch_start = time.time()
             
             # Train epoch
-            avg_loss, accuracy = train_epoch(model, dataloader, criterion, optimizer, scheduler, epoch)
-            
-            # Timing
-            epoch_time = time.time() - epoch_start
-            elapsed_time = time.time() - global_start_time
-            current_lr = optimizer.param_groups[0]['lr']
-            
-            # Log progress
-            logger.info(
-                f"Epoch {epoch:3d} | Loss: {avg_loss:.4f} | Accuracy: {accuracy*100:.2f}% | "
-                f"LR: {current_lr:.2e} | Time: {epoch_time:.1f}s | Elapsed: {elapsed_time:.1f}s"
+            avg_loss, accuracy = train_epoch(
+                model, dataloader, criterion, optimizer, scheduler, epoch,
+                training_config.gradient_accumulation_steps
             )
+            
+            # Calculate metrics
+            perplexity = calculate_perplexity(avg_loss)
+            epoch_time = time.time() - epoch_start
+            elapsed_time = time.time() - training_start_time
+            current_lr = optimizer.param_groups[0]['lr']
+            global_step = epoch * len(dataloader) // training_config.gradient_accumulation_steps
+            
+            # Log epoch results
+            logger.info(f"📊 Epoch {epoch}/{training_config.max_epochs} Summary:")
+            logger.info(f"   Loss: {avg_loss:.4f} | Perplexity: {perplexity:.2f}")
+            logger.info(f"   Accuracy: {accuracy*100:.2f}% | LR: {current_lr:.2e}")
+            logger.info(f"   Time: {epoch_time:.1f}s | Total: {elapsed_time/3600:.2f}h")
+            
+            # Generate sample text
+            if epoch % 5 == 0:
+                sample = generate_sample_text(model, tokenizer, "<user> How are you?", max_length=30)
+                logger.info(f"   Sample: {sample}")
             
             # Save best model
             if avg_loss < best_loss:
                 best_loss = avg_loss
-                best_model_path = "Model.pth"
-                torch.save({
-                    "model_state_dict": model.state_dict(),
-                    "char_to_ix": char_to_ix,
-                    "ix_to_char": ix_to_char,
-                    "config": config,
-                    "vocab_size": vocab_size,
-                    "epoch": epoch,
-                    "loss": avg_loss,
-                    "accuracy": accuracy
-                }, best_model_path)
-                logger.info(f"New best model saved: {best_model_path}")
-            
-            # Generate sample text
-            if epoch % config['generate_every'] == 0:
-                logger.info("\n--- Sample Generation ---")
-                prompt = text[:20] if len(text) > 20 else text[:5]
-                sample = generate_text(model, char_to_ix, ix_to_char, prompt, max_length=200)
-                sample_display = sample[:300] + "..." if len(sample) > 300 else sample
-                logger.info(sample_display)
-                logger.info("--- End Sample ---\n")
-            
-            # Save checkpoint
-            if epoch % config['save_every'] == 0:
-                checkpoint_path = f"checkpoint_epoch_{epoch}.pth"
-                save_checkpoint(model, optimizer, scheduler, epoch, avg_loss, checkpoint_path)
+                
+                # Create comprehensive metadata
+                metadata = ModelMetadata(
+                    model_name="WordTransformer",
+                    version=f"v1.0_epoch_{epoch}",
+                    created_at=datetime.now().isoformat(),
+                    last_modified=datetime.now().isoformat(),
+                    model_config=model_config,
+                    training_config=training_config,
+                    dataset_info={
+                        "num_samples": len(texts),
+                        "total_tokens": sum(len(tokenizer.encode(text)) for text in texts[:1000]),  # Sample
+                        "avg_tokens": sum(len(tokenizer.encode(text)) for text in texts[:1000]) / min(1000, len(texts)),
+                        "source": "oasst1_train.jsonl",
+                        "preprocessing": "Word-level tokenization with special tokens"
+                    },
+                    performance_metrics={
+                        "loss": avg_loss,
+                        "perplexity": perplexity,
+                        "accuracy": accuracy,
+                        "tokens_per_second": global_step * training_config.batch_size * model_config.seq_length / elapsed_time
+                    },
+                    model_size_mb=0,  # Will be calculated by model_manager
+                    total_parameters=total_params,
+                    trainable_parameters=trainable_params,
+                    training_time_hours=elapsed_time / 3600,
+                    epochs_trained=epoch,
+                    best_loss=best_loss,
+                    best_perplexity=calculate_perplexity(best_loss),
+                    hardware_used=f"{device.type.upper()}: {torch.cuda.get_device_name() if device.type == 'cuda' else 'CPU'}",
+                    pytorch_version=torch.__version__,
+                    cuda_version=torch.version.cuda if device.type == 'cuda' else None,
+                    model_hash="",  # Will be calculated by model_manager
+                    tokenizer_hash="",  # Will be calculated by model_manager
+                    notes=f"Best checkpoint at epoch {epoch}. Trained on OASST1 dataset with word-level tokenization.",
+                    tags=["word-level", "transformer", "chat", f"epoch-{epoch}", "best"]
+                )
+                
+                # Save model with comprehensive metadata
+                model_id = model_manager.save_model(model, tokenizer, metadata, optimizer, scheduler)
+                logger.info(f"💾 New best model saved: {model_id} (Loss: {best_loss:.4f})")
         
+        # Training completed
+        total_time = time.time() - training_start_time
+        logger.info("=" * 60)
         logger.info("✅ Training completed successfully!")
-        logger.info(f"Best loss: {best_loss:.4f}")
-        logger.info("Model saved to 'Model.pth'")
+        logger.info(f"🎯 Best loss: {best_loss:.4f} (Perplexity: {calculate_perplexity(best_loss):.2f})")
+        logger.info(f"⏱️  Total training time: {total_time/3600:.2f} hours")
+        
+        # List available models
+        logger.info("\n📋 Available models:")
+        for model_info in model_manager.list_models():
+            logger.info(f"   {model_info['id']}: {model_info['name']} {model_info['version']} "
+                       f"(Loss: {model_info['best_loss']:.4f}, Size: {model_info['size_mb']:.2f}MB)")
+        
+        logger.info("\n🚀 Ready for chat! Run: python ChatAI.py")
         
         return 0
         
@@ -545,9 +548,11 @@ def main():
         return 1
     except Exception as e:
         logger.error(f"❌ Training failed: {e}")
+        import traceback
+        traceback.print_exc()
         return 1
     finally:
-        # Final cleanup
+        # Cleanup
         if device.type == 'cuda':
             torch.cuda.empty_cache()
         elif device.type == 'mps':
