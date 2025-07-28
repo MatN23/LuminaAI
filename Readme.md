@@ -49,20 +49,27 @@ python ChatAI.py
 
 ## 📁 Project Structure
 
-```
-├── Dataset_download.py    # Downloads OASST1 dataset with validation
-├── Train.py              # Main training script (Word-level Transformer)
-├── fine_tune.py          # Fine-tuning script with vocab extension
-├── ChatAI.py             # Command-line chat interface
-├── BuildApp.py           # Desktop application launcher
-├── lumina_desktop.py     # Desktop app customization and UI components
-├── oasst1_data/          # Dataset directory (created by download script)
-├── Model.pth             # Trained model (created by training)
-├── FineTuned_Model.pth   # Fine-tuned model (created by fine-tuning)
-├── requirements.txt      # Python dependencies
-├── LICENSE               # Custom commercial license
-├── SECURITY.md          # Security policy
-└── README.md            # This file
+Main
+├── .github/                                 
+│   Scripts/
+|       └── ChatAI.py
+|       ├── Dataset_download.py
+|       ├── fine_tune.py 
+|       ├── model_manager.py           
+|       ├── Train.py
+|       ├── word_transformer.py
+|
+│   └── App/
+│       ├── renderer/          # Frontend UI components for the desktop app
+│       │   └── index.html     # Entry point HTML for the UI
+│       ├── BuildApp.py        # Desktop application launcher                  # Main training script (Word-level Transformer)
+|       ├── lumina_desktop.py  # Desktop app customization and logic
+|
+├── LICENSE                    # Commercial license
+├── README.md                  # This file
+├── requirements.txt           # Python dependencies
+└── SECURITY.md                # Security policy
+
 ```
 
 ## 🖥️ Desktop Application
