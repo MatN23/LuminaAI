@@ -1,9 +1,6 @@
 # LuminaAI Desktop Python Dependencies
-
 torch>=2.0.0
 numpy>=1.21.0
 flask>=2.3.0
 flask-socketio>=5.3.0
 flask-cors>=4.0.0
-eventlet>=0.33.3        # recommended async server for flask-socketio
-python-socketio>=5.8.0  # socketio client/server core library

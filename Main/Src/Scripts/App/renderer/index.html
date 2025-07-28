@@ -1515,18 +1515,42 @@
                 }
             }
 
-            async autoLoadModel() {
-                // Try to auto-load Model.pth
-                await this.loadModelFile('Model.pth');
-            }
-
             async loadModel() {
-                // In Electron, we would use the file dialog
-                // For now, prompt for file path
-                const modelPath = prompt('Enter model path:', 'Model.pth');
-                if (modelPath) {
-                    await this.loadModelFile(modelPath);
-                }
+                // Create a file input element to open file picker for model
+                const modelInput = document.createElement('input');
+                modelInput.type = 'file';
+                modelInput.accept = '.pth,.pt,.bin,.safetensors';
+                modelInput.style.display = 'none';
+                
+                modelInput.onchange = async (event) => {
+                    const modelFile = event.target.files[0];
+                    if (modelFile) {
+                        // Ask if user wants to also upload a tokenizer
+                        const uploadTokenizer = confirm('Do you also want to upload a tokenizer.pkl file? (Required for uploaded models)');
+                        
+                        if (uploadTokenizer) {
+                            const tokenizerInput = document.createElement('input');
+                            tokenizerInput.type = 'file';
+                            tokenizerInput.accept = '.pkl';
+                            tokenizerInput.style.display = 'none';
+                            
+                            tokenizerInput.onchange = async (tokEvent) => {
+                                const tokenizerFile = tokEvent.target.files[0];
+                                await this.loadModelFromFiles(modelFile, tokenizerFile);
+                                document.body.removeChild(tokenizerInput);
+                            };
+                            
+                            document.body.appendChild(tokenizerInput);
+                            tokenizerInput.click();
+                        } else {
+                            await this.loadModelFromFiles(modelFile, null);
+                        }
+                    }
+                    document.body.removeChild(modelInput);
+                };
+                
+                document.body.appendChild(modelInput);
+                modelInput.click();
             }
 
             async loadModelFile(modelPath) {
