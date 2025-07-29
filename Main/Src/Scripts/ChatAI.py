@@ -6,8 +6,15 @@ import torch.nn.functional as F
 import logging
 import re
 import gc
-from typing import Dict, List, Optional, Tuple
+import json
+import os
+import time
+import requests
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple, Any, Callable
 from pathlib import Path
+from dataclasses import dataclass
+from abc import ABC, abstractmethod
 
 # Import shared components
 from model_manager import ModelManager, ModelMetadata
@@ -36,326 +43,493 @@ def setup_device():
 
 device = setup_device()
 
-def nucleus_sampling(probs: torch.Tensor, p: float = 0.9) -> int:
-    """
-    Nucleus (top-p) sampling for better text generation.
-    """
-    if p <= 0 or p >= 1:
-        return torch.multinomial(probs, 1).item()
-    
-    # Sort probabilities in descending order
-    sorted_probs, sorted_indices = torch.sort(probs, descending=True)
-    cumsum_probs = torch.cumsum(sorted_probs, dim=0)
-    
-    # Find cutoff index where cumulative probability exceeds p
-    cutoff_mask = cumsum_probs <= p
-    
-    # Ensure we keep at least one token
-    if not cutoff_mask.any():
-        cutoff = 1
-    else:
-        cutoff = cutoff_mask.sum().item()
-        cutoff = max(1, cutoff)
-    
-    # Keep only top-p tokens
-    top_p_probs = sorted_probs[:cutoff]
-    top_p_indices = sorted_indices[:cutoff]
-    
-    # Renormalize probabilities
-    if top_p_probs.sum() > 0:
-        top_p_probs = top_p_probs / top_p_probs.sum()
-    else:
-        top_p_probs = torch.ones_like(top_p_probs) / len(top_p_probs)
-    
-    # Sample from the filtered distribution
-    try:
-        chosen_idx = torch.multinomial(top_p_probs, 1).item()
-        return top_p_indices[chosen_idx].item()
-    except RuntimeError:
-        return top_p_indices[0].item()
+# =====================================================================
+# AGENT TOOLS AND CAPABILITIES
+# =====================================================================
 
-def top_k_sampling(probs: torch.Tensor, k: int = 50) -> int:
-    """Top-k sampling for controlled text generation."""
-    if k <= 0 or k >= len(probs):
-        return torch.multinomial(probs, 1).item()
-    
-    # Get top-k probabilities and indices
-    top_k_probs, top_k_indices = torch.topk(probs, k)
-    
-    # Renormalize
-    if top_k_probs.sum() > 0:
-        top_k_probs = top_k_probs / top_k_probs.sum()
-    else:
-        top_k_probs = torch.ones_like(top_k_probs) / k
-    
-    # Sample
-    try:
-        chosen_idx = torch.multinomial(top_k_probs, 1).item()
-        return top_k_indices[chosen_idx].item()
-    except RuntimeError:
-        return top_k_indices[0].item()
+@dataclass
+class ToolResult:
+    """Result from tool execution."""
+    success: bool
+    data: Any
+    error: Optional[str] = None
+    metadata: Optional[Dict] = None
 
-def generate_response(model: WordTransformer, tokenizer: WordTokenizer, 
-                     prompt: str, max_length: int = 150, temperature: float = 0.8,
-                     sampling_method: str = "top_k", top_k: int = 50, top_p: float = 0.9) -> str:
-    """
-    Generate response using the word-level transformer with advanced sampling.
-    """
-    if not prompt.strip():
-        return "I need some input to respond to."
+class AgentTool(ABC):
+    """Abstract base class for agent tools."""
     
-    model.eval()
+    @abstractmethod
+    def name(self) -> str:
+        pass
     
-    try:
-        with torch.no_grad():
-            # Encode prompt
-            input_ids = torch.tensor(tokenizer.encode(prompt), dtype=torch.long).unsqueeze(0).to(device)
+    @abstractmethod
+    def description(self) -> str:
+        pass
+    
+    @abstractmethod
+    def execute(self, **kwargs) -> ToolResult:
+        pass
+
+class FileSystemTool(AgentTool):
+    """Tool for file system operations."""
+    
+    def name(self) -> str:
+        return "filesystem"
+    
+    def description(self) -> str:
+        return "Read, write, list files and directories"
+    
+    def execute(self, action: str, path: str = "", content: str = "") -> ToolResult:
+        try:
+            path_obj = Path(path) if path else Path.cwd()
             
-            if input_ids.size(1) == 0:
-                return "Unable to process input."
+            if action == "read":
+                if not path_obj.exists():
+                    return ToolResult(False, None, f"File not found: {path}")
+                content = path_obj.read_text(encoding='utf-8')
+                return ToolResult(True, content, metadata={"size": len(content)})
             
-            generated = input_ids.clone()
+            elif action == "write":
+                path_obj.write_text(content, encoding='utf-8')
+                return ToolResult(True, f"Written {len(content)} characters to {path}")
             
-            for step in range(max_length):
-                # Use sliding window for long sequences
-                max_seq_length = model.config.seq_length
-                input_seq = generated[:, -max_seq_length:] if generated.size(1) > max_seq_length else generated
+            elif action == "list":
+                if path_obj.is_file():
+                    return ToolResult(True, [str(path_obj)])
+                items = [str(item) for item in path_obj.iterdir()]
+                return ToolResult(True, items)
+            
+            elif action == "exists":
+                return ToolResult(True, path_obj.exists())
+            
+            else:
+                return ToolResult(False, None, f"Unknown action: {action}")
                 
-                # Forward pass
-                logits = model(input_seq)
-                next_token_logits = logits[0, -1, :] / max(temperature, 0.1)
+        except Exception as e:
+            return ToolResult(False, None, str(e))
+
+class CalculatorTool(AgentTool):
+    """Tool for mathematical calculations."""
+    
+    def name(self) -> str:
+        return "calculator"
+    
+    def description(self) -> str:
+        return "Perform mathematical calculations"
+    
+    def execute(self, expression: str) -> ToolResult:
+        try:
+            # Safe evaluation of mathematical expressions
+            allowed_chars = set('0123456789+-*/().() ')
+            if not all(c in allowed_chars for c in expression.replace(' ', '')):
+                return ToolResult(False, None, "Expression contains invalid characters")
+            
+            result = eval(expression, {"__builtins__": {}}, {})
+            return ToolResult(True, result)
+        except Exception as e:
+            return ToolResult(False, None, f"Calculation error: {e}")
+
+class TaskMemoryTool(AgentTool):
+    """Tool for storing and retrieving task-related information."""
+    
+    def __init__(self):
+        self.memory = {}
+        self.task_history = []
+    
+    def name(self) -> str:
+        return "memory"
+    
+    def description(self) -> str:
+        return "Store and retrieve information across tasks"
+    
+    def execute(self, action: str, key: str = "", value: Any = None) -> ToolResult:
+        try:
+            if action == "store":
+                self.memory[key] = value
+                return ToolResult(True, f"Stored {key}")
+            
+            elif action == "retrieve":
+                if key in self.memory:
+                    return ToolResult(True, self.memory[key])
+                return ToolResult(False, None, f"Key not found: {key}")
+            
+            elif action == "list":
+                return ToolResult(True, list(self.memory.keys()))
+            
+            elif action == "clear":
+                self.memory.clear()
+                return ToolResult(True, "Memory cleared")
+            
+            elif action == "log_task":
+                task_entry = {
+                    "timestamp": datetime.now().isoformat(),
+                    "task": value,
+                    "status": key  # using key as status
+                }
+                self.task_history.append(task_entry)
+                return ToolResult(True, "Task logged")
+            
+            elif action == "get_history":
+                return ToolResult(True, self.task_history[-10:])  # Last 10 tasks
+            
+            else:
+                return ToolResult(False, None, f"Unknown memory action: {action}")
                 
-                # Apply softmax to get probabilities
-                probs = F.softmax(next_token_logits, dim=0)
+        except Exception as e:
+            return ToolResult(False, None, str(e))
+
+class WebSearchTool(AgentTool):
+    """Tool for web search (simulated for MVP)."""
+    
+    def name(self) -> str:
+        return "web_search"
+    
+    def description(self) -> str:
+        return "Search the web for information"
+    
+    def execute(self, query: str) -> ToolResult:
+        # Simulated web search for MVP
+        try:
+            # In a real implementation, you'd use an actual search API
+            simulated_results = [
+                f"Search result 1 for '{query}': Lorem ipsum information about {query}",
+                f"Search result 2 for '{query}': Additional details regarding {query}",
+                f"Search result 3 for '{query}': More context about {query}"
+            ]
+            return ToolResult(True, simulated_results, metadata={"query": query, "count": len(simulated_results)})
+        except Exception as e:
+            return ToolResult(False, None, str(e))
+
+# =====================================================================
+# AGENTIC REASONING AND PLANNING
+# =====================================================================
+
+@dataclass
+class Task:
+    """Represents a task to be executed by the agent."""
+    id: str
+    description: str
+    status: str = "pending"  # pending, in_progress, completed, failed
+    steps: List[str] = None
+    results: List[Any] = None
+    created_at: datetime = None
+    
+    def __post_init__(self):
+        if self.steps is None:
+            self.steps = []
+        if self.results is None:
+            self.results = []
+        if self.created_at is None:
+            self.created_at = datetime.now()
+
+class TaskPlanner:
+    """Plans and decomposes tasks into actionable steps."""
+    
+    def __init__(self, model: WordTransformer, tokenizer: WordTokenizer):
+        self.model = model
+        self.tokenizer = tokenizer
+    
+    def plan_task(self, task_description: str, available_tools: List[str]) -> List[str]:
+        """Decompose a task into actionable steps."""
+        # Create a planning prompt
+        tools_list = ", ".join(available_tools)
+        planning_prompt = f"""<user> Plan the following task step by step:
+Task: {task_description}
+Available tools: {tools_list}
+
+Create a numbered list of specific steps to complete this task. Each step should specify which tool to use and what action to take.
+<bot> Here's a step-by-step plan:
+
+1."""
+        
+        # Generate plan using the model
+        plan_response = self._generate_with_model(planning_prompt, max_length=200)
+        
+        # Parse the response into steps
+        steps = self._parse_plan_response(plan_response)
+        
+        # Fallback if parsing fails
+        if not steps:
+            steps = [f"Execute task: {task_description}"]
+        
+        return steps
+    
+    def _generate_with_model(self, prompt: str, max_length: int = 150) -> str:
+        """Generate text using the model."""
+        try:
+            self.model.eval()
+            with torch.no_grad():
+                input_ids = torch.tensor(self.tokenizer.encode(prompt), dtype=torch.long).unsqueeze(0).to(device)
+                generated = input_ids.clone()
                 
-                # Handle potential NaN/Inf values
-                if torch.isnan(probs).any() or torch.isinf(probs).any():
-                    logger.warning("NaN/Inf in probabilities, using uniform distribution")
-                    probs = torch.ones_like(probs) / len(probs)
-                
-                # Choose sampling method
-                if sampling_method == "nucleus" or sampling_method == "top_p":
-                    next_token_id = nucleus_sampling(probs, p=top_p)
-                elif sampling_method == "top_k":
-                    next_token_id = top_k_sampling(probs, k=top_k)
-                elif sampling_method == "greedy":
-                    next_token_id = torch.argmax(probs).item()
-                else:
-                    next_token_id = top_k_sampling(probs, k=top_k)
-                
-                # Validate token ID
-                if next_token_id < 0 or next_token_id >= tokenizer.vocab_size():
-                    logger.warning(f"Invalid token ID {next_token_id}, stopping generation")
-                    break
-                
-                # Add to generated sequence
-                generated = torch.cat([generated, torch.tensor([[next_token_id]], device=device)], dim=1)
-                
-                # Stop conditions
-                if next_token_id == tokenizer.vocab.get("</s>", -1):
-                    break
-                
-                # Check for natural stopping points
-                current_token = tokenizer.id_to_token.get(next_token_id, "")
-                if current_token in [".", "!", "?"] and step > 10:
-                    # Look ahead a bit to see if this is a good stopping point
-                    if step > 20:
+                for _ in range(max_length):
+                    if generated.size(1) >= self.model.config.seq_length:
                         break
-            
-            # Decode generated text
-            response_ids = generated[0][input_ids.size(1):].tolist()
-            response = tokenizer.decode(response_ids)
-            
-            # Clean up response
-            response = clean_response(response)
-            
-            return response if response.strip() else "I'm not sure how to respond to that."
+                    
+                    logits = self.model(generated)
+                    next_token_logits = logits[0, -1, :] / 0.8
+                    probs = F.softmax(next_token_logits, dim=0)
+                    
+                    # Top-k sampling
+                    top_k_probs, top_k_indices = torch.topk(probs, 50)
+                    top_k_probs = top_k_probs / top_k_probs.sum()
+                    
+                    try:
+                        chosen_idx = torch.multinomial(top_k_probs, 1).item()
+                        next_token_id = top_k_indices[chosen_idx].item()
+                    except:
+                        next_token_id = top_k_indices[0].item()
+                    
+                    generated = torch.cat([generated, torch.tensor([[next_token_id]], device=device)], dim=1)
+                    
+                    if next_token_id == self.tokenizer.vocab.get("</s>", -1):
+                        break
+                
+                response_ids = generated[0][input_ids.size(1):].tolist()
+                return self.tokenizer.decode(response_ids)
+        except Exception as e:
+            logger.error(f"Error in model generation: {e}")
+            return ""
     
-    except Exception as e:
-        logger.error(f"Error generating response: {e}")
-        return "Sorry, I encountered an error while generating a response."
-    
-    finally:
-        # Memory cleanup
-        if device.type == 'cuda':
-            torch.cuda.empty_cache()
-        elif device.type == 'mps' and hasattr(torch.mps, 'empty_cache'):
-            torch.mps.empty_cache()
-        gc.collect()
+    def _parse_plan_response(self, response: str) -> List[str]:
+        """Parse the model's response into actionable steps."""
+        steps = []
+        lines = response.strip().split('\n')
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            
+            # Look for numbered steps
+            if re.match(r'^\d+\.', line):
+                step = re.sub(r'^\d+\.\s*', '', line)
+                if step:
+                    steps.append(step)
+            elif line and not steps:  # If no numbered format, just use the content
+                steps.append(line)
+        
+        return steps[:5]  # Limit to 5 steps for MVP
 
-def clean_response(response: str) -> str:
-    """Clean up the model's response."""
-    if not response:
-        return ""
-    
-    # Remove special tokens
-    response = re.sub(r'<[^>]*>', '', response)
-    
-    # Remove excessive whitespace
-    response = re.sub(r'\s+', ' ', response)
-    response = response.strip()
-    
-    # Remove incomplete sentences at the end
-    if response:
-        sentences = re.split(r'[.!?]+', response)
-        if len(sentences) > 1:
-            last_sentence = sentences[-1].strip()
-            if len(last_sentence) < 5:
-                # Remove incomplete last sentence
-                response_parts = response.rsplit(last_sentence, 1)
-                if len(response_parts) > 1:
-                    response = response_parts[0].strip()
-                    # Ensure proper ending punctuation
-                    if response and response[-1] not in '.!?':
-                        response += '.'
-    
-    return response
+# =====================================================================
+# CORE AGENT CLASS
+# =====================================================================
 
-class WordAIChat:
-    """Professional chat interface for the word-level AI."""
+class WordLevelAgent:
+    """Core agentic AI that can autonomously execute tasks."""
+    
+    def __init__(self, model: WordTransformer, tokenizer: WordTokenizer, metadata: ModelMetadata):
+        self.model = model
+        self.tokenizer = tokenizer
+        self.metadata = metadata
+        
+        # Initialize tools
+        self.tools = {
+            "filesystem": FileSystemTool(),
+            "calculator": CalculatorTool(),
+            "memory": TaskMemoryTool(),
+            "web_search": WebSearchTool()
+        }
+        
+        # Initialize planner
+        self.planner = TaskPlanner(model, tokenizer)
+        
+        # Task management
+        self.active_tasks = {}
+        self.completed_tasks = []
+        
+        logger.info(f"🤖 Agent initialized with {len(self.tools)} tools")
+    
+    def list_capabilities(self) -> Dict[str, str]:
+        """List agent capabilities."""
+        return {name: tool.description() for name, tool in self.tools.items()}
+    
+    def execute_task(self, task_description: str, auto_plan: bool = True) -> Task:
+        """Execute a task autonomously."""
+        task_id = f"task_{len(self.active_tasks) + len(self.completed_tasks) + 1}"
+        task = Task(id=task_id, description=task_description)
+        
+        logger.info(f"🎯 Starting task: {task_description}")
+        
+        try:
+            task.status = "in_progress"
+            self.active_tasks[task_id] = task
+            
+            # Plan the task if auto_plan is enabled
+            if auto_plan:
+                available_tools = list(self.tools.keys())
+                task.steps = self.planner.plan_task(task_description, available_tools)
+                logger.info(f"📋 Planned {len(task.steps)} steps")
+            
+            # Execute each step
+            for i, step in enumerate(task.steps):
+                logger.info(f"⚡ Step {i+1}: {step}")
+                
+                try:
+                    result = self._execute_step(step)
+                    task.results.append(result)
+                    
+                    if result.success:
+                        logger.info(f"✅ Step {i+1} completed")
+                    else:
+                        logger.warning(f"⚠️ Step {i+1} failed: {result.error}")
+                        
+                except Exception as e:
+                    error_result = ToolResult(False, None, str(e))
+                    task.results.append(error_result)
+                    logger.error(f"❌ Step {i+1} error: {e}")
+            
+            # Determine final status
+            successful_steps = sum(1 for r in task.results if r.success)
+            if successful_steps == len(task.steps):
+                task.status = "completed"
+                logger.info(f"🎉 Task completed successfully!")
+            elif successful_steps > 0:
+                task.status = "partially_completed"
+                logger.info(f"⚠️ Task partially completed ({successful_steps}/{len(task.steps)} steps)")
+            else:
+                task.status = "failed"
+                logger.error(f"❌ Task failed")
+            
+            # Log task completion
+            self.tools["memory"].execute("log_task", task.status, task_description)
+            
+        except Exception as e:
+            task.status = "failed"
+            logger.error(f"❌ Task execution error: {e}")
+            task.results.append(ToolResult(False, None, str(e)))
+        
+        finally:
+            # Move to completed tasks
+            if task_id in self.active_tasks:
+                del self.active_tasks[task_id]
+            self.completed_tasks.append(task)
+        
+        return task
+    
+    def _execute_step(self, step: str) -> ToolResult:
+        """Execute a single step of a task."""
+        # Parse the step to determine tool and action
+        step_lower = step.lower()
+        
+        # Simple pattern matching to determine which tool to use
+        if any(word in step_lower for word in ["calculate", "math", "compute", "+"  , "-", "*", "/"]):
+            # Extract mathematical expression
+            math_pattern = r'[\d+\-*/().\s]+'
+            matches = re.findall(math_pattern, step)
+            if matches:
+                expression = max(matches, key=len).strip()
+                return self.tools["calculator"].execute(expression=expression)
+        
+        elif any(word in step_lower for word in ["file", "read", "write", "save", "load"]):
+            if "read" in step_lower:
+                # Extract filename
+                files = re.findall(r'[\w.-]+\.\w+', step)
+                if files:
+                    return self.tools["filesystem"].execute("read", path=files[0])
+            elif "write" in step_lower or "save" in step_lower:
+                # Extract filename and content (simplified)
+                files = re.findall(r'[\w.-]+\.\w+', step)
+                if files:
+                    content = f"Content generated for: {step}"
+                    return self.tools["filesystem"].execute("write", path=files[0], content=content)
+            elif "list" in step_lower:
+                return self.tools["filesystem"].execute("list", path=".")
+        
+        elif any(word in step_lower for word in ["search", "find", "lookup"]):
+            # Extract search query
+            query_match = re.search(r'search(?:\s+for)?\s+(.+)', step_lower)
+            if query_match:
+                query = query_match.group(1).strip()
+                return self.tools["web_search"].execute(query=query)
+        
+        elif any(word in step_lower for word in ["remember", "store", "save", "memory"]):
+            # Store information in memory
+            key = f"info_{len(self.tools['memory'].memory) + 1}"
+            return self.tools["memory"].execute("store", key=key, value=step)
+        
+        else:
+            # Default: try to use the step as a general instruction
+            return ToolResult(True, f"Executed: {step}", metadata={"type": "general"})
+    
+    def get_task_status(self, task_id: str) -> Optional[Task]:
+        """Get status of a specific task."""
+        # Check active tasks
+        if task_id in self.active_tasks:
+            return self.active_tasks[task_id]
+        
+        # Check completed tasks
+        for task in self.completed_tasks:
+            if task.id == task_id:
+                return task
+        
+        return None
+    
+    def list_tasks(self) -> Dict[str, List[Task]]:
+        """List all tasks."""
+        return {
+            "active": list(self.active_tasks.values()),
+            "completed": self.completed_tasks[-10:]  # Last 10 completed
+        }
+
+# =====================================================================
+# AGENTIC CHAT INTERFACE
+# =====================================================================
+
+class AgenticWordAIChat:
+    """Agentic chat interface that can autonomously execute tasks."""
     
     def __init__(self, model_manager: ModelManager):
         self.model_manager = model_manager
-        self.model = None
-        self.tokenizer = None
-        self.metadata = None
+        self.agent = None
         self.conversation_history = []
-        self.max_history_length = 2000  # Token limit for conversation history
-    
-    def list_available_models(self) -> List[Dict]:
-        """List all available models."""
-        return self.model_manager.list_models()
+        self.autonomous_mode = False
     
     def load_model(self, model_id: str) -> bool:
-        """Load a specific model for chatting."""
+        """Load a model and initialize the agent."""
         try:
-            self.model, self.tokenizer, self.metadata = self.model_manager.load_model(model_id)
-            self.model.eval()
-            logger.info(f"✅ Chat ready with model: {self.metadata.model_name} {self.metadata.version}")
+            model, tokenizer, metadata = self.model_manager.load_model(model_id)
+            self.agent = WordLevelAgent(model, tokenizer, metadata)
+            logger.info(f"✅ Agentic chat ready with model: {metadata.model_name} {metadata.version}")
             return True
         except Exception as e:
             logger.error(f"❌ Failed to load model: {e}")
             return False
     
-    def print_model_info(self):
-        """Print comprehensive model information."""
-        if not self.metadata:
-            print("❌ No model loaded.")
-            return
-        
-        print(f"\n{'='*70}")
-        print(f"🤖 {self.metadata.model_name} {self.metadata.version}")
-        print(f"{'='*70}")
-        print(f"📊 Architecture:")
-        print(f"   • Parameters: {self.metadata.total_parameters:,}")
-        print(f"   • Hidden Size: {self.metadata.model_config.hidden_size}")
-        print(f"   • Layers: {self.metadata.model_config.num_layers}")
-        print(f"   • Attention Heads: {self.metadata.model_config.num_heads}")
-        print(f"   • Sequence Length: {self.metadata.model_config.seq_length}")
-        print(f"   • Vocabulary Size: {self.metadata.model_config.vocab_size:,}")
-        
-        print(f"\n🎯 Performance:")
-        print(f"   • Best Loss: {self.metadata.best_loss:.4f}")
-        print(f"   • Best Perplexity: {self.metadata.best_perplexity:.2f}")
-        if 'accuracy' in self.metadata.performance_metrics:
-            print(f"   • Accuracy: {self.metadata.performance_metrics['accuracy']*100:.2f}%")
-        
-        print(f"\n💾 Details:")
-        print(f"   • Size: {self.metadata.model_size_mb:.2f} MB")
-        print(f"   • Training Time: {self.metadata.training_time_hours:.2f} hours")
-        print(f"   • Epochs Trained: {self.metadata.epochs_trained}")
-        print(f"   • Hardware: {self.metadata.hardware_used}")
-        
-        if self.metadata.tags:
-            print(f"   • Tags: {', '.join(self.metadata.tags)}")
-        
-        print(f"{'='*70}\n")
-    
-    def manage_conversation_history(self, user_input: str, ai_response: str):
-        """Manage conversation history with token limits."""
-        # Add to history
-        self.conversation_history.append(f"<user> {user_input}")
-        self.conversation_history.append(f"<bot> {ai_response}")
-        
-        # Trim history if too long
-        if len(self.conversation_history) > 10:  # Keep last 5 exchanges
-            self.conversation_history = self.conversation_history[-10:]
-    
-    def build_context(self, user_input: str) -> str:
-        """Build conversation context for the model."""
-        # Create context from recent history + current input
-        context_parts = self.conversation_history[-6:] if self.conversation_history else []
-        context_parts.append(f"<user> {user_input}")
-        context_parts.append("<bot>")
-        
-        return " ".join(context_parts)
-    
     def chat(self):
-        """Interactive chat interface with advanced features."""
-        if not self.model:
-            # Auto-load the best available model
-            models = self.list_available_models()
+        """Interactive agentic chat interface."""
+        if not self.agent:
+            # Auto-load best model
+            models = self.model_manager.list_models()
             if not models:
-                print("❌ No models available. Please train a model first using Train.py")
+                print("❌ No models available. Please train a model first.")
                 return
             
-            print("🔍 Available models:")
-            for i, model in enumerate(models[:5]):  # Show top 5
-                print(f"   {i+1}. {model['name']} {model['version']} "
-                      f"(Loss: {model['best_loss']:.4f}, Size: {model['size_mb']:.2f}MB)")
-            
-            try:
-                choice = input(f"\nSelect model (1-{min(5, len(models))}) or press Enter for best: ").strip()
-                if choice:
-                    model_idx = int(choice) - 1
-                    if 0 <= model_idx < len(models):
-                        selected_model = models[model_idx]
-                    else:
-                        print("Invalid selection, using best model.")
-                        selected_model = min(models, key=lambda x: x['best_loss'])
-                else:
-                    selected_model = min(models, key=lambda x: x['best_loss'])
-                
-                if not self.load_model(selected_model['id']):
-                    print("❌ Failed to load model.")
-                    return
-                    
-            except (ValueError, KeyboardInterrupt):
-                print("❌ Invalid selection or interrupted.")
+            best_model = min(models, key=lambda x: x['best_loss'])
+            if not self.load_model(best_model['id']):
+                print("❌ Failed to load model.")
                 return
         
-        # Print model information
-        self.print_model_info()
+        print("\n" + "="*70)
+        print("🤖 AGENTIC WORD-LEVEL AI SYSTEM")
+        print("="*70)
+        print("🔧 Agent Capabilities:")
+        capabilities = self.agent.list_capabilities()
+        for name, desc in capabilities.items():
+            print(f"   • {name}: {desc}")
         
-        print("💬 Word-Level AI Chat Interface")
-        print("=" * 70)
-        print("🔧 Commands:")
-        print("   • 'exit', 'quit', 'q' - Exit chat")
-        print("   • 'clear' - Clear conversation history")
-        print("   • 'info' - Show model information")
-        print("   • 'models' - List available models")
-        print("   • 'temp X' - Set temperature (0.1-2.0)")
-        print("   • 'topk X' - Set top-k value (1-100)")
-        print("   • 'nucleus' or 'topp' - Switch to nucleus sampling")
-        print("   • 'topk_mode' - Switch to top-k sampling")
-        print("   • 'greedy' - Switch to greedy sampling")
-        print("   • 'help' - Show this help")
-        print("=" * 70)
-        
-        # Chat settings
-        temperature = 0.8
-        sampling_method = "top_k"
-        top_k = 50
-        top_p = 0.9
-        
-        print(f"⚙️  Settings: temp={temperature}, method={sampling_method}", end="")
-        if sampling_method == "top_k":
-            print(f", k={top_k}")
-        elif sampling_method in ["nucleus", "top_p"]:
-            print(f", p={top_p}")
-        else:
-            print()
-        print("-" * 70)
+        print("\n💬 Commands:")
+        print("   • Normal chat - Just type your message")
+        print("   • /task <description> - Execute a task autonomously")
+        print("   • /auto on/off - Toggle autonomous mode")
+        print("   • /tasks - List all tasks")
+        print("   • /status <task_id> - Check task status")
+        print("   • /capabilities - Show agent capabilities")
+        print("   • /clear - Clear conversation history")
+        print("   • /exit - Exit chat")
+        print("="*70)
+        print(f"🧠 Autonomous mode: {'ON' if self.autonomous_mode else 'OFF'}")
+        print("-"*70)
         
         while True:
             try:
@@ -365,142 +539,183 @@ class WordAIChat:
                     continue
                 
                 # Handle commands
-                if user_input.lower() in ["exit", "quit", "q"]:
-                    print("👋 Goodbye! Thanks for chatting!")
+                if user_input.lower() == "/exit":
+                    print("👋 Goodbye!")
                     break
                 
-                elif user_input.lower() == "clear":
+                elif user_input.lower() == "/clear":
                     self.conversation_history = []
-                    print("🗑️  Conversation history cleared!")
+                    print("🗑️ Conversation history cleared!")
                     continue
                 
-                elif user_input.lower() == "info":
-                    self.print_model_info()
+                elif user_input.lower() == "/capabilities":
+                    print("\n🔧 Agent Capabilities:")
+                    for name, desc in self.agent.list_capabilities().items():
+                        print(f"   • {name}: {desc}")
                     continue
                 
-                elif user_input.lower() == "models":
-                    print("\n📋 Available models:")
-                    for model in self.list_available_models():
-                        print(f"   {model['id']}: {model['name']} {model['version']} "
-                              f"(Loss: {model['best_loss']:.4f})")
+                elif user_input.lower() == "/tasks":
+                    tasks = self.agent.list_tasks()
+                    print(f"\n📋 Active Tasks: {len(tasks['active'])}")
+                    for task in tasks['active']:
+                        print(f"   • {task.id}: {task.description} ({task.status})")
+                    print(f"\n✅ Recent Completed Tasks: {len(tasks['completed'])}")
+                    for task in tasks['completed'][-5:]:
+                        print(f"   • {task.id}: {task.description} ({task.status})")
                     continue
                 
-                elif user_input.lower() == "help":
-                    print("\n💬 Available commands:")
-                    print("  exit/quit - Exit chat")
-                    print("  clear - Clear conversation history")
-                    print("  info - Show model information")
-                    print("  models - List available models")
-                    print("  temp 0.8 - Set temperature")
-                    print("  topk 50 - Set top-k sampling")
-                    print("  nucleus - Use nucleus sampling")
-                    print("  greedy - Use greedy sampling")
-                    continue
-                
-                elif user_input.startswith("temp "):
-                    try:
-                        new_temp = float(user_input.split()[1])
-                        if 0.1 <= new_temp <= 2.0:
-                            temperature = new_temp
-                            print(f"🌡️  Temperature set to {temperature}")
-                        else:
-                            print("❌ Temperature must be between 0.1 and 2.0")
-                    except (IndexError, ValueError):
-                        print("❌ Invalid temperature. Use: temp 0.8")
-                    continue
-                
-                elif user_input.startswith("topk "):
-                    try:
-                        new_topk = int(user_input.split()[1])
-                        if 1 <= new_topk <= 100:
-                            top_k = new_topk
-                            sampling_method = "top_k"
-                            print(f"🔢 Top-k set to {top_k}")
-                        else:
-                            print("❌ Top-k must be between 1 and 100")
-                    except (IndexError, ValueError):
-                        print("❌ Invalid top-k value. Use: topk 50")
-                    continue
-                
-                elif user_input.lower() in ["nucleus", "topp"]:
-                    sampling_method = "nucleus"
-                    print(f"🎯 Switched to nucleus sampling (p={top_p})")
-                    continue
-                
-                elif user_input.lower() == "topk_mode":
-                    sampling_method = "top_k"
-                    print(f"🔢 Switched to top-k sampling (k={top_k})")
-                    continue
-                
-                elif user_input.lower() == "greedy":
-                    sampling_method = "greedy"
-                    print("🎯 Switched to greedy sampling")
-                    continue
-                
-                # Generate response
-                print("🤖 AI: ", end="", flush=True)
-                
-                try:
-                    # Build context from conversation history
-                    context = self.build_context(user_input)
-                    
-                    # Generate response
-                    response = generate_response(
-                        self.model, self.tokenizer, context,
-                        max_length=200,
-                        temperature=temperature,
-                        sampling_method=sampling_method,
-                        top_k=top_k,
-                        top_p=top_p
-                    )
-                    
-                    if response and response.strip():
-                        print(response)
-                        # Add to conversation history
-                        self.manage_conversation_history(user_input, response)
+                elif user_input.startswith("/status "):
+                    task_id = user_input.split(" ", 1)[1].strip()
+                    task = self.agent.get_task_status(task_id)
+                    if task:
+                        print(f"\n📊 Task {task_id}:")
+                        print(f"   Description: {task.description}")
+                        print(f"   Status: {task.status}")
+                        print(f"   Steps: {len(task.steps)}")
+                        print(f"   Results: {len(task.results)} completed")
                     else:
-                        print("(No response generated - try adjusting settings)")
+                        print(f"❌ Task {task_id} not found")
+                    continue
                 
-                except Exception as e:
-                    print(f"Error generating response: {e}")
-                    logger.error(f"Generation error: {e}")
+                elif user_input.startswith("/auto "):
+                    mode = user_input.split(" ", 1)[1].strip().lower()
+                    if mode == "on":
+                        self.autonomous_mode = True
+                        print("🧠 Autonomous mode enabled - I'll execute tasks automatically!")
+                    elif mode == "off":
+                        self.autonomous_mode = False
+                        print("💬 Autonomous mode disabled - Back to normal chat")
+                    else:
+                        print("❌ Use '/auto on' or '/auto off'")
+                    continue
+                
+                elif user_input.startswith("/task "):
+                    task_description = user_input[6:].strip()
+                    if task_description:
+                        print(f"🎯 Executing task: {task_description}")
+                        task = self.agent.execute_task(task_description)
+                        print(f"📊 Task {task.id} {task.status}")
+                        
+                        # Show results
+                        successful_results = [r for r in task.results if r.success]
+                        if successful_results:
+                            print("✅ Successful results:")
+                            for i, result in enumerate(successful_results[:3]):  # Show first 3
+                                print(f"   {i+1}. {str(result.data)[:100]}{'...' if len(str(result.data)) > 100 else ''}")
+                    else:
+                        print("❌ Please specify a task description")
+                    continue
+                
+                # Regular conversation or autonomous task detection
+                if self.autonomous_mode and self._is_task_request(user_input):
+                    print("🧠 I detect this is a task - executing autonomously...")
+                    task = self.agent.execute_task(user_input)
+                    print(f"📊 Task {task.id} {task.status}")
+                    
+                    # Provide conversational response about the task
+                    if task.status == "completed":
+                        response = f"I've successfully completed your task! I executed {len(task.steps)} steps."
+                    else:
+                        response = f"I attempted your task but encountered some issues. Status: {task.status}"
+                    
+                    print(f"🤖 AI: {response}")
+                
+                else:
+                    # Normal conversational response
+                    response = self._generate_conversational_response(user_input)
+                    print(f"🤖 AI: {response}")
+                
+                # Add to conversation history
+                self.conversation_history.append(f"<user> {user_input}")
+                self.conversation_history.append(f"<bot> {response if 'response' in locals() else 'Task executed'}")
+                
+                # Trim history
+                if len(self.conversation_history) > 20:
+                    self.conversation_history = self.conversation_history[-20:]
             
             except KeyboardInterrupt:
                 print("\n\n👋 Chat interrupted!")
                 break
-            except EOFError:
-                print("\n\n👋 End of input!")
-                break
             except Exception as e:
-                print(f"\n❌ Unexpected error: {e}")
-                logger.error(f"Unexpected error in chat loop: {e}")
-                continue
+                print(f"\n❌ Error: {e}")
+                logger.error(f"Chat error: {e}")
+    
+    def _is_task_request(self, text: str) -> bool:
+        """Detect if user input is a task request."""
+        task_indicators = [
+            "calculate", "compute", "math", "solve",
+            "create", "write", "save", "file",
+            "search", "find", "look up", "lookup",
+            "remember", "store", "list", "show me"
+        ]
         
-        # Cleanup
+        text_lower = text.lower()
+        return any(indicator in text_lower for indicator in task_indicators)
+    
+    def _generate_conversational_response(self, user_input: str) -> str:
+        """Generate a conversational response."""
         try:
-            if device.type == 'cuda':
-                torch.cuda.empty_cache()
-            elif device.type == 'mps' and hasattr(torch.mps, 'empty_cache'):
-                torch.mps.empty_cache()
-            gc.collect()
-        except Exception:
-            pass
+            # Build context
+            context_parts = self.conversation_history[-6:] if self.conversation_history else []
+            context_parts.append(f"<user> {user_input}")
+            context_parts.append("<bot>")
+            context = " ".join(context_parts)
+            
+            # Generate response using the model
+            self.agent.model.eval()
+            with torch.no_grad():
+                input_ids = torch.tensor(self.agent.tokenizer.encode(context), dtype=torch.long).unsqueeze(0).to(device)
+                generated = input_ids.clone()
+                
+                for _ in range(100):  # Max response length
+                    if generated.size(1) >= self.agent.model.config.seq_length:
+                        break
+                    
+                    logits = self.agent.model(generated)
+                    next_token_logits = logits[0, -1, :] / 0.8
+                    probs = F.softmax(next_token_logits, dim=0)
+                    
+                    # Top-k sampling
+                    top_k_probs, top_k_indices = torch.topk(probs, 50)
+                    top_k_probs = top_k_probs / top_k_probs.sum()
+                    
+                    try:
+                        chosen_idx = torch.multinomial(top_k_probs, 1).item()
+                        next_token_id = top_k_indices[chosen_idx].item()
+                    except:
+                        next_token_id = top_k_indices[0].item()
+                    
+                    generated = torch.cat([generated, torch.tensor([[next_token_id]], device=device)], dim=1)
+                    
+                    if next_token_id == self.agent.tokenizer.vocab.get("</s>", -1):
+                        break
+                
+                response_ids = generated[0][input_ids.size(1):].tolist()
+                response = self.agent.tokenizer.decode(response_ids)
+                
+                # Clean response
+                response = re.sub(r'<[^>]*>', '', response).strip()
+                response = re.sub(r'\s+', ' ', response)
+                
+                return response if response else "I'm not sure how to respond to that."
+        
+        except Exception as e:
+            logger.error(f"Error generating response: {e}")
+            return "Sorry, I encountered an error generating a response."
 
-def print_welcome():
-    """Print welcome message and system info."""
+# =====================================================================
+# MAIN FUNCTION
+# =====================================================================
+
+def main():
+    """Main function for the agentic AI system."""
     print("\n" + "="*70)
-    print("🤖 WORD-LEVEL AI CHAT SYSTEM")
+    print("🤖 AGENTIC WORD-LEVEL AI SYSTEM")
+    print("   Autonomous Task Execution + Conversational AI")
     print("="*70)
     print(f"🔧 Device: {device}")
     print(f"🐍 PyTorch: {torch.__version__}")
-    if device.type == 'cuda':
-        print(f"🎮 CUDA: {torch.version.cuda}")
-        print(f"💾 GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
     print("="*70)
-
-def main():
-    """Main chat function with model management."""
-    print_welcome()
     
     # Initialize model manager
     model_manager = ModelManager("models")
@@ -511,21 +726,20 @@ def main():
         print("❌ No trained models found!")
         print("\n📝 To get started:")
         print("   1. Run 'python Train.py' to train a model")
-        print("   2. Or run 'python fine_tune.py' to fine-tune an existing model")
-        print("   3. Then run 'python ChatAI.py' to start chatting")
+        print("   2. Then run this script to start the agentic AI")
         return 1
     
     print(f"✅ Found {len(models)} trained model(s)")
     
-    # Initialize chat interface
-    chat = WordAIChat(model_manager)
+    # Initialize agentic chat
+    agentic_chat = AgenticWordAIChat(model_manager)
     
     try:
-        chat.chat()
+        agentic_chat.chat()
         return 0
     except Exception as e:
-        logger.error(f"Chat system error: {e}")
-        print(f"❌ Chat system error: {e}")
+        logger.error(f"Agentic chat system error: {e}")
+        print(f"❌ System error: {e}")
         return 1
 
 if __name__ == "__main__":
