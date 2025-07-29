@@ -61,7 +61,7 @@
 
 ```bash
 # Clone or download the project
-git clone <repository-url>
+git clone https://github.com/MatN23/LuminaAI.git
 cd lumina-ai-desktop
 
 # Run installation script
