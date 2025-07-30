@@ -122,7 +122,7 @@ def download_and_save_dataset(output_dir: Path, max_train_examples: int = 50000)
         
         # Load dataset with error handling
         try:
-            ds = load_dataset("OpenAssistant/oasst1", trust_remote_code=True)
+            ds = load_dataset("OpenAssistant/oasst2", trust_remote_code=True)
         except Exception as e:
             logger.error(f"Failed to load dataset: {e}")
             logger.info("Try running: huggingface-cli login")
