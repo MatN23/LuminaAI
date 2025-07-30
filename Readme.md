@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![LuminaAI Logo](Main/Src/assets/logo.png)
+![LuminaAI Logo](assets/logo.png)
 
 **Advanced Neural Transformer Desktop Application**
 
