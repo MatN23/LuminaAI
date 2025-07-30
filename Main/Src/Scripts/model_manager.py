@@ -32,8 +32,8 @@ class ModelConfig:
     """Configuration for the transformer model."""
     vocab_size: int = 32000
     hidden_size: int = 768
-    num_layers: int = 12
-    num_heads: int = 12
+    num_layers: int = 8
+    num_heads: int = 8
     seq_length: int = 1024
     dropout: float = 0.1
     model_type: str = "WordTransformer"
