@@ -1,0 +1,134 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'  # Triggers on version tags like v1.0.0
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+      release_id: ${{ steps.create_release.outputs.id }}
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: LuminaAI ${{ github.ref }}
+          body: |
+            ## 🎉 New Release: ${{ github.ref }}
+            
+            ### 🚀 What's New
+            - Automated release build
+            - Cross-platform desktop app
+            - Latest AI improvements
+            
+            ### 📦 Downloads
+            - **Windows**: Download the `.exe` installer
+            - **macOS**: Download the `.dmg` file  
+            - **Linux**: Download the `.AppImage` file
+            
+            ### 🐛 Bug Fixes
+            - Performance improvements
+            - UI enhancements
+            
+            ### 📝 Full Changelog
+            See all changes since last release in the commit history.
+          draft: false
+          prerelease: false
+
+  build-and-upload:
+    needs: create-release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win
+            ext: exe
+          - os: macos-latest
+            platform: mac
+            ext: dmg
+          - os: ubuntu-latest
+            platform: linux
+            ext: AppImage
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          pip install -r requirements.txt
+
+      - name: Build Electron App
+        run: |
+          npm run build:${{ matrix.platform }} || npm run dist:${{ matrix.platform }} || npm run electron:build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Find built files
+        id: find_files
+        shell: bash
+        run: |
+          if [ "${{ matrix.platform }}" = "win" ]; then
+            file=$(find dist -name "*.exe" | head -1)
+          elif [ "${{ matrix.platform }}" = "mac" ]; then
+            file=$(find dist -name "*.dmg" | head -1)
+          else
+            file=$(find dist -name "*.AppImage" | head -1)
+          fi
+          
+          if [ -z "$file" ]; then
+            echo "No built file found for ${{ matrix.platform }}"
+            exit 1
+          fi
+          
+          echo "file_path=$file" >> $GITHUB_OUTPUT
+          echo "file_name=$(basename $file)" >> $GITHUB_OUTPUT
+
+      - name: Upload Release Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ${{ steps.find_files.outputs.file_path }}
+          asset_name: LuminaAI-${{ github.ref_name }}-${{ matrix.platform }}.${{ matrix.ext }}
+          asset_content_type: application/octet-stream
+
+  update-release:
+    needs: [create-release, build-and-upload]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Update Release
+        uses: actions/github-script@v6
+        with:
+          script: |
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: ${{ needs.create-release.outputs.release_id }},
+              draft: false,
+              prerelease: false
+            });
+            
+            console.log('🎉 Release published successfully!');

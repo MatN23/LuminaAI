@@ -1,0 +1,49 @@
+version: 2
+updates:
+  # Update Node.js dependencies
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "npm"
+      include: "scope"
+    reviewers:
+      - "MatN23"  # Replace with your GitHub username
+    labels:
+      - "dependencies"
+      - "javascript"
+
+  # Update Python dependencies
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "tuesday"
+      time: "09:00"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "pip"
+      include: "scope"
+    reviewers:
+      - "MatN23"  # Replace with your GitHub username
+    labels:
+      - "dependencies"
+      - "python"
+
+  # Update GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+    reviewers:
+      - "MatN23"  # Replace with your GitHub username
+    labels:
+      - "dependencies"
+      - "github-actions"

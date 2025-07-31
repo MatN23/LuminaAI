@@ -193,28 +193,6 @@ Have you created something amazing with LuminaAI? We'd love to feature it!
 | **[Fork Name](https://github.com/username/fork)** | [@username](https://github.com/username) | Brief description | ![Stars](https://img.shields.io/github/stars/username/fork.svg) |
 ```
 
-## 🏗️ Project Structure
-
-```
-lumina-ai-desktop/
-├── 📄 train.py                         # Model training script
-├── 📄 fine_tune.py                     # Model fine-tuning script  
-├── 📄 ChatAI.py                        # Chat interface backend
-├── 📄 lumina_desktop.py                # Main desktop server
-├── 📄 buildapp.py                      # Application builder
-├── 📁 .github/                         # GitHub automation
-│   ├── workflows/                      # CI/CD pipelines
-│   └── ISSUE_TEMPLATE/                 # Issue templates
-├── 📁 models/                          # Model storage
-├── 📁 data/                            # Training data
-├── 📁 assets/                          # Static assets
-├── 📄 requirements.txt                 # Python dependencies
-├── 📄 package.json                     # Node.js configuration
-├── 📄 docker-compose.yml               # Docker setup
-├── 📄 Makefile                         # Development commands
-└── 📄 README.md                        # This file
-```
-
 ## 🔧 Development
 
 ### Development Commands
@@ -320,7 +298,7 @@ We welcome contributions from the community!
 
 ```bash
 # Fork and clone the repo
-git clone https://github.com/YOUR_USERNAME/LuminaAI.git
+git clone https://github.com/MatN23/LuminaAI.git
 cd lumina-ai-desktop
 
 # Set up development environment
