@@ -408,25 +408,10 @@ This project is licensed under the **Custom Open Source License** - see the [LIC
 
 ## 🆘 Support & Community
 
-### 💬 Community Channels
-
-- **Discord**: [Join our Discord server](https://discord.gg/luminaai)
-- **Reddit**: [r/LuminaAI](https://reddit.com/r/luminaai)
-- **Telegram**: [LuminaAI Community](https://t.me/luminaai)
-- **Matrix**: [#luminaai:matrix.org](https://matrix.to/#/#luminaai:matrix.org)
-
-### 📚 Documentation & Learning
-
-- **Wiki**: [Comprehensive guides and tutorials](https://github.com/MatN23/LuminaAI/wiki)
-- **API Docs**: [API documentation and examples](https://docs.luminaai.com)
-- **YouTube**: [Video tutorials and demos](https://youtube.com/@luminaai)
-- **Blog**: [Technical articles and updates](https://blog.luminaai.com)
-
 ### 🔧 Technical Support
 
 - **GitHub Issues**: [Report bugs and request features](https://github.com/MatN23/LuminaAI/issues)
 - **Stack Overflow**: Tag your questions with `luminaai`
-- **Email Support**: [support@luminaai.com](mailto:support@luminaai.com)
 
 ### 🚨 Common Issues & Solutions
 
