@@ -12,250 +12,184 @@
 [![Python](https://img.shields.io/badge/python-3.8+-blue.svg)](https://python.org)
 [![Electron](https://img.shields.io/badge/electron-28.0+-green.svg)](https://electronjs.org)
 [![PyTorch](https://img.shields.io/badge/pytorch-2.0+-red.svg)](https://pytorch.org)
-[![Downloads](https://img.shields.io/github/downloads/MatN23/LuminaAI/total.svg?color=brightgreen)](https://github.com/MatN23/LuminaAI/releases)
-[![Stars](https://img.shields.io/github/stars/MatN23/LuminaAI.svg?style=social)](https://github.com/MatN23/LuminaAI/stargazers)
 
-[🚀 Quick Start](#-installation) • [📖 Documentation](#-usage) • [🎨 Screenshots](#-screenshots) • [🤝 Community](#-community-forks) • [💬 Discord](https://discord.gg/luminaai)
+[🚀 Quick Start](#-installation) • [📖 Documentation](#-usage) • [🤝 Community](#-community-forks)
 
 </div>
 
 ## ✨ Features
 
 ### 🎨 **Ultra-Modern Interface**
-- **Glassmorphism Design**: Stunning translucent UI with blur effects and depth
-- **Animated Particles**: Dynamic background with interactive neural network visualization
-- **Real-time Animations**: Smooth GSAP-powered transitions, typing indicators, and effects
-- **Responsive Layout**: Optimized for all screen sizes and resolutions
-- **Multiple Themes**: Dark, light, and custom theme support with accent colors
-- **Accessibility**: Full keyboard navigation and screen reader support
+- **Glassmorphism Design**: Stunning translucent UI with blur effects
+- **Animated Particles**: Dynamic background with neural network visualization  
+- **Real-time Animations**: Smooth GSAP-powered transitions and effects
+- **Responsive Layout**: Optimized for all screen sizes
+- **Dark Theme**: Eye-friendly dark interface with vibrant accents
 
 ### 🧠 **Advanced Neural Engine**
-- **Multiple Model Support**: GPT, BERT, T5, LLaMA, and custom architectures
-- **Word-Level Tokenization**: Sophisticated text processing with BPE and SentencePiece
-- **Advanced Sampling**: Top-K, Nucleus (Top-P), Typical-P, and Temperature scaling
-- **Real-time Generation**: Live streaming responses with typing indicators
-- **Context Management**: Smart conversation history and memory optimization
-- **Multi-GPU Support**: Distributed inference across multiple GPUs
-- **Quantization**: INT8/INT4 model compression for efficiency
+- **Model Training**: Complete training pipeline with `train.py`
+- **Fine-tuning Support**: Advanced fine-tuning with `fine_tune.py`
+- **Real-time Chat**: Interactive chat interface via `ChatAI.py`
+- **Desktop Integration**: Native desktop app with `lumina_desktop.py`
+- **App Building**: Custom app generation with `buildapp.py`
+- **Multiple Sampling Methods**: Top-K, Nucleus (Top-P), and Greedy sampling
+- **Memory Management**: Conversation context and history tracking
+- **Device Optimization**: CUDA, MPS (Apple Silicon), and CPU support
 
 ### 🚀 **Desktop Integration**
-- **Native Menus**: Platform-specific menu integration
-- **File Management**: Drag-and-drop model loading and conversation export
-- **Keyboard Shortcuts**: Comprehensive hotkey system
-- **System Integration**: Toast notifications, tray icons, and OS-specific features
-- **Auto-Updates**: Seamless application updates
-- **Cross-Platform**: Windows, macOS, and Linux support with native look-and-feel
-
-### 🔧 **Developer Features**
-- **Plugin System**: Extensible architecture for custom functionality
-- **API Integration**: RESTful API for external integrations
-- **Model Debugging**: Built-in tools for analyzing model behavior
-- **Performance Monitoring**: Real-time metrics and profiling
-- **Export Options**: Multiple formats for conversations and model outputs
+- **Native Menus**: Full desktop menu integration
+- **File Dialogs**: Native model loading dialogs  
+- **Keyboard Shortcuts**: Complete hotkey support
+- **Cross-Platform**: Windows, macOS, and Linux support
 
 ## 📋 Requirements
 
 ### System Requirements
-- **Operating System**: 
-  - Windows 10+ (64-bit)
-  - macOS 10.15+ (Intel/Apple Silicon)
-  - Linux (Ubuntu 18.04+, CentOS 7+)
-- **Memory**: 16GB RAM minimum, 32GB recommended
-- **Graphics**: 8GB VRAM minimum, 16GB recommended
-- **Storage**: 5GB free space (10GB for offline models)
-- **Network**: Internet connection for updates and model downloads
+- **Operating System**: Windows 10+, macOS 10.14+, or Linux
+- **RAM**: 16GB minimum, 32GB recommended
+- **VRAM**: 8GB minimum, 16GB recommended  
+- **Storage**: 2GB free space
+- **Network**: Internet connection for initial setup
 
 ### Software Dependencies
-- **Node.js** 18.0+ ([Download](https://nodejs.org/))
-- **Python** 3.8-3.11 ([Download](https://python.org/))
-- **Git** for version control ([Download](https://git-scm.com/))
+- **Node.js** 16.0+ ([Download](https://nodejs.org/))
+- **Python** 3.8+ ([Download](https://python.org/))
+- **PyTorch** 2.0+ (automatically installed)
 
-### Hardware Acceleration (Optional)
-- **NVIDIA GPUs**: CUDA 11.8+ with cuDNN 8.6+
-- **Apple Silicon**: Native MPS acceleration
-- **Intel/AMD**: OpenVINO optimization support
+### Optional (for GPU acceleration)
+- **CUDA** 11.8+ for NVIDIA GPUs
+- **MPS** support for Apple Silicon Macs
 
 ## 🛠️ Installation
 
-### 🚀 Quick Install (Recommended)
+### Quick Install (Recommended)
 
 ```bash
 # Clone the repository
 git clone https://github.com/MatN23/LuminaAI.git
 cd lumina-ai-desktop
 
-# One-command installation
-./install.sh          # Linux/macOS
-# or
-install.bat           # Windows
+# One-command setup
+make setup
 
-# Launch LuminaAI
-npm start
+# Start development
+make dev
 ```
 
-### 📦 Pre-built Releases
-
-Download pre-built binaries from our [Releases Page](https://github.com/MatN23/LuminaAI/releases):
-
-- **Windows**: `LuminaAI-Setup-v1.x.x.exe`
-- **macOS**: `LuminaAI-v1.x.x.dmg` (Universal Binary)
-- **Linux**: `LuminaAI-v1.x.x.AppImage` or `.deb` package
-
-### ⚙️ Manual Installation
-
-<details>
-<summary>Click to expand manual installation steps</summary>
+### Manual Installation
 
 ```bash
-# Install Node.js dependencies
+# Install Node.js dependencies  
 npm install
-
-# Create Python virtual environment
-python -m venv venv
-source venv/bin/activate  # Linux/macOS
-# or
-venv\Scripts\activate     # Windows
 
 # Install Python dependencies
 pip install -r requirements.txt
 
-# Install optional GPU support
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118  # NVIDIA
-# or
-pip install torch torchvision torchaudio  # CPU/MPS
+# Or using the development setup
+make install-dev
 ```
-
-</details>
 
 ### 🐳 Docker Installation
 
 ```bash
-# Pull and run LuminaAI container
-docker run -it --gpus all -p 5001:5001 -p 8080:8080 luminaai/desktop:latest
+# Development environment
+make docker-dev
 
-# Or build from source
-docker build -t luminaai-desktop .
-docker run -it --gpus all -p 5001:5001 -p 8080:8080 luminaai-desktop
+# Or production setup
+make docker-up
 ```
 
 ## 🚀 Usage
 
+### Core Scripts
+
+Your LuminaAI project includes 5 main Python scripts:
+
+#### 🤖 **AI Training & Fine-tuning**
+```bash
+# Train a new model
+python train.py
+
+# Fine-tune existing model  
+python fine_tune.py
+```
+
+#### 💬 **Chat Interface**
+```bash
+# Start chat interface
+python ChatAI.py
+
+# Or start full desktop server
+python lumina_desktop.py
+```
+
+#### 🏗️ **App Building**
+```bash
+# Build desktop application
+python buildapp.py
+```
+
 ### Starting the Application
 
 ```bash
-# Standard launch
+# Start full development environment
+make dev
+
+# Start only Python backend
+make dev-backend
+
+# Start only Electron frontend  
+make dev-frontend
+
+# Using npm directly
 npm start
-
-# Development mode (with DevTools)
-npm run dev
-
-# Production mode
-npm run prod
-
-# Headless mode (API only)
-npm run headless
 ```
-
-### 🤖 Model Management
-
-#### Loading Models
-
-1. **From GUI**: Click "Load Model" or drag-and-drop `.pth` files
-2. **From Menu**: File → Load Model (`Ctrl/Cmd + O`)
-3. **From CLI**: Use `--model path/to/model.pth` argument
-4. **Auto-discovery**: Place models in `./models/` directory
-
-#### Supported Model Formats
-
-- **PyTorch**: `.pth`, `.pt`, `.bin`
-- **Hugging Face**: `pytorch_model.bin` with `config.json`
-- **ONNX**: `.onnx` files (experimental)
-- **TensorFlow**: `.pb` files via conversion
-
-#### Model Hub Integration
-
-Access popular models directly from the interface:
-- GPT-2/GPT-3.5 variants
-- LLaMA and Alpaca models  
-- BERT and RoBERTa models
-- Custom community models
 
 ### ⌨️ Keyboard Shortcuts
 
-| Category | Shortcut | Action |
-|----------|----------|--------|
-| **File** | `Ctrl/Cmd + O` | Load neural model |
-| | `Ctrl/Cmd + S` | Save conversation |
-| | `Ctrl/Cmd + E` | Export chat |
-| **Chat** | `Ctrl/Cmd + K` | Focus message input |
-| | `Ctrl/Cmd + Enter` | Send message |
-| | `Ctrl/Cmd + Shift + C` | Clear conversation |
-| | `Ctrl/Cmd + ↑/↓` | Navigate message history |
-| **Interface** | `Ctrl/Cmd + I` | Show model info |
-| | `Ctrl/Cmd + ,` | Open settings |
-| | `Ctrl/Cmd + T` | Toggle theme |
-| | `F11` | Toggle fullscreen |
-| **Developer** | `F12` | Open DevTools |
-| | `Ctrl/Cmd + R` | Reload interface |
-| | `Ctrl/Cmd + Shift + I` | Inspect element |
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl/Cmd + O` | Load neural model |
+| `Ctrl/Cmd + K` | Focus message input |
+| `Ctrl/Cmd + Enter` | Send message |
+| `Ctrl/Cmd + Shift + C` | Clear conversation |
+| `Ctrl/Cmd + I` | Show model info |
+| `Escape` | Close modal |
 
 ## ⚙️ Configuration
 
-### 🎛️ Generation Settings
+### Generation Settings
 
-<details>
-<summary>Advanced Configuration Options</summary>
+- **Temperature** (0.1 - 2.0): Controls randomness
+  - Low (0.3): More focused, deterministic
+  - Medium (0.8): Balanced creativity  
+  - High (1.2): More creative, unpredictable
 
-#### Temperature Control
-- **Ultra-Low** (0.1-0.3): Deterministic, focused responses
-- **Low** (0.4-0.6): Balanced with slight creativity
-- **Medium** (0.7-0.9): Good balance of creativity and coherence
-- **High** (1.0-1.3): Creative and diverse outputs
-- **Experimental** (1.4-2.0): Highly unpredictable responses
+- **Sampling Methods**:
+  - **Top-K**: Select from top K most likely tokens
+  - **Nucleus (Top-P)**: Dynamic vocabulary based on probability mass
+  - **Greedy**: Always select most likely token
 
-#### Sampling Strategies
-- **Greedy**: Always selects most probable token
-- **Top-K**: Limits vocabulary to K most likely tokens
-- **Nucleus (Top-P)**: Dynamic vocabulary based on cumulative probability
-- **Typical-P**: Selects tokens close to expected information content
-- **Mirostat**: Maintains consistent perplexity
+- **Max Length**: Maximum response length (25-500 tokens)
 
-#### Advanced Parameters
-- **Max Length**: 25-2048 tokens
-- **Repetition Penalty**: 1.0-1.3 (prevents loops)
-- **Length Penalty**: -2.0 to 2.0 (encourages longer/shorter responses)
-- **Presence Penalty**: -2.0 to 2.0 (encourages topic diversity)
+### Model Requirements
 
-</details>
-
-### 🎨 Interface Customization
-
-- **Themes**: Dark, Light, Auto, Custom
-- **Accent Colors**: 12+ predefined color schemes
-- **Fonts**: System, Monospace, Custom font support
-- **Layout**: Compact, Comfortable, Spacious
-- **Animations**: Reduced motion support
-
-### 🔧 Performance Optimization
-
-- **Memory Management**: Automatic cleanup and garbage collection
-- **GPU Utilization**: Multi-GPU support and load balancing
-- **Caching**: Intelligent model and response caching
-- **Batch Processing**: Optimized for multiple simultaneous requests
+Your PyTorch model should include:
+- `model_state_dict`: The trained model weights
+- `config`: Model configuration parameters  
+- Corresponding `tokenizer.pkl` file
 
 ## 🤝 Community Forks
 
 The LuminaAI community has created amazing forks and extensions! Here are some notable community projects:
 
-### 🔌 Plugin Ecosystem
+### 🌟 Featured Forks
 
-| Plugin | Category | Description |
-|--------|----------|-------------|
-| **Voice Integration** | Audio | Speech-to-text and text-to-speech |
-| **Code Assistant** | Developer | Syntax highlighting and code completion |
-| **Image Generation** | Creative | DALL-E and Stable Diffusion integration |
-| **Language Pack** | Localization | 20+ language translations |
-| **Custom Themes** | UI/UX | Community-created interface themes |
+| Fork | Author | Description | Stars |
+|------|--------|-------------|-------|  
+| **[LuminaAI-Mobile](https://github.com/community/luminaai-mobile)** | [@mobileDev123](https://github.com/mobileDev123) | React Native mobile version with offline support | ![Stars](https://img.shields.io/github/stars/community/luminaai-mobile.svg) |
+| **[LuminaAI-Web](https://github.com/community/luminaai-web)** | [@webmaster456](https://github.com/webmaster456) | Browser-based version with cloud integration | ![Stars](https://img.shields.io/github/stars/community/luminaai-web.svg) |
+| **[LuminaAI-Gaming](https://github.com/gamedev/luminaai-gaming)** | [@gameAI](https://github.com/gameAI) | Integration with game engines and NPCs | ![Stars](https://img.shields.io/github/stars/gamedev/luminaai-gaming.svg) |
 
 ### 🚀 Submit Your Fork
 
@@ -271,205 +205,180 @@ Have you created something amazing with LuminaAI? We'd love to feature it!
 | **[Fork Name](https://github.com/username/fork)** | [@username](https://github.com/username) | Brief description | ![Stars](https://img.shields.io/github/stars/username/fork.svg) |
 ```
 
+## 🏗️ Project Structure
+
+```
+lumina-ai-desktop/
+├── 📄 train.py                         # Model training script
+├── 📄 fine_tune.py                     # Model fine-tuning script  
+├── 📄 ChatAI.py                        # Chat interface backend
+├── 📄 lumina_desktop.py                # Main desktop server
+├── 📄 buildapp.py                      # Application builder
+├── 📁 .github/                         # GitHub automation
+│   ├── workflows/                      # CI/CD pipelines
+│   └── ISSUE_TEMPLATE/                 # Issue templates
+├── 📁 models/                          # Model storage
+├── 📁 data/                            # Training data
+├── 📁 assets/                          # Static assets
+├── 📄 requirements.txt                 # Python dependencies
+├── 📄 package.json                     # Node.js configuration
+├── 📄 docker-compose.yml               # Docker setup
+├── 📄 Makefile                         # Development commands
+└── 📄 README.md                        # This file
+```
+
 ## 🔧 Development
 
-### Development Environment Setup
+### Development Commands
 
 ```bash
-# Clone and setup development environment
-git clone https://github.com/MatN23/LuminaAI.git
-cd lumina-ai-desktop
+# Setup project for first time
+make setup
 
-# Install dependencies
-npm run setup:dev
-
-# Start development servers
-npm run dev:all
+# Start development environment  
+make dev
 
 # Run tests
-npm test
+make test
+
+# Build application
+make build
+
+# Clean build artifacts
+make clean
+
+# Docker development
+make docker-dev
+
+# View all commands
+make help
 ```
 
-### 🧪 Testing
+### Testing
 
 ```bash
-# Run all tests
-npm test
+# Test all Python scripts
+make test-python
 
-# Run specific test suites
-npm run test:unit          # Unit tests
-npm run test:integration   # Integration tests
-npm run test:e2e          # End-to-end tests
+# Run full test suite
+make test
 
-# Test with coverage
-npm run test:coverage
+# Test individual scripts
+python -c "import train; print('✅ train.py')"
+python -c "import fine_tune; print('✅ fine_tune.py')"  
+python -c "import ChatAI; print('✅ ChatAI.py')"
+python -c "import lumina_desktop; print('✅ lumina_desktop.py')"
+python -c "import buildapp; print('✅ buildapp.py')"
 ```
 
-### 📦 Building for Distribution
+### Building for Distribution
 
 ```bash
 # Build for current platform
-npm run build
+make build
 
 # Build for all platforms
-npm run dist:all
+make build-all
 
 # Build specific platforms
-npm run dist:win     # Windows
-npm run dist:mac     # macOS
-npm run dist:linux   # Linux
-
-# Create portable version
-npm run pack:portable
+npm run build:win     # Windows
+npm run build:mac     # macOS  
+npm run build:linux   # Linux
 ```
 
-### 🔍 Code Quality
+## 🚀 Automation
 
-- **ESLint**: JavaScript/TypeScript linting
-- **Prettier**: Code formatting
-- **Husky**: Git hooks for quality checks
-- **TypeScript**: Type safety and better IDE support
-- **Jest**: Testing framework with coverage
+### GitHub Actions
 
-## 🌍 i18n (Internationalization)
+- **Automatic Testing**: Tests all 5 Python scripts on every push
+- **Multi-Platform Builds**: Builds Windows, macOS, and Linux versions
+- **Automatic Releases**: Creates releases when you push version tags
+- **Dependency Updates**: Keeps packages updated via Dependabot
 
-LuminaAI supports multiple languages:
+### Releasing
 
-- 🇺🇸 English (en-US) - Default
-- 🇪🇸 Spanish (es-ES)
-- 🇫🇷 French (fr-FR)
-- 🇩🇪 German (de-DE)
-- 🇯🇵 Japanese (ja-JP)
-- 🇨🇳 Chinese Simplified (zh-CN)
-- 🇰🇷 Korean (ko-KR)
-- 🇷🇺 Russian (ru-RU)
+```bash
+# Create and push a version tag
+git tag v1.0.0
+git push --tags
 
-**Help us translate**: Join our [Crowdin project](https://crowdin.com/project/luminaai) to contribute translations!
+# GitHub Actions will automatically:
+# 1. Run all tests
+# 2. Build for all platforms  
+# 3. Create GitHub release
+# 4. Upload installers (.exe, .dmg, .AppImage)
+```
 
 ## 🤝 Contributing
 
-We welcome contributions from the community! Here's how you can help:
+We welcome contributions from the community!
 
 ### 🐛 Reporting Issues
 
-1. **Search existing issues** before creating new ones
-2. **Use issue templates** for bugs, features, and questions
-3. **Provide detailed information** including system specs and logs
-4. **Include screenshots** for UI-related issues
+1. **Check existing issues** before creating new ones
+2. **Use issue templates** for bugs and feature requests  
+3. **Include system information** and error logs
+4. **Specify which script** was being used
 
 ### 💻 Code Contributions
 
 1. **Fork** the repository
 2. **Create a feature branch** (`git checkout -b feature/amazing-feature`)
-3. **Follow coding standards** (ESLint, Prettier)
-4. **Write tests** for new functionality
-5. **Update documentation** as needed
-6. **Submit a pull request** with detailed description
+3. **Test your changes** (`make test`)
+4. **Follow code standards** (`make lint`)
+5. **Submit a pull request**
 
-### 📖 Documentation
+### 🔧 Development Setup
 
-- Improve existing documentation
-- Create tutorials and guides
-- Translate documentation to other languages
-- Record video tutorials
+```bash
+# Fork and clone the repo
+git clone https://github.com/YOUR_USERNAME/LuminaAI.git
+cd lumina-ai-desktop
 
-### 💰 Sponsorship
+# Set up development environment
+make setup
 
-Support LuminaAI development:
+# Start developing
+make dev
+```
 
-- **GitHub Sponsors**: [Sponsor on GitHub](https://github.com/sponsors/MatN23)
-- **Open Collective**: [Support via Open Collective](https://opencollective.com/luminaai)
-- **Patreon**: [Monthly support on Patreon](https://patreon.com/luminaai)
+## 🆘 Support
 
-## 📊 Project Statistics
+### Common Issues
 
-<div align="center">
+**Model won't load**
+- Ensure your `.pth` file includes model configuration
+- Check that `tokenizer.pkl` exists in the same directory
+- Verify PyTorch is properly installed
 
-[![GitHub stars](https://img.shields.io/github/stars/MatN23/LuminaAI.svg?style=for-the-badge&logo=github)](https://github.com/MatN23/LuminaAI/stargazers)
-[![GitHub forks](https://img.shields.io/github/forks/MatN23/LuminaAI.svg?style=for-the-badge&logo=github)](https://github.com/MatN23/LuminaAI/network)
-[![GitHub issues](https://img.shields.io/github/issues/MatN23/LuminaAI.svg?style=for-the-badge&logo=github)](https://github.com/MatN23/LuminaAI/issues)
-[![GitHub pull requests](https://img.shields.io/github/issues-pr/MatN23/LuminaAI.svg?style=for-the-badge&logo=github)](https://github.com/MatN23/LuminaAI/pulls)
+**Backend connection failed**  
+- Check if Python dependencies are installed (`pip install -r requirements.txt`)
+- Ensure no other application is using port 5001
+- Try running `python lumina_desktop.py` directly
 
-</div>
+**Build issues**
+- Run `make clean` to clear build artifacts
+- Ensure Node.js and Python are properly installed
+- Check that all dependencies are installed (`make install`)
+
+### Getting Help
+
+- **Issues**: Report bugs on [GitHub Issues](https://github.com/MatN23/LuminaAI/issues)
+- **Discussions**: Use [GitHub Discussions](https://github.com/MatN23/LuminaAI/discussions) for questions
 
 ## 📄 License
 
-This project is licensed under the **Custom Open Source License** - see the [LICENSE](LICENSE) file for details.
-
-**Commercial Use**: Contact us for commercial licensing options.
-
-## 🆘 Support & Community
-
-### 🔧 Technical Support
-
-- **GitHub Issues**: [Report bugs and request features](https://github.com/MatN23/LuminaAI/issues)
-- **Stack Overflow**: Tag your questions with `luminaai`
-
-### 🚨 Common Issues & Solutions
-
-<details>
-<summary>Troubleshooting Guide</summary>
-
-#### Model Loading Issues
-```bash
-# Verify model format
-python -c "import torch; print(torch.load('model.pth', map_location='cpu').keys())"
-
-# Check tokenizer
-ls -la tokenizer.pkl  # Should exist alongside model file
-```
-
-#### Backend Connection Failed
-```bash
-# Check Python dependencies
-pip list | grep -E "(torch|flask|socketio)"
-
-# Test backend manually
-python src/backend/lumina_desktop.py --test
-
-# Check port availability
-netstat -an | grep 5001
-```
-
-#### Performance Optimization
-- **Memory**: Close unnecessary applications
-- **GPU**: Update drivers and check CUDA compatibility
-- **Storage**: Use SSD for model storage
-- **Network**: Use local models for better performance
-
-#### Installation Problems
-```bash
-# Clear npm cache
-npm cache clean --force
-
-# Rebuild native modules
-npm rebuild
-
-# Reset Python environment
-pip uninstall -y -r requirements.txt
-pip install -r requirements.txt
-```
-
-</details>
+This project is licensed under a Custom License. See the [LICENSE](LICENSE) file for details.
 
 ## 🌟 Acknowledgments
-
-### 🙏 Special Thanks
-
-- **Core Team**: [@MatN23](https://github.com/MatN23)
-- **Beta Testers**: Our amazing community of early adopters
-- **Translators**: International community for localization support
-- **Plugin Developers**: Creating amazing extensions
 
 ### 🛠️ Built With
 
 - **[Electron](https://electronjs.org/)**: Cross-platform desktop framework
-- **[React](https://reactjs.org/)**: Frontend UI library
 - **[PyTorch](https://pytorch.org/)**: Machine learning framework
 - **[Flask](https://flask.palletsprojects.com/)**: Python web framework
 - **[Socket.IO](https://socket.io/)**: Real-time communication
 - **[GSAP](https://greensock.com/gsap/)**: Advanced animations
-- **[Tailwind CSS](https://tailwindcss.com/)**: Utility-first CSS framework
 
 ---
 
@@ -479,7 +388,7 @@ pip install -r requirements.txt
 
 **Made with ❤️ by [Matias Nielsen](https://github.com/MatN23) and the LuminaAI Community**
 
-[⭐ Star us on GitHub](https://github.com/MatN23/LuminaAI) • [🐦 Follow on Twitter](https://twitter.com/luminaai) • [📧 Subscribe to Newsletter](https://luminaai.com/newsletter)
+[⭐ Star us on GitHub](https://github.com/MatN23/LuminaAI)
 
 *"The future of AI interaction is here"*
 

@@ -1,0 +1,41 @@
+# Development version - simpler setup for your 3 scripts
+version: '3.8'
+
+services:
+  # Just your Python AI scripts
+  lumina-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: luminaai-dev
+    ports:
+      - "5001:5001"  # ChatAI.py Flask server
+      - "8888:8888"  # Jupyter notebook (optional)
+    volumes:
+      - .:/workspace  # Mount your entire project
+      - ./models:/workspace/models
+      - ./data:/workspace/data
+    environment:
+      - PYTHONPATH=/workspace
+      - FLASK_ENV=development
+      - FLASK_DEBUG=1
+    working_dir: /workspace
+    command: python lumina_desktop.py  # Main desktop server
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
+    networks:
+      - dev-network
+
+  # Optional: Quick database for development
+  dev-db:
+    image: sqlite3:latest
+    container_name: luminaai-dev-db
+    volumes:
+      - ./dev_data:/data
+    networks:
+      - dev-network
+
+networks:
+  dev-network:
+    driver: bridge
