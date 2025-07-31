@@ -48,7 +48,7 @@
     "devDependencies": {
       "@babel/core": "^7.22.0",
       "@babel/preset-env": "^7.22.0",
-      "babel-loader": "^9.1.0",
+      "babel-loader": "^10.0.0",
       "concurrently": "^8.2.0",
       "css-loader": "^6.8.0",
       "electron": "^25.0.0",
