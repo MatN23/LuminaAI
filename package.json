@@ -1,121 +1,88 @@
 {
-    "name": "lumina-ai-desktop",
-    "version": "1.0.0",
-    "description": "Advanced Neural Transformer Desktop Application",
-    "main": "src/main.js",
-    "author": "Matias Nielsen",
-    "license": "Custom",
-    "homepage": "https://github.com/MatN23/LuminaAI",
-    "repository": {
-      "type": "git",
-      "url": "https://github.com/MatN23/LuminaAI.git"
+  "name": "lumina-ai-desktop",
+  "version": "1.0.0",
+  "description": "LuminaAI Neural Desktop Interface - Advanced AI Chat Application",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "build": "electron-builder",
+    "dist": "electron-builder --publish=never",
+    "pack": "electron-builder --dir",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "keywords": [
+    "ai",
+    "neural",
+    "desktop",
+    "electron",
+    "chat",
+    "transformer"
+  ],
+  "author": {
+    "name": "Matias Nielsen",
+    "email": "contact@example.com"
+  },
+  "license": "Custom",
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.6.4"
+  },
+  "build": {
+    "appId": "com.lumina.ai.desktop",
+    "productName": "LuminaAI Desktop",
+    "directories": {
+      "output": "dist"
     },
-    "keywords": ["ai", "electron", "desktop", "neural", "chat", "transformer"],
-    
-    "scripts": {
-      "start": "electron .",
-      "dev": "concurrently \"npm run dev:backend\" \"npm run dev:electron\"",
-      "dev:backend": "python lumina_desktop.py",
-      "dev:electron": "electron . --dev",
-      
-      "build": "npm run build:renderer && electron-builder",
-      "build:renderer": "webpack --mode production",
-      "build:win": "electron-builder --win",
-      "build:mac": "electron-builder --mac",
-      "build:linux": "electron-builder --linux",
-      
-      "dist": "npm run build",
-      "dist:all": "npm run build -- --win --mac --linux",
-      "dist:win": "npm run build -- --win",
-      "dist:mac": "npm run build -- --mac", 
-      "dist:linux": "npm run build -- --linux",
-      
-      "test": "jest",
-      "test:watch": "jest --watch",
-      "lint": "eslint src/ --ext .js,.jsx",
-      "lint:fix": "eslint src/ --ext .js,.jsx --fix",
-      "format": "prettier --write \"src/**/*.{js,jsx,css,html}\"",
-      
-      "clean": "rimraf dist/ build/ node_modules/.cache/",
-      "postinstall": "electron-builder install-app-deps",
-      
-      "docker:build": "docker-compose build",
-      "docker:up": "docker-compose up -d",
-      "docker:down": "docker-compose down",
-      "docker:dev": "docker-compose -f docker-compose.dev.yml up"
-    },
-    
-    "devDependencies": {
-      "@babel/core": "^7.22.0",
-      "@babel/preset-env": "^7.22.0",
-      "babel-loader": "^9.1.0",
-      "concurrently": "^8.2.0",
-      "css-loader": "^6.8.0",
-      "electron": "^25.0.0",
-      "electron-builder": "^24.4.0",
-      "eslint": "^8.43.0",  
-      "html-webpack-plugin": "^5.5.0",
-      "jest": "^29.5.0",
-      "prettier": "^2.8.0",
-      "rimraf": "^5.0.0",
-      "style-loader": "^3.3.0",
-      "webpack": "^5.88.0",
-      "webpack-cli": "^5.1.0",
-      "webpack-dev-server": "^4.15.0"
-    },
-    
-    "dependencies": {
-      "axios": "^1.4.0",
-      "socket.io-client": "^4.7.0"
-    },
-    
-    "build": {
-      "appId": "com.luminaai.desktop",
-      "productName": "LuminaAI Desktop",
-      "directories": {
-        "output": "dist",
-        "buildResources": "assets"
-      },
-      "files": [
-        "src/**/*",
-        "assets/**/*",
-        "!tests/**/*",
-        "!docs/**/*"
-      ],
-      "extraFiles": [
+    "files": [
+      "**/*",
+      "!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}",
+      "!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}",
+      "!**/node_modules/*.d.ts",
+      "!**/node_modules/.bin",
+      "!**/*.{iml,o,hprof,orig,pyc,pyo,rbc,swp,csproj,sln,xproj}",
+      "!.editorconfig",
+      "!**/._*",
+      "!**/{.DS_Store,.git,.hg,.svn,CVS,RCS,SCCS,.gitignore,.gitattributes}",
+      "!**/{__pycache__,thumbs.db,.flowconfig,.idea,.vs,.nyc_output}",
+      "!**/{appveyor.yml,.travis.yml,circle.yml}",
+      "!**/{npm-debug.log,yarn.lock,.yarn-integrity,.yarn-metadata.json}"
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "assets/icon.icns",
+      "target": [
         {
-          "from": "*.py",
-          "to": "python/"
-        },
-        {
-          "from": "requirements.txt",
-          "to": "python/"
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
         }
-      ],
-      "win": {
-        "target": "nsis",
-        "icon": "assets/logo.png"
-      },
-      "mac": {
-        "target": "dmg", 
-        "icon": "assets/logo.png",
-        "category": "public.app-category.productivity"
-      },
-      "linux": {
-        "target": "AppImage",
-        "icon": "assets/logo.png",
-        "category": "Development"
-      },
-      "nsis": {
-        "oneClick": false,
-        "allowToChangeInstallationDirectory": true,
-        "createDesktopShortcut": true,
-        "createStartMenuShortcut": true
-      }
+      ]
     },
-    
-    "engines": {
-      "node": ">=16.0.0",
-      "npm": ">=8.0.0"
+    "win": {
+      "icon": "assets/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64",
+            "ia32"
+          ]
+        }
+      ]
+    },
+    "linux": {
+      "icon": "assets/icon.png",
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
     }
   }
+}

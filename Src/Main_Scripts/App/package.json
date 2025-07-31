@@ -1,0 +1,22 @@
+{
+  "name": "lumina-ai-desktop",
+  "version": "1.0.0",
+  "description": "LuminaAI Neural Desktop Interface",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "install-deps": "npm install electron"
+  },
+  "keywords": [
+    "ai",
+    "neural",
+    "desktop",
+    "electron"
+  ],
+  "author": "Matias Nielsen",
+  "license": "Custom",
+  "devDependencies": {
+    "electron": "^28.0.0"
+  }
+}
