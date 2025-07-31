@@ -1,0 +1,886 @@
+# LuminaAI Desktop Backend Documentation
+
+## Overview
+
+The `lumina_desktop.py` script is the core backend server for the LuminaAI Desktop Application, providing a Flask-based API with Socket.IO integration for real-time neural transformer inference and conversation management.
+
+## Features
+
+- **Flask Web API**: RESTful endpoints for model management and chat
+- **Socket.IO Integration**: Real-time communication with frontend
+- **Advanced AI Engine**: Word-level transformer inference with multiple sampling methods
+- **Device Optimization**: Automatic CUDA, MPS (Apple Silicon), and CPU support
+- **Professional Error Handling**: Comprehensive error management and logging
+- **Memory Management**: Efficient GPU memory handling and cleanup
+- **Conversation Context**: Intelligent conversation history management
+- **Electron Integration**: Seamless integration with desktop frontend
+
+## Architecture
+
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Electron      │    │   Flask API     │    │   AI Engine    │
+│   Frontend      │◄──►│   Backend       │◄──►│   (PyTorch)     │
+│                 │    │                 │    │                 │
+│ • UI/UX         │    │ • REST API      │    │ • Model Loading │
+│ • User Input    │    │ • Socket.IO     │    │ • Text Gen      │
+│ • Display       │    │ • CORS          │    │ • Tokenization  │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+```
+
+## Core Components
+
+### WordTokenizer
+
+Advanced word-level tokenizer with professional text processing capabilities.
+
+**Features:**
+- Unicode normalization with NFKC
+- Frequency-based vocabulary building
+- Special token handling for conversations
+- Efficient encoding/decoding with error handling
+- Vocabulary persistence (save/load)
+
+**Special Tokens:**
+```python
+special_tokens = {
+    '<PAD>': 0,    # Padding token
+    '<UNK>': 1,    # Unknown token  
+    '<BOS>': 2,    # Beginning of sequence
+    '<EOS>': 3,    # End of sequence
+    '<USER>': 4,   # User message marker
+    '<BOT>': 5,    # Bot message marker
+    '<SEP>': 6     # Separator token
+}
+```
+
+### WordTransformer
+
+PyTorch transformer model with modern architecture optimizations.
+
+**Architecture Features:**
+- Multi-head attention with causal masking
+- Pre-layer normalization for training stability
+- GELU activation functions
+- Sinusoidal positional encoding
+- Efficient memory usage with proper initialization
+
+### ModernAIEngine
+
+High-level AI inference engine with conversation management.
+
+**Capabilities:**
+- Automatic device detection (CUDA/MPS/CPU)
+- Model loading with validation
+- Context-aware conversation history
+- Advanced text generation with multiple sampling methods
+- Memory management and cleanup
+- Thread-safe operations
+
+## API Endpoints
+
+### Model Management
+
+#### POST /api/model/load
+Load a neural transformer model.
+
+**Request:**
+```json
+{
+    "model_path": "path/to/model.pth"
+}
+```
+
+**Response:**
+```json
+{
+    "success": true,
+    "message": "Model loaded successfully!",
+    "model_info": {
+        "vocab_size": 32000,
+        "hidden_size": 768,
+        "num_layers": 12,
+        "num_heads": 12,
+        "seq_length": 1024,
+        "parameters": 89000000,
+        "model_size_mb": 340.5,
+        "device": "cuda:0"
+    }
+}
+```
+
+#### GET /api/model/info
+Get information about the currently loaded model.
+
+**Response:**
+```json
+{
+    "success": true,
+    "model_info": {
+        "vocab_size": 32000,
+        "hidden_size": 768,
+        "parameters": 89000000,
+        "epoch": 25,
+        "loss": 1.85,
+        "accuracy": 0.92
+    }
+}
+```
+
+### Chat Interface
+
+#### POST /api/chat
+Generate AI response to user input.
+
+**Request:**
+```json
+{
+    "message": "Hello, how are you today?",
+    "temperature": 0.8,
+    "sampling_method": "nucleus",
+    "top_k": 50,
+    "top_p": 0.9,
+    "max_length": 150
+}
+```
+
+**Response:**
+```json
+{
+    "success": true,
+    "response": "Hello! I'm doing well, thank you for asking. How can I help you today?"
+}
+```
+
+**Parameters:**
+- `message` (str): User input message
+- `temperature` (float, 0.1-2.0): Sampling temperature (default: 0.8)
+- `sampling_method` (str): "top_k", "nucleus"/"top_p", or "greedy" (default: "top_k")
+- `top_k` (int, 1-1000): Top-k sampling parameter (default: 50)
+- `top_p` (float, 0.1-1.0): Nucleus sampling parameter (default: 0.9)
+- `max_length` (int, 10-500): Maximum response length (default: 150)
+
+#### POST /api/chat/clear
+Clear conversation history.
+
+**Response:**
+```json
+{
+    "success": true,
+    "message": "Chat history cleared"
+}
+```
+
+### System Information
+
+#### GET /api/system/status
+Get system and model status.
+
+**Response:**
+```json
+{
+    "pytorch_available": true,
+    "device": "cuda:0",
+    "model_loaded": true,
+    "torch_version": "2.1.0",
+    "conversation_length": 8,
+    "memory_info": {
+        "cuda_available": true,
+        "mps_available": false
+    }
+}
+```
+
+#### GET /api/health
+Health check endpoint.
+
+**Response:**
+```json
+{
+    "status": "healthy",
+    "timestamp": 1703123456.789,
+    "version": "1.0.0"
+}
+```
+
+## Socket.IO Events
+
+### Connection Events
+
+#### connect
+Triggered when client connects.
+
+**Server Response:**
+```javascript
+{
+    "connected": true,
+    "pytorch_available": true,
+    "model_loaded": true,
+    "device": "cuda:0"
+}
+```
+
+#### disconnect
+Triggered when client disconnects.
+
+### Real-time Generation
+
+#### generate_message
+Real-time message generation with typing indicators.
+
+**Client Request:**
+```javascript
+socket.emit('generate_message', {
+    message: "Tell me about artificial intelligence",
+    settings: {
+        temperature: 0.8,
+        sampling_method: "nucleus",
+        top_p: 0.9,
+        max_length: 200
+    }
+});
+```
+
+**Server Events:**
+```javascript
+// Typing started
+socket.emit('typing_start');
+
+// Generation complete
+socket.emit('typing_stop');
+socket.emit('message_generated', {
+    response: "Artificial intelligence is a fascinating field..."
+});
+
+// Or error occurred
+socket.emit('generation_error', {
+    message: "Error generating response"
+});
+```
+
+## Text Generation
+
+### Sampling Methods
+
+#### Nucleus (Top-P) Sampling
+Dynamic vocabulary based on cumulative probability mass.
+
+```python
+def nucleus_sampling(probs: torch.Tensor, p: float = 0.9) -> int:
+    """
+    Select from tokens whose cumulative probability is <= p
+    
+    Args:
+        probs: Token probabilities
+        p: Nucleus parameter (0.0-1.0)
+    
+    Returns:
+        Selected token ID
+    """
+```
+
+**Recommended Settings:**
+- **Conservative (p=0.7)**: More focused, consistent responses
+- **Balanced (p=0.9)**: Good creativity-consistency balance
+- **Creative (p=0.95)**: More diverse, creative responses
+
+#### Top-K Sampling
+Select from the K most likely tokens.
+
+```python
+def top_k_sampling(probs: torch.Tensor, k: int = 50) -> int:
+    """
+    Select from top K most likely tokens
+    
+    Args:
+        probs: Token probabilities
+        k: Number of top tokens to consider
+    
+    Returns:
+        Selected token ID
+    """
+```
+
+**Recommended Settings:**
+- **Focused (k=20)**: More deterministic responses
+- **Balanced (k=50)**: Good general purpose
+- **Diverse (k=100)**: More creative responses
+
+#### Greedy Decoding
+Always select the most likely token (deterministic).
+
+### Temperature Control
+
+Temperature affects the randomness of generation:
+
+```python
+# Apply temperature scaling
+next_token_logits = logits / temperature
+
+# Low temperature (0.1-0.5): More focused
+# Medium temperature (0.7-1.0): Balanced  
+# High temperature (1.2-2.0): More random
+```
+
+### Response Cleaning
+
+The system includes intelligent response cleaning:
+
+```python
+def clean_response(response: str) -> str:
+    """
+    Clean and improve model responses
+    
+    Features:
+    - Remove special tokens
+    - Handle incomplete sentences
+    - Clean excessive whitespace
+    - Ensure proper capitalization
+    """
+```
+
+## Device Management
+
+### Automatic Device Detection
+
+```python
+def setup_device():
+    """
+    Automatically detect and configure best available device
+    
+    Priority:
+    1. Apple Silicon MPS (if available)
+    2. NVIDIA CUDA (if available) 
+    3. CPU (fallback)
+    """
+    if torch.backends.mps.is_available() and torch.backends.mps.is_built():
+        device = torch.device("mps")
+        logger.info("Using device: MPS (Apple Silicon)")
+    elif torch.cuda.is_available():
+        device = torch.device("cuda")
+        logger.info(f"Using device: CUDA ({torch.cuda.get_device_name()})")
+    else:
+        device = torch.device("cpu")
+        logger.info("Using device: CPU")
+    return device
+```
+
+### Memory Management
+
+The backend includes comprehensive memory management:
+
+```python
+def cleanup():
+    """Clean up GPU memory and resources"""
+    if device and device.type == 'cuda':
+        torch.cuda.empty_cache()
+    elif device and device.type == 'mps' and hasattr(torch.mps, 'empty_cache'):
+        torch.mps.empty_cache()
+    gc.collect()
+```
+
+## Configuration
+
+### Flask Configuration
+
+```python
+app.config['SECRET_KEY'] = 'lumina_ai_neural_interface_2025'
+app.config['JSON_SORT_KEYS'] = False
+
+# CORS for Electron integration
+CORS(app, origins=["http://localhost:3000", "app://."])
+
+# Socket.IO configuration
+socketio = SocketIO(
+    app, 
+    cors_allowed_origins=["http://localhost:3000", "app://.", "*"],
+    async_mode='threading',
+    ping_timeout=60,
+    ping_interval=25
+)
+```
+
+### Logging Configuration
+
+```python
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('lumina.log', mode='a')
+    ]
+)
+```
+
+## Model Loading
+
+### Supported Model Format
+
+The backend expects PyTorch models with the following structure:
+
+```python
+checkpoint = {
+    'model_state_dict': model.state_dict(),    # Model weights
+    'config': {                                # Model configuration
+        'vocab_size': 32000,
+        'hidden_size': 768,
+        'num_layers': 12,
+        'num_heads': 12,
+        'seq_length': 1024,
+        'dropout': 0.1
+    },
+    'epoch': 25,                              # Optional training info
+    'loss': 1.85,
+    'accuracy': 0.92
+}
+```
+
+### Tokenizer Requirements
+
+A corresponding `tokenizer.pkl` file must exist alongside the model:
+
+```python
+# Expected tokenizer structure
+tokenizer_data = {
+    'word_to_id': {...},      # Word to ID mapping
+    'id_to_word': {...},      # ID to word mapping
+    'vocab_size': 32000,      # Vocabulary size
+    'special_tokens': {...}   # Special token mappings
+}
+```
+
+### Model Validation
+
+The system performs comprehensive model validation:
+
+1. **File Existence**: Check if model and tokenizer files exist
+2. **Format Validation**: Verify checkpoint structure
+3. **Configuration Check**: Validate required configuration keys
+4. **Compatibility**: Ensure model-tokenizer compatibility
+5. **Memory Check**: Verify sufficient memory for model loading
+
+## Conversation Management
+
+### Context Building
+
+The system maintains intelligent conversation context:
+
+```python
+def generate_response(self, user_input: str, **kwargs) -> str:
+    # Build context from recent conversation history
+    context_parts = self.conversation_history[-6:]  # Last 6 exchanges
+    context_parts.append(f"<USER> {user_input}")
+    context_parts.append("<BOT>")
+    context = " ".join(context_parts)
+    
+    # Generate response...
+```
+
+### History Management
+
+Conversation history is automatically managed:
+
+- **Storage**: Recent exchanges kept in memory
+- **Trimming**: Automatic trimming to prevent memory issues
+- **Context Window**: Sliding window approach for long conversations
+- **Persistence**: Optional conversation persistence
+
+### Response Quality
+
+The system includes several response quality improvements:
+
+1. **Context Awareness**: Uses conversation history
+2. **Natural Stopping**: Detects natural conversation endings
+3. **Response Cleaning**: Removes artifacts and special tokens
+4. **Length Control**: Prevents overly long or short responses
+5. **Coherence Checking**: Basic coherence validation
+
+## Error Handling
+
+### Comprehensive Error Management
+
+The backend includes robust error handling at multiple levels:
+
+#### Model Loading Errors
+```python
+try:
+    checkpoint = torch.load(model_path, map_location=self.device)
+except Exception as e:
+    return False, f"Error loading checkpoint: {e}"
+```
+
+#### Generation Errors
+```python
+try:
+    response = ai_engine.generate_response(user_input, **settings)
+except Exception as e:
+    logger.error(f"Generation error: {e}")
+    return f"Error generating response: {str(e)}"
+```
+
+#### Memory Errors
+```python
+try:
+    logits = self.model(input_seq)
+except RuntimeError as e:
+    if "out of memory" in str(e):
+        torch.cuda.empty_cache()
+        logger.warning("GPU memory cleared due to OOM")
+    raise
+```
+
+### Error Recovery
+
+The system includes automatic error recovery:
+
+1. **Memory Management**: Automatic cache clearing on OOM
+2. **Model Fallbacks**: Graceful degradation on errors
+3. **Parameter Validation**: Input sanitization and clamping
+4. **Connection Recovery**: Socket.IO reconnection handling
+
+## Performance Optimization
+
+### Inference Optimization
+
+```python
+# Disable gradients for inference
+with torch.no_grad():
+    output = model.generate(input_ids)
+
+# Use model.eval() mode
+model.eval()
+
+# Mixed precision inference (if supported)
+with torch.cuda.amp.autocast():
+    logits = model(input_ids)
+```
+
+### Memory Optimization
+
+```python
+# Regular memory cleanup
+def cleanup_memory():
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    gc.collect()
+
+# Sliding window for long sequences
+max_seq_length = self.model.config.seq_length
+input_seq = generated[:, -max_seq_length:] if generated.size(1) > max_seq_length else generated
+```
+
+### Threading
+
+The backend uses threading for responsive performance:
+
+```python
+# Socket.IO with threading
+socketio = SocketIO(app, async_mode='threading')
+
+# Thread-safe model operations
+with self._lock:
+    response = self.generate_response(user_input)
+```
+
+## Deployment
+
+### Development Mode
+
+```python
+# Start development server
+if __name__ == '__main__':
+    socketio.run(
+        app,
+        host='127.0.0.1',
+        port=5001,
+        debug=True,  # Enable debug mode
+        allow_unsafe_werkzeug=True
+    )
+```
+
+### Production Mode
+
+```python
+# Production configuration
+socketio.run(
+    app,
+    host='127.0.0.1',
+    port=5001,
+    debug=False,           # Disable debug
+    log_output=False,      # Reduce logging
+    allow_unsafe_werkzeug=True
+)
+```
+
+### Electron Integration
+
+The backend integrates seamlessly with Electron:
+
+```python
+def run_electron_app():
+    """Start the Electron desktop app"""
+    # Check for electron installation
+    # Start electron process
+    # Handle process management
+```
+
+## Security Considerations
+
+### Input Validation
+
+All inputs are validated and sanitized:
+
+```python
+# Parameter validation and clamping
+temperature = max(0.1, min(2.0, float(temperature)))
+top_k = max(1, min(1000, int(top_k)))
+top_p = max(0.1, min(1.0, float(top_p)))
+max_length = max(10, min(500, int(max_length)))
+```
+
+### CORS Configuration
+
+Proper CORS configuration for Electron:
+
+```python
+CORS(app, origins=["http://localhost:3000", "app://."])
+```
+
+### Content Security
+
+- No arbitrary code execution
+- Input sanitization
+- Output filtering
+- Safe model loading
+
+## Monitoring and Logging
+
+### Comprehensive Logging
+
+```python
+# Startup logging
+logger.info("✅ PyTorch neural engine: ONLINE")
+logger.info(f"🔥 Compute device: {device}")
+
+# Operation logging
+logger.info(f"Model loaded successfully: {model_id}")
+logger.info(f"Generated response for user: {user_input[:50]}...")
+
+# Error logging
+logger.error(f"Failed to load model: {error}")
+logger.warning(f"Memory warning: {warning}")
+```
+
+### Performance Metrics
+
+```python
+# Track generation time
+start_time = time.time()
+response = generate_response(user_input)
+generation_time = time.time() - start_time
+logger.info(f"Generation completed in {generation_time:.2f}s")
+```
+
+## Usage Examples
+
+### Basic Server Start
+
+```python
+#!/usr/bin/env python3
+from lumina_desktop import main
+
+if __name__ == '__main__':
+    # Start the LuminaAI backend server
+    main()
+```
+
+### API Usage Examples
+
+#### Load Model via API
+
+```python
+import requests
+
+# Load model
+response = requests.post('http://localhost:5001/api/model/load', 
+                        json={'model_path': 'Model.pth'})
+print(response.json())
+```
+
+#### Generate Response
+
+```python
+# Chat with AI
+response = requests.post('http://localhost:5001/api/chat', json={
+    'message': 'Hello, how are you?',
+    'temperature': 0.8,
+    'sampling_method': 'nucleus',
+    'top_p': 0.9,
+    'max_length': 100
+})
+print(response.json()['response'])
+```
+
+#### Socket.IO Client
+
+```javascript
+// Frontend Socket.IO integration
+const socket = io('http://localhost:5001');
+
+socket.on('connect', () => {
+    console.log('Connected to backend');
+});
+
+socket.emit('generate_message', {
+    message: 'Tell me a story',
+    settings: {
+        temperature: 0.8,
+        sampling_method: 'nucleus',
+        top_p: 0.9,
+        max_length: 200
+    }
+});
+
+socket.on('message_generated', (data) => {
+    console.log('AI Response:', data.response);
+});
+```
+
+## Troubleshooting
+
+### Common Issues
+
+#### PyTorch Not Available
+```
+⚠️ PyTorch neural engine: OFFLINE
+📦 Install command: pip install torch numpy flask flask-socketio flask-cors
+```
+
+**Solution:**
+```bash
+pip install torch numpy flask flask-socketio flask-cors
+```
+
+#### Model Loading Failed
+```
+❌ Failed to load model: Model file not found
+```
+
+**Solutions:**
+1. Check model file path
+2. Ensure tokenizer.pkl exists
+3. Verify model format
+4. Check file permissions
+
+#### CUDA Out of Memory
+```
+RuntimeError: CUDA out of memory
+```
+
+**Solutions:**
+1. Reduce batch size
+2. Use CPU inference
+3. Close other GPU applications
+4. Clear CUDA cache
+
+#### Port Already in Use
+```
+OSError: [Errno 48] Address already in use
+```
+
+**Solutions:**
+1. Kill existing process: `lsof -ti:5001 | xargs kill`
+2. Use different port
+3. Wait for port to be released
+
+### Debug Mode
+
+Enable debug logging:
+
+```python
+import logging
+logging.basicConfig(level=logging.DEBUG)
+
+# Start with debug enabled
+socketio.run(app, debug=True)
+```
+
+### Performance Issues
+
+Monitor performance:
+
+```python
+# Check model loading time
+start_time = time.time()
+ai_engine.load_model(model_path)
+load_time = time.time() - start_time
+print(f"Model loaded in {load_time:.2f}s")
+
+# Monitor memory usage
+if torch.cuda.is_available():
+    memory_allocated = torch.cuda.memory_allocated() / 1024**3
+    print(f"GPU memory: {memory_allocated:.2f} GB")
+```
+
+## Advanced Features
+
+### Custom Model Integration
+
+Add support for different model architectures:
+
+```python
+class CustomModelLoader:
+    def load_model(self, model_path, model_type):
+        if model_type == 'transformer':
+            return self.load_transformer(model_path)
+        elif model_type == 'gpt':
+            return self.load_gpt(model_path)
+        # Add more model types...
+```
+
+### Plugin System
+
+Extend functionality with plugins:
+
+```python
+class PluginManager:
+    def __init__(self):
+        self.plugins = {}
+    
+    def register_plugin(self, name, plugin):
+        self.plugins[name] = plugin
+    
+    def execute_plugin(self, name, *args, **kwargs):
+        if name in self.plugins:
+            return self.plugins[name].execute(*args, **kwargs)
+```
+
+### Batch Processing
+
+Add batch processing capabilities:
+
+```python
+@app.route('/api/chat/batch', methods=['POST'])
+def batch_chat():
+    """Process multiple messages in batch"""
+    data = request.get_json()
+    messages = data.get('messages', [])
+    
+    responses = []
+    for message in messages:
+        response = ai_engine.generate_response(message)
+        responses.append(response)
+    
+    return jsonify({
+        'success': True,
+        'responses': responses
+    })
+```
+
+## License
+
+Copyright (c) 2025 Matias Nielsen. All rights reserved.
+Licensed under the Custom License.
+
+The LuminaAI Desktop Backend provides a professional, scalable foundation for neural transformer applications with comprehensive model management, real-time communication, and advanced text generation capabilities.

@@ -1,0 +1,845 @@
+# Word Transformer Documentation
+
+## Overview
+
+The `word_transformer.py` module implements a professional word-level transformer architecture for natural language processing, featuring advanced tokenization, multi-head attention, and modern generation techniques.
+
+## Features
+
+- **Word-Level Tokenization**: Sophisticated vocabulary management and text processing
+- **Transformer Architecture**: Multi-head attention with positional encoding
+- **Advanced Generation**: Multiple sampling methods (Top-K, Nucleus, Greedy)
+- **Memory Efficient**: Optimized for both CPU and GPU inference
+- **Professional Logging**: Comprehensive logging and error handling
+- **Extensible Design**: Easy to customize and extend
+
+## Architecture Components
+
+### WordTokenizer
+
+Professional word-level tokenizer with vocabulary management.
+
+**Features:**
+- Unicode normalization
+- Frequency-based vocabulary building
+- Special token handling
+- Efficient encoding/decoding
+
+**Special Tokens:**
+- `<pad>` (0): Padding token
+- `<unk>` (1): Unknown token
+- `<s>` (2): Start token
+- `</s>` (3): End token
+- `<user>` (4): User message marker
+- `<bot>` (5): Bot message marker
+
+### MultiHeadAttention
+
+Scaled dot-product attention mechanism with multiple heads.
+
+**Features:**
+- Causal masking for autoregressive generation
+- Proper weight initialization
+- Dropout regularization
+- Efficient matrix operations
+
+### FeedForward
+
+Position-wise feed-forward network with GELU activation.
+
+**Features:**
+- Configurable intermediate size
+- GELU activation function
+- Dropout regularization
+- Xavier weight initialization
+
+### TransformerBlock
+
+Complete transformer block with attention and feed-forward layers.
+
+**Features:**
+- Pre-layer normalization
+- Residual connections
+- Dropout regularization
+- Configurable attention heads
+
+### PositionalEncoding
+
+Sinusoidal positional encoding for sequence position awareness.
+
+**Features:**
+- Learnable position embeddings
+- Configurable maximum sequence length
+- Efficient computation and storage
+
+### WordTransformer
+
+Main transformer model for language generation.
+
+**Architecture:**
+```
+Input Tokens → Token Embedding → Position Encoding → 
+[TransformerBlock × N] → Layer Norm → Output Projection → Logits
+```
+
+## Classes and Methods
+
+### WordTokenizer
+
+#### __init__(vocab: Optional[Dict[str, int]] = None)
+
+Initialize the tokenizer with optional vocabulary.
+
+**Parameters:**
+- `vocab`: Pre-existing vocabulary dictionary
+
+**Example:**
+```python
+tokenizer = WordTokenizer()
+```
+
+#### train_from_text(text: str, vocab_size: int = 32000, min_freq: int = 2)
+
+Train tokenizer on text corpus.
+
+**Parameters:**
+- `text`: Training text corpus
+- `vocab_size`: Maximum vocabulary size
+- `min_freq`: Minimum word frequency to include
+
+**Example:**
+```python
+with open('corpus.txt', 'r') as f:
+    text = f.read()
+tokenizer.train_from_text(text, vocab_size=50000, min_freq=3)
+```
+
+#### encode(text: str) → List[int]
+
+Encode text to token IDs.
+
+**Parameters:**
+- `text`: Input text to encode
+
+**Returns:**
+- List of token IDs
+
+**Example:**
+```python
+text = "Hello, how are you?"
+token_ids = tokenizer.encode(text)
+print(token_ids)  # [245, 6, 89, 45, 123, 8]
+```
+
+#### decode(token_ids: List[int]) → str
+
+Decode token IDs back to text.
+
+**Parameters:**
+- `token_ids`: List of token IDs
+
+**Returns:**
+- Decoded text string
+
+**Example:**
+```python
+token_ids = [245, 6, 89, 45, 123, 8]
+text = tokenizer.decode(token_ids)
+print(text)  # "hello how are you"
+```
+
+#### vocab_size() → int
+
+Return vocabulary size.
+
+#### get_vocab() → Dict[str, int]
+
+Return vocabulary dictionary.
+
+#### save_vocab(path: str)
+
+Save vocabulary to JSON file.
+
+#### load_vocab(path: str)
+
+Load vocabulary from JSON file.
+
+### WordTransformer
+
+#### __init__(config)
+
+Initialize the transformer model.
+
+**Parameters:**
+- `config`: Model configuration object with attributes:
+  - `vocab_size`: Vocabulary size
+  - `hidden_size`: Hidden layer size
+  - `num_layers`: Number of transformer layers
+  - `num_heads`: Number of attention heads
+  - `seq_length`: Maximum sequence length
+  - `dropout`: Dropout rate
+
+**Example:**
+```python
+from dataclasses import dataclass
+
+@dataclass
+class Config:
+    vocab_size: int = 32000
+    hidden_size: int = 768
+    num_layers: int = 12
+    num_heads: int = 12
+    seq_length: int = 1024
+    dropout: float = 0.1
+
+config = Config()
+model = WordTransformer(config)
+```
+
+#### forward(input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) → torch.Tensor
+
+Forward pass through the model.
+
+**Parameters:**
+- `input_ids`: Token IDs tensor [batch_size, seq_len]
+- `attention_mask`: Optional attention mask
+
+**Returns:**
+- Logits tensor [batch_size, seq_len, vocab_size]
+
+**Example:**
+```python
+input_ids = torch.tensor([[1, 245, 89, 123, 2]])  # [batch_size=1, seq_len=5]
+logits = model(input_ids)
+print(logits.shape)  # torch.Size([1, 5, 32000])
+```
+
+#### generate()
+
+Generate text using various sampling methods.
+
+**Parameters:**
+- `input_ids`: Starting token IDs [batch_size, seq_len]
+- `max_length`: Maximum length to generate (default: 100)
+- `temperature`: Sampling temperature (default: 1.0)
+- `top_k`: Top-k sampling parameter (default: 50)
+- `top_p`: Nucleus sampling parameter (default: 0.9)
+- `do_sample`: Whether to use sampling or greedy (default: True)
+- `pad_token_id`: Padding token ID (default: 0)
+
+**Returns:**
+- Generated token IDs [batch_size, generated_length]
+
+**Example:**
+```python
+# Prepare input
+input_text = "The future of AI"
+input_ids = tokenizer.encode(input_text)
+input_tensor = torch.tensor([input_ids])
+
+# Generate with different methods
+model.eval()
+
+# Nucleus sampling (recommended)
+output = model.generate(
+    input_tensor, 
+    max_length=100, 
+    temperature=0.8, 
+    top_p=0.9,
+    do_sample=True
+)
+
+# Top-k sampling
+output = model.generate(
+    input_tensor, 
+    max_length=100, 
+    temperature=0.8, 
+    top_k=50,
+    do_sample=True
+)
+
+# Greedy decoding
+output = model.generate(
+    input_tensor, 
+    max_length=100, 
+    do_sample=False
+)
+
+# Decode output
+generated_text = tokenizer.decode(output[0].tolist())
+print(f"Generated: {generated_text}")
+```
+
+#### count_parameters() → int
+
+Count total number of parameters.
+
+#### get_model_info() → Dict[str, Any]
+
+Get comprehensive model information.
+
+#### save_checkpoint()
+
+Save model checkpoint with training information.
+
+**Parameters:**
+- `path`: Save path
+- `optimizer`: Optional optimizer state
+- `scheduler`: Optional scheduler state
+- `epoch`: Optional epoch number
+- `loss`: Optional loss value
+
+#### from_pretrained()
+
+Load model from pretrained checkpoint.
+
+**Parameters:**
+- `model_path`: Path to checkpoint
+- `config`: Optional model configuration
+
+**Returns:**
+- Loaded model instance
+
+## Generation Techniques
+
+### Temperature Sampling
+
+Controls randomness in generation:
+- **Low (0.1-0.5)**: More focused, deterministic
+- **Medium (0.7-1.0)**: Balanced creativity
+- **High (1.2-2.0)**: More creative, unpredictable
+
+### Top-K Sampling
+
+Select from top K most likely tokens:
+- **Small K (10-20)**: More focused
+- **Medium K (40-60)**: Balanced
+- **Large K (80-100)**: More diverse
+
+### Nucleus (Top-P) Sampling
+
+Dynamic vocabulary based on probability mass:
+- **Low P (0.7-0.8)**: More focused
+- **Medium P (0.9)**: Balanced (recommended)
+- **High P (0.95-0.99)**: More diverse
+
+### Greedy Decoding
+
+Always select most likely token (deterministic).
+
+## Training Integration
+
+### Basic Training Loop
+
+```python
+import torch
+import torch.nn as nn
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import CosineAnnealingLR
+
+# Setup
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+model = WordTransformer(config).to(device)
+optimizer = AdamW(model.parameters(), lr=3e-4, weight_decay=0.01)
+scheduler = CosineAnnealingLR(optimizer, T_max=1000)
+criterion = nn.CrossEntropyLoss(ignore_index=0)  # Ignore padding
+
+# Training loop
+model.train()
+for epoch in range(num_epochs):
+    for batch_idx, (input_ids, target_ids) in enumerate(dataloader):
+        input_ids = input_ids.to(device)
+        target_ids = target_ids.to(device)
+        
+        # Forward pass
+        logits = model(input_ids)
+        
+        # Calculate loss (shift tokens for causal LM)
+        shift_logits = logits[..., :-1, :].contiguous()
+        shift_labels = target_ids[..., 1:].contiguous()
+        loss = criterion(
+            shift_logits.view(-1, shift_logits.size(-1)), 
+            shift_labels.view(-1)
+        )
+        
+        # Backward pass
+        optimizer.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        optimizer.step()
+        scheduler.step()
+        
+        if batch_idx % 100 == 0:
+            print(f'Epoch {epoch}, Batch {batch_idx}, Loss: {loss.item():.4f}')
+```
+
+### Advanced Training Features
+
+```python
+# Gradient accumulation
+accumulation_steps = 4
+optimizer.zero_grad()
+
+for i, batch in enumerate(dataloader):
+    loss = compute_loss(model, batch)
+    loss = loss / accumulation_steps
+    loss.backward()
+    
+    if (i + 1) % accumulation_steps == 0:
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        optimizer.step()
+        optimizer.zero_grad()
+
+# Mixed precision training
+from torch.cuda.amp import autocast, GradScaler
+
+scaler = GradScaler()
+for batch in dataloader:
+    with autocast():
+        logits = model(batch['input_ids'])
+        loss = criterion(logits.view(-1, logits.size(-1)), batch['labels'].view(-1))
+    
+    scaler.scale(loss).backward()
+    scaler.step(optimizer)
+    scaler.update()
+    optimizer.zero_grad()
+```
+
+## Performance Optimization
+
+### Memory Optimization
+
+```python
+# Gradient checkpointing
+model.gradient_checkpointing_enable()
+
+# Clear cache regularly
+if torch.cuda.is_available():
+    torch.cuda.empty_cache()
+
+# Use smaller precision
+model = model.half()  # Use float16
+```
+
+### Inference Optimization
+
+```python
+# Optimize for inference
+model.eval()
+torch.set_grad_enabled(False)
+
+# Compile model (PyTorch 2.0+)
+if hasattr(torch, 'compile'):
+    model = torch.compile(model)
+
+# Use autocast for mixed precision
+from torch.cuda.amp import autocast
+
+with autocast():
+    output = model.generate(input_ids)
+```
+
+## Configuration Examples
+
+### Small Model (Testing)
+
+```python
+@dataclass
+class SmallConfig:
+    vocab_size: int = 10000
+    hidden_size: int = 256
+    num_layers: int = 4
+    num_heads: int = 4
+    seq_length: int = 512
+    dropout: float = 0.1
+```
+
+### Medium Model (Development)
+
+```python
+@dataclass
+class MediumConfig:
+    vocab_size: int = 32000
+    hidden_size: int = 768
+    num_layers: int = 8
+    num_heads: int = 8
+    seq_length: int = 1024
+    dropout: float = 0.1
+```
+
+### Large Model (Production)
+
+```python
+@dataclass  
+class LargeConfig:
+    vocab_size: int = 50000
+    hidden_size: int = 1024
+    num_layers: int = 16
+    num_heads: int = 16
+    seq_length: int = 2048
+    dropout: float = 0.1
+```
+
+## Error Handling
+
+The module includes comprehensive error handling:
+
+- **Input Validation**: Check tensor shapes and data types
+- **Memory Management**: Handle CUDA out-of-memory errors
+- **Numerical Stability**: Handle NaN/Inf values in generation
+- **Configuration Validation**: Ensure valid model parameters
+
+## Best Practices
+
+1. **Tokenizer Training**: Use diverse, representative text corpus
+2. **Vocabulary Size**: Balance between coverage and efficiency
+3. **Model Size**: Scale based on available compute and data
+4. **Generation Settings**: Tune temperature and sampling for use case
+5. **Checkpoint Saving**: Save regularly during training
+6. **Memory Management**: Monitor GPU usage and clear cache
+7. **Evaluation**: Use perplexity and generation quality metrics
+
+## Dependencies
+
+- `torch`: PyTorch deep learning framework
+- `numpy`: Numerical computations
+- `logging`: Logging functionality
+- `pathlib`: File system operations
+- `typing`: Type hints
+- `math`: Mathematical functions
+- `re`: Regular expressions
+
+## Installation
+
+```bash
+pip install torch numpy
+```
+
+## Usage Examples
+
+### Complete Pipeline Example
+
+```python
+from word_transformer import WordTransformer, WordTokenizer
+import torch
+
+# 1. Prepare data and tokenizer
+texts = ["Hello world", "How are you?", "Fine, thank you"]
+tokenizer = WordTokenizer()
+tokenizer.train_from_text(" ".join(texts), vocab_size=1000)
+
+# 2. Create model configuration
+@dataclass
+class Config:
+    vocab_size: int = tokenizer.vocab_size()
+    hidden_size: int = 256
+    num_layers: int = 4
+    num_heads: int = 4
+    seq_length: int = 128
+    dropout: float = 0.1
+
+config = Config()
+
+# 3. Initialize model
+model = WordTransformer(config)
+print(f"Model parameters: {model.count_parameters():,}")
+
+# 4. Prepare training data
+def prepare_batch(texts, tokenizer, max_length=128):
+    encoded = [tokenizer.encode(text) for text in texts]
+    # Pad sequences
+    batch = torch.zeros(len(encoded), max_length, dtype=torch.long)
+    for i, seq in enumerate(encoded):
+        length = min(len(seq), max_length)
+        batch[i, :length] = torch.tensor(seq[:length])
+    return batch
+
+# 5. Simple training
+optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
+model.train()
+
+for epoch in range(10):
+    batch = prepare_batch(texts, tokenizer)
+    logits = model(batch)
+    
+    # Causal language modeling loss
+    shift_logits = logits[..., :-1, :].contiguous()
+    shift_labels = batch[..., 1:].contiguous()
+    
+    loss = torch.nn.functional.cross_entropy(
+        shift_logits.view(-1, shift_logits.size(-1)),
+        shift_labels.view(-1),
+        ignore_index=0
+    )
+    
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+    
+    print(f"Epoch {epoch}, Loss: {loss.item():.4f}")
+
+# 6. Generate text
+model.eval()
+input_text = "Hello"
+input_ids = torch.tensor([tokenizer.encode(input_text)])
+
+with torch.no_grad():
+    output = model.generate(
+        input_ids, 
+        max_length=50, 
+        temperature=0.8, 
+        top_p=0.9
+    )
+
+generated_text = tokenizer.decode(output[0].tolist())
+print(f"Generated: {generated_text}")
+```
+
+### Conversation Model Example
+
+```python
+# Prepare conversation data
+conversations = [
+    "<user> Hello <bot> Hi there! How can I help you today?",
+    "<user> What's the weather like? <bot> I don't have access to current weather data, but I'd recommend checking a weather app.",
+    "<user> Tell me a joke <bot> Why don't scientists trust atoms? Because they make up everything!",
+    "<user> How are you? <bot> I'm doing well, thank you for asking! How are you doing today?"
+]
+
+# Train tokenizer on conversation data
+tokenizer = WordTokenizer()
+tokenizer.train_from_text(" ".join(conversations), vocab_size=5000)
+
+# Create conversation-optimized config
+@dataclass
+class ConversationConfig:
+    vocab_size: int = tokenizer.vocab_size()
+    hidden_size: int = 512
+    num_layers: int = 6
+    num_heads: int = 8
+    seq_length: int = 256
+    dropout: float = 0.1
+
+config = ConversationConfig()
+model = WordTransformer(config)
+
+# Training loop for conversations
+# ... training code ...
+
+# Generate conversation response
+def generate_response(model, tokenizer, user_input, max_length=100):
+    model.eval()
+    prompt = f"<user> {user_input} <bot>"
+    input_ids = torch.tensor([tokenizer.encode(prompt)])
+    
+    with torch.no_grad():
+        output = model.generate(
+            input_ids,
+            max_length=len(input_ids[0]) + max_length,
+            temperature=0.8,
+            top_p=0.9,
+            do_sample=True
+        )
+    
+    # Extract only the bot response
+    full_text = tokenizer.decode(output[0].tolist())
+    bot_response = full_text.split("<bot>")[-1].strip()
+    return bot_response
+
+# Interactive conversation
+while True:
+    user_input = input("You: ")
+    if user_input.lower() in ['quit', 'exit', 'bye']:
+        break
+    
+    response = generate_response(model, tokenizer, user_input)
+    print(f"Bot: {response}")
+```
+
+## Troubleshooting
+
+### Common Issues and Solutions
+
+#### 1. Out of Memory Error
+
+```python
+# Reduce batch size
+config.batch_size = 2
+
+# Use gradient checkpointing
+model.gradient_checkpointing_enable()
+
+# Clear cache
+torch.cuda.empty_cache()
+
+# Use smaller model
+config.hidden_size = 256
+config.num_layers = 4
+```
+
+#### 2. NaN Loss During Training
+
+```python
+# Check for NaN in inputs
+if torch.isnan(input_ids).any():
+    print("NaN detected in input!")
+
+# Use gradient clipping
+torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
+# Lower learning rate
+optimizer = torch.optim.AdamW(model.parameters(), lr=1e-5)
+
+# Check loss calculation
+if torch.isnan(loss):
+    print("NaN loss detected!")
+    continue
+```
+
+#### 3. Poor Generation Quality
+
+```python
+# Adjust temperature
+output = model.generate(input_ids, temperature=0.7)  # More focused
+
+# Use different sampling
+output = model.generate(input_ids, top_k=40, top_p=0.8)
+
+# Check tokenizer vocabulary
+print(f"Vocab size: {tokenizer.vocab_size()}")
+print("Sample tokens:", list(tokenizer.get_vocab().keys())[:20])
+
+# Ensure proper training
+# - Sufficient training data
+# - Appropriate learning rate
+# - Proper loss calculation
+```
+
+#### 4. Slow Generation
+
+```python
+# Use torch.no_grad()
+with torch.no_grad():
+    output = model.generate(input_ids)
+
+# Compile model (PyTorch 2.0+)
+if hasattr(torch, 'compile'):
+    model = torch.compile(model)
+
+# Use mixed precision
+from torch.cuda.amp import autocast
+with autocast():
+    output = model.generate(input_ids)
+
+# Reduce max_length
+output = model.generate(input_ids, max_length=50)
+```
+
+#### 5. Model Not Learning
+
+```python
+# Check learning rate
+print(f"Current LR: {optimizer.param_groups[0]['lr']}")
+
+# Verify loss is decreasing
+losses = []
+for epoch in range(10):
+    loss = train_epoch()
+    losses.append(loss)
+    print(f"Epoch {epoch}: {loss:.4f}")
+
+# Check gradients
+for name, param in model.named_parameters():
+    if param.grad is not None:
+        print(f"{name}: {param.grad.norm():.6f}")
+    else:
+        print(f"{name}: No gradient")
+
+# Verify data preprocessing
+sample_batch = next(iter(dataloader))
+print("Sample input:", tokenizer.decode(sample_batch[0].tolist()))
+```
+
+## Performance Benchmarks
+
+### Model Sizes and Performance
+
+| Configuration | Parameters | Memory (GPU) | Speed (tokens/sec) | Use Case |
+|---------------|------------|--------------|-------------------|----------|
+| Small | 10M | 1GB | 1000 | Testing, Development |
+| Medium | 50M | 4GB | 500 | Small Applications |
+| Large | 200M | 12GB | 200 | Production Models |
+| XL | 500M+ | 24GB+ | 100 | Research, Large Scale |
+
+### Optimization Tips
+
+1. **Batch Size**: Increase for better GPU utilization
+2. **Sequence Length**: Reduce for faster training
+3. **Mixed Precision**: Use for memory and speed
+4. **Gradient Accumulation**: Simulate larger batches
+5. **Model Compilation**: Use torch.compile for inference
+
+## Advanced Features
+
+### Custom Attention Patterns
+
+```python
+class SparseAttention(nn.Module):
+    """Custom sparse attention implementation"""
+    def __init__(self, hidden_size, num_heads, sparsity_pattern):
+        super().__init__()
+        self.attention = MultiHeadAttention(hidden_size, num_heads)
+        self.sparsity_pattern = sparsity_pattern
+    
+    def forward(self, x, mask=None):
+        # Apply sparse attention pattern
+        sparse_mask = self.create_sparse_mask(x.size(1))
+        combined_mask = sparse_mask if mask is None else mask & sparse_mask
+        return self.attention(x, combined_mask)
+```
+
+### Dynamic Vocabulary
+
+```python
+class DynamicTokenizer(WordTokenizer):
+    """Tokenizer that can grow vocabulary during training"""
+    
+    def add_tokens(self, new_tokens):
+        """Add new tokens to vocabulary"""
+        for token in new_tokens:
+            if token not in self.word_to_id:
+                new_id = len(self.word_to_id)
+                self.word_to_id[token] = new_id
+                self.id_to_word[new_id] = token
+        self.vocab_size_val = len(self.word_to_id)
+```
+
+### Model Ensemble
+
+```python
+class TransformerEnsemble(nn.Module):
+    """Ensemble of multiple transformer models"""
+    
+    def __init__(self, models):
+        super().__init__()
+        self.models = nn.ModuleList(models)
+    
+    def forward(self, input_ids):
+        outputs = [model(input_ids) for model in self.models]
+        return torch.stack(outputs).mean(dim=0)
+    
+    def generate(self, input_ids, **kwargs):
+        # Generate from each model and combine
+        outputs = []
+        for model in self.models:
+            output = model.generate(input_ids, **kwargs)
+            outputs.append(output)
+        
+        # Majority voting or averaging logic
+        return self.combine_outputs(outputs)
+```
+
+## License
+
+Copyright (c) 2025 Matias Nielsen. All rights reserved.
+Licensed under the Custom License.
