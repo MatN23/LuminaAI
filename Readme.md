@@ -53,20 +53,6 @@
 - **Performance Monitoring**: Real-time metrics and profiling
 - **Export Options**: Multiple formats for conversations and model outputs
 
-## 🎨 Screenshots
-
-<div align="center">
-
-| Main Interface | Model Loading | Settings Panel |
-|:-:|:-:|:-:|
-| ![Main](assets/screenshots/main.png) | ![Loading](assets/screenshots/loading.png) | ![Settings](assets/screenshots/settings.png) |
-
-| Conversation View | Theme Selector | Performance Monitor |
-|:-:|:-:|:-:|
-| ![Chat](assets/screenshots/chat.png) | ![Themes](assets/screenshots/themes.png) | ![Monitor](assets/screenshots/monitor.png) |
-
-</div>
-
 ## 📋 Requirements
 
 ### System Requirements
