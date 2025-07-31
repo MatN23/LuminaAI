@@ -124,7 +124,7 @@ class HuggingFaceCompatibleModel(PreTrainedModel):
             attentions=None,
         )
     
-    def generate(self, input_ids, max_length=50, temperature=0.8, top_k=50, top_p=0.9, **kwargs):
+    def generate(self, input_ids, max_length=1000, temperature=0.7, top_k=50, top_p=0.9, **kwargs):
         """Generation method for compatibility."""
         self.eval()
         generated = input_ids.clone()
