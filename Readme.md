@@ -179,18 +179,6 @@ Your PyTorch model should include:
 - `config`: Model configuration parameters  
 - Corresponding `tokenizer.pkl` file
 
-## 🤝 Community Forks
-
-The LuminaAI community has created amazing forks and extensions! Here are some notable community projects:
-
-### 🌟 Featured Forks
-
-| Fork | Author | Description | Stars |
-|------|--------|-------------|-------|  
-| **[LuminaAI-Mobile](https://github.com/community/luminaai-mobile)** | [@mobileDev123](https://github.com/mobileDev123) | React Native mobile version with offline support | ![Stars](https://img.shields.io/github/stars/community/luminaai-mobile.svg) |
-| **[LuminaAI-Web](https://github.com/community/luminaai-web)** | [@webmaster456](https://github.com/webmaster456) | Browser-based version with cloud integration | ![Stars](https://img.shields.io/github/stars/community/luminaai-web.svg) |
-| **[LuminaAI-Gaming](https://github.com/gamedev/luminaai-gaming)** | [@gameAI](https://github.com/gameAI) | Integration with game engines and NPCs | ![Stars](https://img.shields.io/github/stars/gamedev/luminaai-gaming.svg) |
-
 ### 🚀 Submit Your Fork
 
 Have you created something amazing with LuminaAI? We'd love to feature it!
