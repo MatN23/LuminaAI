@@ -1,9 +1,5 @@
 # Copyright (c) 2025 Matias Nielsen. All rights reserved.
 # Licensed under the Custom License below.
-"""
-Setup and Run Script for OASST1 Word Transformer Training
-Copyright (c) 2025 Matias Nielsen. All rights reserved.
-"""
 
 import os
 import sys
