@@ -1,0 +1,441 @@
+# Train.py Documentation
+
+## Overview
+Train.py is the core training script for the OASST1 Word-Level Transformer system. It implements a memory-optimized training pipeline with advanced features including adaptive learning rate scheduling, comprehensive monitoring, and robust error handling.
+
+## Key Features
+- **Memory-Optimized Training**: Advanced memory management for various hardware configurations
+- **Adaptive Learning Rate Scheduling**: Intelligent learning rate adjustment with plateau detection
+- **Comprehensive Monitoring**: Real-time training metrics and sample generation
+- **Robust Error Handling**: Graceful recovery from OOM and other training issues
+- **Multi-Device Support**: Optimized for CUDA, MPS (Apple Silicon), and CPU
+
+## Core Components
+
+### 1. Memory Management System
+
+#### `memory_cleanup()` Context Manager
+Automated memory cleanup system:
+```python
+@contextmanager
+def memory_cleanup():
+    """Context manager for automatic memory cleanup."""
+    try:
+        yield
+    finally:
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+        elif hasattr(torch.backends, 'mps'):
+            torch.mps.empty_cache()
+            torch.mps.synchronize()
+        gc.collect()
+```
+
+#### `get_memory_usage()`
+Real-time memory usage monitoring:
+- **CUDA**: Reports allocated and cached memory
+- **MPS**: Reports current allocated memory
+- **CPU**: Indicates CPU mode operation
+
+#### Device-Specific Optimizations
+```python
+def setup_device():
+    """Conservative device setup with memory optimization."""
+    # CUDA optimizations
+    torch.cuda.set_per_process_memory_fraction(0.8)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cuda.matmul.allow_tf32 = False
+    
+    # MPS optimizations
+    torch.mps.set_per_process_memory_fraction(0.7)
+    
+    # CPU optimizations
+    torch.set_num_threads(min(4, os.cpu_count() // 2 or 2))
+```
+
+### 2. Optimized Dataset Processing
+
+#### `OptimizedWordDataset`
+Memory-efficient dataset with advanced features:
+
+**Key Features:**
+- **Chunked Processing**: Processes texts in manageable chunks
+- **Memory Limits**: Caps maximum sequences to prevent OOM
+- **Overlap Control**: Configurable sequence overlap (default: 70%)
+- **Quality Filtering**: Removes short or empty sequences
+
+**Configuration:**
+```python
+# Conservative dataset limits by device
+if device.type == 'cuda':
+    max_samples = 50000
+elif device.type == 'mps':  
+    max_samples = 25000
+else:
+    max_samples = 10000
+```
+
+#### `load_and_process_data()`
+Enhanced OASST2 data loading with comprehensive filtering:
+
+**Quality Filters:**
+- Language filtering (English only)
+- Deletion status checking
+- Review result validation
+- Tree state verification (ready_for_export)
+- Content length validation
+
+**Processing Pipeline:**
+1. **Raw Data Loading**: Streams JSONL data efficiently
+2. **Quality Filtering**: Applies multiple quality checks
+3. **Role Processing**: Handles prompter/assistant roles
+4. **Content Cleaning**: Truncates very long texts, removes empty content
+5. **Statistics Tracking**: Comprehensive processing statistics
+
+### 3. Advanced Learning Rate Scheduling
+
+#### `AdaptiveLRScheduler`
+Sophisticated learning rate management:
+
+**Features:**
+- **Warmup Phase**: Linear warmup to target learning rate
+- **Decay Options**: Cosine, linear, or exponential decay
+- **Plateau Detection**: Automatic learning rate reduction on plateaus
+- **Minimum Rate Protection**: Prevents learning rate from dropping too low
+
+**Scheduling Formulas:**
+```python
+# Warmup phase
+lr = base_lr * current_step / warmup_steps
+
+# Cosine decay
+progress = (step - warmup) / (total - warmup)
+lr = min_lr + (base_lr - min_lr) * 0.5 * (1 + cos(π * progress))
+
+# Plateau reduction
+if patience_counter > plateau_patience:
+    lr *= 0.5
+```
+
+### 4. Memory-Optimized Training Loop
+
+#### `train_epoch()`
+Highly optimized training loop with comprehensive memory management:
+
+**Key Optimizations:**
+- **Gradient Accumulation**: Simulates larger batch sizes
+- **Mixed Precision**: Automatic mixed precision for CUDA
+- **Regular Cleanup**: Memory cleanup every 25 batches
+- **OOM Recovery**: Graceful handling of out-of-memory errors
+
+**Training Process:**
+```python
+def train_epoch(model, dataloader, criterion, optimizer, scheduler, epoch):
+    # Memory-efficient forward pass
+    if device.type == 'cuda':
+        with torch.autocast(device_type='cuda', enabled=True, dtype=torch.float16):
+            logits = model(inputs)
+            loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
+    else:
+        logits = model(inputs)
+        loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
+    
+    # Gradient accumulation and clipping
+    loss = loss / gradient_accumulation_steps
+    loss.backward()
+    
+    if accumulation_steps >= gradient_accumulation_steps:
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        optimizer.step()
+        scheduler.step(loss.item() * gradient_accumulation_steps)
+        optimizer.zero_grad()
+```
+
+### 5. Sample Text Generation
+
+#### `generate_sample_text()`
+Memory-efficient text generation for monitoring:
+
+**Features:**
+- **Context Limiting**: Limits context length to prevent OOM
+- **Sampling Options**: Temperature, top-k, and top-p sampling
+- **Memory Cleanup**: Automatic cleanup after generation
+- **Error Handling**: Graceful failure recovery
+
+## Configuration System
+
+### Model Configuration
+```python
+model_config = ModelConfig(
+    vocab_size=16000,    # Reduced for memory efficiency
+    hidden_size=512,     # Smaller model size
+    num_layers=8,        # Fewer layers
+    num_heads=8,         # Fewer attention heads
+    seq_length=256,      # Shorter sequences
+    dropout=0.1,
+    model_type="WordTransformer",
+    tokenizer_type="word"
+)
+```
+
+### Training Configuration
+```python
+training_config = TrainingConfig(
+    learning_rate=1e-4,     # Conservative learning rate
+    weight_decay=0.01,
+    batch_size=batch_size,  # Device-dependent
+    gradient_accumulation_steps=8,
+    max_epochs=100,
+    warmup_ratio=0.05,
+    save_every=1000,
+    eval_every=500,
+    max_grad_norm=1.0,
+    label_smoothing=0.1,
+    beta1=0.9,
+    beta2=0.95
+)
+```
+
+## Training Process
+
+### 1. Initialization Phase
+```
+🚀 Starting Memory-Optimized OASST1 Word-Level Transformer Training
+======================================================================
+📚 Loading OASST1 dataset (memory-limited)...
+🔤 Training compact word-level tokenizer...
+📦 Creating memory-optimized training dataset...
+🧠 Initializing memory-efficient model...
+```
+
+### 2. Training Loop
+```
+Starting epoch 1, memory: CUDA: 2.34GB allocated, 3.45GB cached
+Epoch 1 | Batch 50/1250 | Loss: 3.2145 | Acc: 32.15% | LR: 2.34e-05 | Speed: 1,234 tok/s
+
+📊 Epoch 1/100 Summary:
+   Loss: 2.8934 | Perplexity: 18.12
+   Accuracy: 42.67% | Time: 127.3s
+   Speed: 2,456 tokens/sec
+   Sample: <user> What is AI? → AI is a field of computer science...
+
+💾 Best model saved: model_20250131_143022
+```
+
+### 3. Progress Monitoring
+- **Real-time Metrics**: Loss, accuracy, perplexity, learning rate
+- **Memory Usage**: Continuous memory monitoring
+- **Sample Generation**: Periodic text samples for quality assessment
+- **Performance Tracking**: Tokens per second, batch processing time
+
+## Advanced Features
+
+### 1. Dynamic Memory Management
+```python
+# Aggressive memory cleanup every 25 batches
+if batch_idx % 25 == 0:
+    with memory_cleanup():
+        pass
+
+# OOM recovery
+except RuntimeError as e:
+    if "out of memory" in str(e).lower():
+        logger.error(f"OOM at epoch {epoch}, batch {batch_idx}")
+        optimizer.zero_grad()
+        with memory_cleanup():
+            pass
+        continue  # Skip batch and continue
+```
+
+### 2. Comprehensive Metadata Generation
+Each trained model includes extensive metadata:
+```python
+metadata = ModelMetadata(
+    model_name="OASST1_WordTransformer_Compact",
+    dataset_info={
+        "name": "OpenAssistant OASST1 (Memory-Optimized)",
+        "num_samples": len(texts),
+        "preprocessing": "Word-level tokenization with role formatting"
+    },
+    performance_metrics={
+        "loss": avg_loss,
+        "perplexity": perplexity,
+        "tokens_per_second": tokens_per_sec
+    },
+    hardware_used=f"{device.type.upper()}",
+    notes="Memory-optimized training with aggressive memory management"
+)
+```
+
+### 3. Tokenizer Training
+```python
+# Create compact word-level tokenizer
+tokenizer = WordTokenizer()
+sample_texts = texts[:10000]  # Use sample for efficiency
+all_text = "\n".join(sample_texts)
+tokenizer.train_from_text(all_text, vocab_size=model_config.vocab_size)
+```
+
+## Error Handling and Recovery
+
+### 1. Out-of-Memory (OOM) Handling
+```python
+try:
+    # Training operations
+    logits = model(inputs)
+    loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
+except RuntimeError as e:
+    if "out of memory" in str(e).lower():
+        logger.error(f"OOM during training")
+        # Cleanup and skip batch
+        optimizer.zero_grad()
+        with memory_cleanup():
+            pass
+        continue
+```
+
+### 2. Data Loading Errors
+```python
+try:
+    record = json.loads(line)
+except (json.JSONDecodeError, KeyError, ValueError) as e:
+    skipped_count += 1
+    if line_num % 5000 == 0:
+        logger.warning(f"Line {line_num}: Skipped malformed entry")
+    continue
+```
+
+### 3. Training Interruption
+```python
+except KeyboardInterrupt:
+    logger.info("❌ Training interrupted by user")
+    return 1
+finally:
+    # Final cleanup
+    with memory_cleanup():
+        pass
+```
+
+## Performance Optimization
+
+### 1. Device-Specific Batch Sizes
+```python
+if device.type == 'cuda':
+    batch_size = 8
+elif device.type == 'mps':
+    batch_size = 1  # Very conservative for MPS
+else:
+    batch_size = 1  # CPU mode
+```
+
+### 2. Memory-Efficient Data Loading
+```python
+dataloader = DataLoader(
+    dataset,
+    batch_size=training_config.batch_size,
+    shuffle=True,
+    num_workers=0,        # No multiprocessing to save memory
+    pin_memory=False,     # Disable pin_memory
+    drop_last=True        # Drop incomplete batches
+)
+```
+
+### 3. Gradient Accumulation
+```python
+# Higher accumulation to maintain effective batch size
+gradient_accumulation_steps = 8
+effective_batch_size = batch_size * gradient_accumulation_steps
+```
+
+## Model Validation
+
+### 1. Training Setup Validation
+```python
+def validate_training_setup():
+    """Validate required files and dependencies."""
+    required_files = [
+        "oasst1_data/oasst1_train.jsonl",
+        "model_manager.py", 
+        "word_transformer.py"
+    ]
+    # Check file existence and provide guidance
+```
+
+### 2. Parameter Counting
+```python
+def count_parameters(model: nn.Module) -> Tuple[int, int]:
+    """Count total and trainable parameters."""
+    total = sum(p.numel() for p in model.parameters())
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    return total, trainable
+```
+
+## Usage Examples
+
+### Basic Training
+```bash
+python Train.py
+```
+
+### Training Output
+```
+🚀 Starting Memory-Optimized OASST1 Word-Level Transformer Training
+======================================================================
+Initial memory: CPU mode
+📚 Loading OASST1 dataset (memory-limited)...
+Loaded 25,000 conversation pairs for training
+🔤 Training compact word-level tokenizer...
+✅ Tokenizer trained - Vocabulary size: 16,000
+📦 Creating memory-optimized training dataset...
+Created 87,432 training sequences
+🧠 Initializing memory-efficient model...
+Model parameters: 67,891,200 (~259.0MB)
+
+🚀 Starting memory-optimized training...
+
+📊 Epoch 1/100 Summary:
+   Loss: 3.2145 | Perplexity: 24.89
+   Accuracy: 28.34% | Time: 245.7s
+   Speed: 1,456 tokens/sec
+   Sample: <user> Hello → Hello! How can I help you today?
+
+💾 Best model saved: model_20250131_143022_epoch_1
+
+📊 Epoch 2/100 Summary:
+   Loss: 2.8934 | Perplexity: 18.12
+   Accuracy: 35.67% | Time: 239.1s
+   Speed: 1,523 tokens/sec
+
+...
+
+✅ Memory-optimized training completed successfully!
+🎯 Best loss achieved: 1.8234
+🎯 Best perplexity: 6.19
+⏱️  Total training time: 4.25 hours
+🚀 Average processing speed: 1,847 tokens/sec
+```
+
+## Best Practices
+
+### 1. Hardware Preparation
+- **CUDA**: Ensure adequate VRAM (8GB+ recommended)
+- **MPS**: Monitor unified memory usage
+- **CPU**: Plan for extended training times (12-24 hours)
+
+### 2. Data Preparation
+- Use high-quality, filtered conversation data  
+- Monitor dataset statistics for quality indicators
+- Balance dataset size with available memory
+
+### 3. Training Monitoring
+- Watch memory usage trends
+- Monitor sample generation quality
+- Check convergence patterns
+
+### 4. Hyperparameter Tuning
+- Start with provided conservative settings
+- Adjust batch size based on available memory
+- Monitor learning rate scheduling effectiveness
+
+This training system provides a robust, memory-efficient foundation for training high-quality word-level transformer models on conversational data.

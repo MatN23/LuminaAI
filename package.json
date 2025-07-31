@@ -94,16 +94,16 @@
       ],
       "win": {
         "target": "nsis",
-        "icon": "assets/icon.ico"
+        "icon": "assets/logo.png"
       },
       "mac": {
         "target": "dmg", 
-        "icon": "assets/icon.icns",
+        "icon": "assets/logo.png",
         "category": "public.app-category.productivity"
       },
       "linux": {
         "target": "AppImage",
-        "icon": "assets/icon.png",
+        "icon": "assets/logo.png",
         "category": "Development"
       },
       "nsis": {
