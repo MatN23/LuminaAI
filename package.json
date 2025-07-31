@@ -50,7 +50,7 @@
       "@babel/preset-env": "^7.22.0",
       "babel-loader": "^9.1.0",
       "concurrently": "^8.2.0",
-      "css-loader": "^6.8.0",
+      "css-loader": "^7.1.2",
       "electron": "^25.0.0",
       "electron-builder": "^24.4.0",
       "eslint": "^8.43.0",  
