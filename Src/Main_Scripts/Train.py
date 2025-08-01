@@ -584,11 +584,11 @@ def main():
     
     # Memory-optimized configuration
     model_config = ModelConfig(
-        vocab_size=16000,  # Reduced vocab size
-        hidden_size=512,   # Reduced model size
-        num_layers=8,      # Fewer layers
-        num_heads=8,       # Fewer attention heads
-        seq_length=256,    # Much shorter sequences
+        vocab_size=16000000000,  # Reduced vocab size
+        hidden_size=2024,   # Reduced model size
+        num_layers=16,      # Fewer layers
+        num_heads=16,       # Fewer attention heads
+        seq_length=2024,    # Much shorter sequences
         dropout=0.1,
         model_type="WordTransformer",
         tokenizer_type="word"

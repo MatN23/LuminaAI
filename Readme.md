@@ -70,7 +70,7 @@ chmod +x install.sh
 
 # Or on Windows
 install.bat
-```
+
 
 ### Manual Installation
 

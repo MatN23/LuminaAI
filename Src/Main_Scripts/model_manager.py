@@ -30,10 +30,10 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ModelConfig:
     """Configuration for the transformer model."""
-    vocab_size: int = 32000
-    hidden_size: int = 768
-    num_layers: int = 8
-    num_heads: int = 8
+    vocab_size: int = 32000000000000000000
+    hidden_size: int = 2024
+    num_layers: int = 16
+    num_heads: int = 16
     seq_length: int = 1024
     dropout: float = 0.1
     model_type: str = "WordTransformer"
