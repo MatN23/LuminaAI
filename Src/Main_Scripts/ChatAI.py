@@ -16,9 +16,9 @@ from pathlib import Path
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
 
-# Import shared components
+# Import shared components - Updated for subword tokenization
 from model_manager import ModelManager, ModelMetadata
-from word_transformer import WordTransformer, WordTokenizer
+from subword_transformer import SubwordTransformer, SubwordTokenizer  # Changed import
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -50,18 +50,25 @@ def ensure_tensor_device(tensor, target_device):
     return tensor
 
 def validate_tokenizer(tokenizer):
-    """Validate that the tokenizer is working correctly."""
+    """Validate that the subword tokenizer is working correctly."""
     test_text = "Hello, how are you?"
     try:
+        # Test subword tokenization methods
+        subwords = tokenizer.tokenize(test_text)
         encoded = tokenizer.encode(test_text)
         decoded = tokenizer.decode(encoded)
-        print(f"🔍 Tokenizer test:")
+        
+        print(f"🔍 Subword Tokenizer test:")
         print(f"   Original: {test_text}")
+        print(f"   Subwords: {subwords[:10]}..." if len(subwords) > 10 else f"   Subwords: {subwords}")
         print(f"   Encoded: {encoded[:10]}..." if len(encoded) > 10 else f"   Encoded: {encoded}")
         print(f"   Decoded: {decoded}")
+        print(f"   Vocab size: {tokenizer.vocab_size()}")
+        print(f"   BPE merges: {len(tokenizer.merges)}")
+        
         return len(encoded) > 0 and decoded.strip()
     except Exception as e:
-        print(f"❌ Tokenizer validation failed: {e}")
+        print(f"❌ Subword tokenizer validation failed: {e}")
         return False
 
 # =====================================================================
@@ -246,7 +253,7 @@ class Task:
 class TaskPlanner:
     """Plans and decomposes tasks into actionable steps."""
     
-    def __init__(self, model: WordTransformer, tokenizer: WordTokenizer):
+    def __init__(self, model: SubwordTransformer, tokenizer: SubwordTokenizer):  # Updated type hints
         self.model = model
         self.tokenizer = tokenizer
         # Ensure model is on correct device
@@ -278,7 +285,7 @@ Plan:
             return [f"Execute task: {task_description}"]
     
     def _generate_with_model(self, prompt: str, max_length: int = 100) -> str:
-        """Generate text using the model with proper device handling."""
+        """Generate text using the subword model with proper device handling."""
         try:
             self.model.eval()
             with torch.no_grad():
@@ -301,7 +308,7 @@ Plan:
                     # Use greedy decoding for more stable results
                     next_token_id = torch.argmax(logits[0, -1, :]).item()
                     
-                    # Check for end token
+                    # Check for end token - Updated for subword tokenizer
                     if next_token_id == self.tokenizer.vocab.get("</s>", -1) or next_token_id == 0:
                         break
                     
@@ -341,17 +348,17 @@ Plan:
 # CORE AGENT CLASS
 # =====================================================================
 
-class WordLevelAgent:
-    """Core agentic AI that can autonomously execute tasks."""
+class WordLevelAgent:  # Keeping the class name for compatibility
+    """Core agentic AI that can autonomously execute tasks using subword tokenization."""
     
-    def __init__(self, model: WordTransformer, tokenizer: WordTokenizer, metadata: ModelMetadata):
+    def __init__(self, model: SubwordTransformer, tokenizer: SubwordTokenizer, metadata: ModelMetadata):  # Updated type hints
         self.model = model.to(device)  # Ensure model is on correct device
         self.tokenizer = tokenizer
         self.metadata = metadata
         
         # Validate tokenizer
         if not validate_tokenizer(tokenizer):
-            logger.warning("⚠️ Tokenizer validation failed - responses may be poor quality")
+            logger.warning("⚠️ Subword tokenizer validation failed - responses may be poor quality")
         
         # Initialize tools
         self.tools = {
@@ -368,7 +375,7 @@ class WordLevelAgent:
         self.active_tasks = {}
         self.completed_tasks = []
         
-        logger.info(f"🤖 Agent initialized with {len(self.tools)} tools")
+        logger.info(f"🤖 Agent initialized with {len(self.tools)} tools (subword tokenization)")
     
     def list_capabilities(self) -> Dict[str, str]:
         """List agent capabilities."""
@@ -506,8 +513,8 @@ class WordLevelAgent:
 # AGENTIC CHAT INTERFACE
 # =====================================================================
 
-class AgenticWordAIChat:
-    """Agentic chat interface that can autonomously execute tasks."""
+class AgenticWordAIChat:  # Keeping class name for compatibility
+    """Agentic chat interface that can autonomously execute tasks using subword tokenization."""
     
     def __init__(self, model_manager: ModelManager):
         self.model_manager = model_manager
@@ -520,11 +527,175 @@ class AgenticWordAIChat:
         try:
             model, tokenizer, metadata = self.model_manager.load_model(model_id)
             self.agent = WordLevelAgent(model, tokenizer, metadata)
-            logger.info(f"✅ Agentic chat ready with model: {metadata.model_name} {metadata.version}")
+            logger.info(f"✅ Agentic chat ready with subword model: {metadata.model_name} {metadata.version}")
             return True
         except Exception as e:
             logger.error(f"❌ Failed to load model: {e}")
             return False
+    
+    def _generate_conversational_response(self, user_input: str, debug_mode: bool = False) -> str:
+        """Generate a conversational response with limited context."""
+        try:
+            # Build minimal context
+            if self.conversation_history:
+                recent_context = " ".join(self.conversation_history[-2:])  # Only last exchange
+                context = f"{recent_context} <user> {user_input}\n<bot>"
+            else:
+                context = f"<user> {user_input}\n<bot>"
+            
+            if debug_mode:
+                print(f"🔍 Context: {context[:100]}...")
+            
+            return self._generate_with_model_safe(context, max_tokens=50, debug_mode=debug_mode)
+        
+        except Exception as e:
+            logger.error(f"Error generating response: {e}")
+            return "Sorry, I encountered an error generating a response."
+    
+    def _generate_with_model_safe(self, prompt: str, max_tokens: int = 50, debug_mode: bool = False) -> str:
+        """Safely generate text with extensive error handling and debugging for subword tokenization."""
+        try:
+            self.agent.model.eval()
+            
+            with torch.no_grad():
+                # Encode input using subword tokenizer
+                input_tokens = self.agent.tokenizer.encode(prompt)
+                if not input_tokens:
+                    return "I couldn't process your input."
+                
+                if debug_mode:
+                    print(f"🔍 Input tokens: {len(input_tokens)}")
+                    print(f"🔍 Input subwords: {self.agent.tokenizer.tokenize(prompt)[:10]}...")
+                
+                input_ids = torch.tensor(input_tokens, dtype=torch.long).unsqueeze(0)
+                input_ids = ensure_tensor_device(input_ids, device)
+                
+                generated_tokens = []
+                current_input = input_ids
+                
+                for step in range(max_tokens):
+                    try:
+                        # Get model output
+                        with torch.no_grad():
+                            output = self.agent.model(current_input)
+                        
+                        # Handle different output formats
+                        if hasattr(output, 'logits'):
+                            logits = output.logits
+                        elif isinstance(output, tuple):
+                            logits = output[0]
+                        else:
+                            logits = output
+                        
+                        # Get next token (greedy decoding)
+                        next_token_logits = logits[0, -1, :]
+                        next_token_id = torch.argmax(next_token_logits).item()
+                        
+                        # Check for stop conditions - Updated for subword tokenizer
+                        stop_tokens = [
+                            0,  # pad token
+                            self.agent.tokenizer.vocab.get("</s>", -1),
+                            self.agent.tokenizer.vocab.get("<eos>", -1),
+                            self.agent.tokenizer.vocab.get("<|endoftext|>", -1)
+                        ]
+                        
+                        if next_token_id in stop_tokens:
+                            break
+                        
+                        # Add token to generated sequence
+                        generated_tokens.append(next_token_id)
+                        
+                        # Update input for next iteration
+                        next_token_tensor = torch.tensor([[next_token_id]], device=device)
+                        current_input = torch.cat([current_input, next_token_tensor], dim=1)
+                        
+                        # Stop if we hit max sequence length
+                        if current_input.size(1) >= getattr(self.agent.model.config, 'seq_length', 512):
+                            break
+                    
+                    except Exception as step_error:
+                        if debug_mode:
+                            print(f"🔍 Step {step} error: {step_error}")
+                        break
+                
+                # Decode generated tokens using subword tokenizer
+                if generated_tokens:
+                    response = self.agent.tokenizer.decode(generated_tokens)
+                    
+                    # Clean up response
+                    response = response.strip()
+                    response = re.sub(r'<[^>]*>', '', response)  # Remove any XML tags
+                    response = re.sub(r'\s+', ' ', response)     # Normalize whitespace
+                    
+                    # Filter out obvious gibberish patterns
+                    if self._is_gibberish(response):
+                        if debug_mode:
+                            print(f"🔍 Detected gibberish: {response[:50]}...")
+                        return "I'm having trouble generating a coherent response. The model may need more training."
+                    
+                    if debug_mode:
+                        print(f"🔍 Generated tokens: {generated_tokens}")
+                        print(f"🔍 Generated subwords: {[self.agent.tokenizer.vocab_reverse.get(t, f'<unk:{t}>') for t in generated_tokens[:10]]}")
+                        print(f"🔍 Final response: {response}")
+                    
+                    return response if response else "I'm not sure how to respond to that."
+                else:
+                    return "I couldn't generate a response."
+        
+        except Exception as e:
+            if debug_mode:
+                print(f"🔍 Generation error: {e}")
+            logger.error(f"Model generation error: {e}")
+            return "Sorry, I encountered an error while thinking."
+    
+    def _is_gibberish(self, text: str) -> bool:
+        """Detect if generated text is likely gibberish - updated for subword tokens."""
+        if not text or len(text.strip()) < 2:
+            return True
+        
+        # Check for excessive repetition
+        words = text.split()
+        if len(words) > 5:
+            unique_words = len(set(words))
+            if unique_words / len(words) < 0.5:  # More than 50% repetition
+                return True
+        
+        # Check for random character sequences
+        if len(text) > 20 and ' ' not in text:  # Long string without spaces
+            return True
+        
+        # Check for excessive special characters or numbers
+        special_chars = sum(1 for c in text if not c.isalnum() and c not in ' .,!?-')
+        if len(text) > 0 and special_chars / len(text) > 0.3:
+            return True
+        
+        # Check for subword-specific gibberish patterns
+        gibberish_patterns = [
+            r'encrypted_text',
+            r'predicted_token',
+            r'ondrop',
+            r'setitems\d+',
+            r'_image[a-z]+',
+            r'alignment absorption',
+            r'\b[a-z]{15,}\b',  # Very long nonsense words
+            r'@@\w+@@',  # Malformed subword tokens
+            r'##\w+##',  # Another subword token format
+            r'▁{3,}',    # Excessive subword separators
+        ]
+        
+        for pattern in gibberish_patterns:
+            if re.search(pattern, text, re.IGNORECASE):
+                return True
+        
+        # Check for excessive subword artifacts
+        if text.count('@@') > len(text.split()) // 2:  # Too many subword markers
+            return True
+        
+        # Check for repeated subword patterns
+        if len(re.findall(r'(\w{1,3})\1{3,}', text)) > 0:  # Repeated 1-3 char sequences
+            return True
+        
+        return False
     
     def chat(self):
         """Interactive agentic chat interface."""
@@ -541,12 +712,15 @@ class AgenticWordAIChat:
                 return
         
         print("\n" + "="*70)
-        print("🤖 AGENTIC WORD-LEVEL AI SYSTEM")
+        print("🤖 AGENTIC SUBWORD-LEVEL AI SYSTEM")  # Updated title
         print("="*70)
         print("🔧 Agent Capabilities:")
         capabilities = self.agent.list_capabilities()
         for name, desc in capabilities.items():
             print(f"   • {name}: {desc}")
+        
+        print(f"\n🔤 Tokenization: Subword (BPE) - Vocab: {self.agent.tokenizer.vocab_size():,}")
+        print(f"   BPE Merges: {len(self.agent.tokenizer.merges):,}")
         
         print("\n💬 Commands:")
         print("   • Normal chat - Just type your message")
@@ -555,6 +729,7 @@ class AgenticWordAIChat:
         print("   • /tasks - List all tasks")
         print("   • /status <task_id> - Check task status")
         print("   • /capabilities - Show agent capabilities")
+        print("   • /tokenize <text> - Test subword tokenization")  # New command
         print("   • /clear - Clear conversation history")
         print("   • /debug - Toggle debug mode")
         print("   • /simple <message> - Simple response without history")
@@ -591,6 +766,24 @@ class AgenticWordAIChat:
                     print("\n🔧 Agent Capabilities:")
                     for name, desc in self.agent.list_capabilities().items():
                         print(f"   • {name}: {desc}")
+                    continue
+                
+                elif user_input.startswith("/tokenize "):
+                    # New command to test subword tokenization
+                    text = user_input[10:].strip()
+                    if text:
+                        subwords = self.agent.tokenizer.tokenize(text)
+                        encoded = self.agent.tokenizer.encode(text)
+                        decoded = self.agent.tokenizer.decode(encoded)
+                        
+                        print(f"\n🔤 Subword Tokenization Test:")
+                        print(f"   Original: {text}")
+                        print(f"   Subwords: {subwords}")
+                        print(f"   Token IDs: {encoded}")
+                        print(f"   Decoded: {decoded}")
+                        print(f"   Compression ratio: {len(text.split())}/{len(subwords)} = {len(text.split())/len(subwords):.2f}x")
+                    else:
+                        print("❌ Please provide text to tokenize")
                     continue
                 
                 elif user_input.lower() == "/tasks":
@@ -711,159 +904,17 @@ class AgenticWordAIChat:
         except Exception as e:
             logger.error(f"Error generating simple response: {e}")
             return "I'm having trouble generating a response. Please try again."
-    
-    def _generate_conversational_response(self, user_input: str, debug_mode: bool = False) -> str:
-        """Generate a conversational response with limited context."""
-        try:
-            # Build minimal context
-            if self.conversation_history:
-                recent_context = " ".join(self.conversation_history[-2:])  # Only last exchange
-                context = f"{recent_context} <user> {user_input}\n<bot>"
-            else:
-                context = f"<user> {user_input}\n<bot>"
-            
-            if debug_mode:
-                print(f"🔍 Context: {context[:100]}...")
-            
-            return self._generate_with_model_safe(context, max_tokens=50, debug_mode=debug_mode)
-        
-        except Exception as e:
-            logger.error(f"Error generating response: {e}")
-            return "Sorry, I encountered an error generating a response."
-    
-    def _generate_with_model_safe(self, prompt: str, max_tokens: int = 50, debug_mode: bool = False) -> str:
-        """Safely generate text with extensive error handling and debugging."""
-        try:
-            self.agent.model.eval()
-            
-            with torch.no_grad():
-                # Encode input
-                input_tokens = self.agent.tokenizer.encode(prompt)
-                if not input_tokens:
-                    return "I couldn't process your input."
-                
-                if debug_mode:
-                    print(f"🔍 Input tokens: {len(input_tokens)}")
-                
-                input_ids = torch.tensor(input_tokens, dtype=torch.long).unsqueeze(0)
-                input_ids = ensure_tensor_device(input_ids, device)
-                
-                generated_tokens = []
-                current_input = input_ids
-                
-                for step in range(max_tokens):
-                    try:
-                        # Get model output
-                        with torch.no_grad():
-                            output = self.agent.model(current_input)
-                        
-                        # Handle different output formats
-                        if hasattr(output, 'logits'):
-                            logits = output.logits
-                        elif isinstance(output, tuple):
-                            logits = output[0]
-                        else:
-                            logits = output
-                        
-                        # Get next token (greedy decoding)
-                        next_token_logits = logits[0, -1, :]
-                        next_token_id = torch.argmax(next_token_logits).item()
-                        
-                        # Check for stop conditions
-                        if next_token_id in [0, self.agent.tokenizer.vocab.get("</s>", -1), self.agent.tokenizer.vocab.get("<eos>", -1)]:
-                            break
-                        
-                        # Add token to generated sequence
-                        generated_tokens.append(next_token_id)
-                        
-                        # Update input for next iteration
-                        next_token_tensor = torch.tensor([[next_token_id]], device=device)
-                        current_input = torch.cat([current_input, next_token_tensor], dim=1)
-                        
-                        # Stop if we hit max sequence length
-                        if current_input.size(1) >= getattr(self.agent.model.config, 'seq_length', 512):
-                            break
-                    
-                    except Exception as step_error:
-                        if debug_mode:
-                            print(f"🔍 Step {step} error: {step_error}")
-                        break
-                
-                # Decode generated tokens
-                if generated_tokens:
-                    response = self.agent.tokenizer.decode(generated_tokens)
-                    
-                    # Clean up response
-                    response = response.strip()
-                    response = re.sub(r'<[^>]*>', '', response)  # Remove any XML tags
-                    response = re.sub(r'\s+', ' ', response)     # Normalize whitespace
-                    
-                    # Filter out obvious gibberish patterns
-                    if self._is_gibberish(response):
-                        if debug_mode:
-                            print(f"🔍 Detected gibberish: {response[:50]}...")
-                        return "I'm having trouble generating a coherent response. The model may need more training."
-                    
-                    if debug_mode:
-                        print(f"🔍 Generated: {response}")
-                    
-                    return response if response else "I'm not sure how to respond to that."
-                else:
-                    return "I couldn't generate a response."
-        
-        except Exception as e:
-            if debug_mode:
-                print(f"🔍 Generation error: {e}")
-            logger.error(f"Model generation error: {e}")
-            return "Sorry, I encountered an error while thinking."
-    
-    def _is_gibberish(self, text: str) -> bool:
-        """Detect if generated text is likely gibberish."""
-        if not text or len(text.strip()) < 2:
-            return True
-        
-        # Check for excessive repetition
-        words = text.split()
-        if len(words) > 5:
-            unique_words = len(set(words))
-            if unique_words / len(words) < 0.5:  # More than 50% repetition
-                return True
-        
-        # Check for random character sequences
-        if len(text) > 20 and ' ' not in text:  # Long string without spaces
-            return True
-        
-        # Check for excessive special characters or numbers
-        special_chars = sum(1 for c in text if not c.isalnum() and c not in ' .,!?-')
-        if len(text) > 0 and special_chars / len(text) > 0.3:
-            return True
-        
-        # Check for known gibberish patterns
-        gibberish_patterns = [
-            r'encrypted_text',
-            r'predicted_token',
-            r'ondrop',
-            r'setitems\d+',
-            r'_image[a-z]+',
-            r'alignment absorption',
-            r'\b[a-z]{15,}\b',  # Very long nonsense words
-        ]
-        
-        for pattern in gibberish_patterns:
-            if re.search(pattern, text, re.IGNORECASE):
-                return True
-        
-        return False
 
 # =====================================================================
 # MAIN FUNCTION
 # =====================================================================
 
 def main():
-    """Main function for the agentic AI system."""
+    """Main function for the agentic AI system with subword tokenization."""
     print("\n" + "="*70)
-    print("🤖 AGENTIC WORD-LEVEL AI SYSTEM")
+    print("🤖 AGENTIC SUBWORD-LEVEL AI SYSTEM")
     print("   Autonomous Task Execution + Conversational AI")
+    print("   🔤 Subword Tokenization (BPE) for Enhanced Efficiency")
     print("="*70)
     print(f"🔧 Device: {device}")
     print(f"🐍 PyTorch: {torch.__version__}")
@@ -883,15 +934,21 @@ def main():
         if not models:
             print("❌ No trained models found!")
             print("\n📝 To get started:")
-            print("   1. Run 'python Train.py' to train a model")
+            print("   1. Run 'python Train.py' to train a subword model")
             print("   2. Then run this script to start the agentic AI")
             return 1
         
         print(f"✅ Found {len(models)} trained model(s)")
         
-        # Show model info
+        # Show model info with subword-specific details
         for model in models[:3]:  # Show first 3 models
             print(f"   📁 {model['id']}: {model.get('model_name', 'Unknown')} (loss: {model.get('best_loss', 'N/A'):.4f})")
+            # Check if it's a subword model
+            metadata = model_manager._load_metadata(model['id'])
+            if metadata and metadata.model_config.tokenizer_type == "subword":
+                print(f"      🔤 Subword model - Vocab: {metadata.model_config.vocab_size:,}")
+                if hasattr(metadata.dataset_info, 'num_merges'):
+                    print(f"      🔀 BPE Merges: {metadata.dataset_info.get('num_merges', 'Unknown')}")
     
     except Exception as e:
         print(f"❌ Error listing models: {e}")

@@ -68,7 +68,7 @@ def check_environment():
         # Check for required files
         required_files = [
             "model_manager.py",
-            "word_transformer.py",
+            "subword_transformer.py",
             "oasst1_data/oasst1_train.jsonl"
         ]
         
@@ -112,7 +112,7 @@ def test_imports():
     # Test custom imports
     custom_imports = {
         'model_manager': 'model_manager',
-        'word_transformer': 'word_transformer'
+        'subword_transformer': 'subword_transformer'
     }
     
     for name, module in custom_imports.items():
@@ -121,8 +121,8 @@ def test_imports():
                 from model_manager import ModelManager, ModelConfig, TrainingConfig, ModelMetadata
                 import_results[name] = "✅ SUCCESS"
                 logger.info(f"  {name}: ✅")
-            elif module == 'word_transformer':
-                from word_transformer import WordTransformer, WordTokenizer
+            elif module == 'subword_transformer':
+                from subword_transformer import SubwordTransformer, SubwordTokenizer
                 import_results[name] = "✅ SUCCESS"
                 logger.info(f"  {name}: ✅")
         except Exception as e:
@@ -185,6 +185,43 @@ def test_data_loading():
         logger.error(f"Traceback: {traceback.format_exc()}")
         return False
 
+def test_tokenizer():
+    """Test subword tokenizer functionality."""
+    logger.info("🔤 Testing subword tokenizer...")
+    
+    try:
+        from subword_transformer import SubwordTokenizer
+        
+        # Create a simple tokenizer
+        tokenizer = SubwordTokenizer()
+        
+        # Test with small vocabulary
+        test_text = "hello world this is a test of subword tokenization"
+        tokenizer.train_from_text(test_text, vocab_size=100, min_freq=1)
+        
+        # Test encoding/decoding
+        test_sentence = "hello test"
+        encoded = tokenizer.encode(test_sentence)
+        decoded = tokenizer.decode(encoded)
+        
+        logger.info(f"  Test sentence: '{test_sentence}'")
+        logger.info(f"  Encoded: {encoded}")
+        logger.info(f"  Decoded: '{decoded}'")
+        logger.info(f"  Vocabulary size: {tokenizer.vocab_size()}")
+        logger.info(f"  Number of merges: {len(tokenizer.merges)}")
+        
+        if encoded and decoded:
+            logger.info("✅ Subword tokenizer test passed")
+            return True
+        else:
+            logger.error("❌ Tokenizer encoding/decoding failed")
+            return False
+            
+    except Exception as e:
+        logger.error(f"❌ Tokenizer test failed: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return False
+
 def run_comprehensive_debug():
     """Run comprehensive debugging."""
     logger.info("🚀 Starting comprehensive debug check...")
@@ -210,22 +247,26 @@ def run_comprehensive_debug():
         logger.error("❌ Data loading test failed - stopping")
         return False
     
+    # Step 4: Tokenizer test
+    if not test_tokenizer():
+        logger.error("❌ Tokenizer test failed - stopping")
+        return False
+    
     logger.info("=" * 70)
     logger.info("✅ All debug checks passed! Proceeding with training.")
     logger.info("=" * 70)
     return True
 
-# Import shared components with error handling - MOVED TO TOP LEVEL
+# Import shared components with error handling
 try:
     from model_manager import ModelManager, ModelConfig, TrainingConfig, ModelMetadata
-    from word_transformer import WordTransformer, WordTokenizer
+    from subword_transformer import SubwordTransformer, SubwordTokenizer
     IMPORTS_SUCCESSFUL = True
     logger.info("✅ Successfully imported required modules")
 except ImportError as e:
     logger.error(f"❌ Import error: {e}")
     logger.error("Running debug checks to identify the issue...")
     IMPORTS_SUCCESSFUL = False
-    # We'll handle this in main() function
 
 @contextmanager
 def memory_cleanup():
@@ -284,16 +325,16 @@ def setup_device():
 
 device = setup_device()
 
-class OnDemandWordDataset(Dataset):
-    """Memory-efficient dataset that generates sequences on-the-fly."""
+class OnDemandSubwordDataset(Dataset):
+    """Memory-efficient dataset that generates subword sequences on-the-fly."""
     
-    def __init__(self, texts: List[str], tokenizer: WordTokenizer, seq_length: int, 
+    def __init__(self, texts: List[str], tokenizer: SubwordTokenizer, seq_length: int, 
                  overlap_ratio: float = 0.5, min_seq_length: int = 16):
         self.tokenizer = tokenizer
         self.seq_length = seq_length
         self.min_seq_length = min_seq_length
         
-        logger.info("Creating on-demand word-level dataset...")
+        logger.info("Creating on-demand subword-level dataset...")
         
         # Don't store all sequences - just store text indices and positions
         self.text_data = []
@@ -421,8 +462,8 @@ def load_and_process_data(data_path: str, max_samples: Optional[int] = None) -> 
                         continue
                     
                     # Truncate very long texts to save memory
-                    if word_count > 100:  # Much shorter limit
-                        text = ' '.join(text.split()[:100])
+                    if word_count > 150:  # Slightly longer for subword tokenization
+                        text = ' '.join(text.split()[:150])
                     
                     # Get role and add appropriate tokens
                     role = record.get("role", "").lower()
@@ -614,7 +655,7 @@ def train_epoch(model, dataloader, criterion, optimizer, scheduler, epoch: int,
 
 def generate_sample_text(model, tokenizer, prompt: str = "<user> Hello", 
                         max_length: int = 20, temperature: float = 0.8) -> str:
-    """Ultra lightweight text generation."""
+    """Ultra lightweight text generation with subword tokenizer."""
     model.eval()
     
     try:
@@ -650,65 +691,65 @@ def generate_sample_text(model, tokenizer, prompt: str = "<user> Hello",
         with memory_cleanup():
             pass
 
-def get_ultra_conservative_config():
-    """Get extremely conservative configuration to avoid OOM."""
+def get_subword_conservative_config():
+    """Get conservative configuration optimized for subword tokenization."""
     
     if device.type == 'cuda':
-        # Small model for CUDA
+        # Medium model for CUDA - subword allows smaller vocab
         model_config = ModelConfig(
-            vocab_size=32000,
-            hidden_size=2048,
+            vocab_size=16000,      # Smaller vocab due to subword efficiency
+            hidden_size=2048,       # Slightly smaller
             num_layers=24,
             num_heads=16,
-            seq_length=1024,      # Very short
+            seq_length=1024,        # Shorter context
             dropout=0.1,
-            model_type="WordTransformer",
-            tokenizer_type="word"
+            model_type="SubwordTransformer",
+            tokenizer_type="subword"
         )
-        batch_size = 32
-        max_samples = 5000
+        batch_size = 32        # Smaller due to longer sequences from subwords
+        max_samples = 8000
         
     elif device.type == 'mps':
-        # Tiny model for MPS
+        # Small model for MPS
         model_config = ModelConfig(
-            vocab_size=4000,
-            hidden_size=128,
-            num_layers=3,
-            num_heads=4,
-            seq_length=128,      # Very short
+            vocab_size=8000,       # Very compact vocab
+            hidden_size=256,
+            num_layers=6,
+            num_heads=8,
+            seq_length=256,
             dropout=0.1,
-            model_type="WordTransformer",
-            tokenizer_type="word"
+            model_type="SubwordTransformer",
+            tokenizer_type="subword"
         )
-        batch_size = 32
-        max_samples = 2000
+        batch_size = 8
+        max_samples = 3000
         
     else:  # CPU
         # Minimal model for CPU
         model_config = ModelConfig(
             vocab_size=4000,
             hidden_size=128,
-            num_layers=2,
-            num_heads=2,
+            num_layers=4,
+            num_heads=4,
             seq_length=128,
             dropout=0.1,
-            model_type="WordTransformer",
-            tokenizer_type="word"
+            model_type="SubwordTransformer",
+            tokenizer_type="subword"
         )
-        batch_size = 32
-        max_samples = 1000
+        batch_size = 4
+        max_samples = 1500
     
     training_config = TrainingConfig(
-        learning_rate=1e-3,      # Higher LR for faster training
+        learning_rate=5e-4,      # Slightly higher LR for subword
         weight_decay=0.01,
         batch_size=batch_size,
-        gradient_accumulation_steps=8,  # Simulate larger batches
-        max_epochs=200,           # Fewer epochs
+        gradient_accumulation_steps=16,  # Larger accumulation for effective batch size
+        max_epochs=100,          # More epochs for convergence
         warmup_ratio=0.1,
         save_every=1000,
         eval_every=500,
         max_grad_norm=1.0,
-        label_smoothing=0.0,     # Disable to save memory
+        label_smoothing=0.0,
         beta1=0.9,
         beta2=0.95
     )
@@ -720,7 +761,7 @@ def validate_training_setup():
     required_files = [
         "oasst1_data/oasst1_train.jsonl",
         "model_manager.py",
-        "word_transformer.py"
+        "subword_transformer.py"
     ]
     
     missing_files = []
@@ -741,9 +782,9 @@ def validate_training_setup():
     return True
 
 def main():
-    """Main training function with ultra-conservative memory usage."""
+    """Main training function with subword tokenization."""
     
-    logger.info("🚀 Starting Ultra Memory-Optimized OASST1 Word-Level Transformer Training")
+    logger.info("🚀 Starting Subword-Level OASST1 Transformer Training")
     logger.info("=" * 70)
     logger.info(f"Initial memory: {get_memory_usage()}")
     
@@ -756,12 +797,11 @@ def main():
         
         # Try to import again after debug
         try:
-            # Use global keyword to avoid local variable issue
             global ModelManager, ModelConfig, TrainingConfig, ModelMetadata
-            global WordTransformer, WordTokenizer
+            global SubwordTransformer, SubwordTokenizer
             
             from model_manager import ModelManager, ModelConfig, TrainingConfig, ModelMetadata
-            from word_transformer import WordTransformer, WordTokenizer
+            from subword_transformer import SubwordTransformer, SubwordTokenizer
             logger.info("✅ Successfully imported modules after debug")
             
         except ImportError as e:
@@ -773,11 +813,12 @@ def main():
         logger.error("❌ Training setup validation failed!")
         return 1
     
-    # Get ultra-conservative configuration
-    model_config, training_config, max_samples = get_ultra_conservative_config()
+    # Get conservative configuration for subword tokenization
+    model_config, training_config, max_samples = get_subword_conservative_config()
     
-    logger.info(f"Using ultra-conservative config:")
+    logger.info(f"Using subword-optimized config:")
     logger.info(f"  Model size: {model_config.hidden_size}x{model_config.num_layers}")
+    logger.info(f"  Vocab size: {model_config.vocab_size} (subword)")
     logger.info(f"  Batch size: {training_config.batch_size}")
     logger.info(f"  Max samples: {max_samples}")
     logger.info(f"  Sequence length: {model_config.seq_length}")
@@ -787,7 +828,7 @@ def main():
     
     try:
         # Load and process OASST1 training data with strict limits
-        logger.info("📚 Loading OASST1 dataset (ultra-limited)...")
+        logger.info("📚 Loading OASST1 dataset (subword-optimized)...")
         texts = load_and_process_data("oasst1_data/oasst1_train.jsonl", max_samples)
         
         if len(texts) == 0:
@@ -795,28 +836,41 @@ def main():
         
         logger.info(f"Memory after data loading: {get_memory_usage()}")
         
-        # Create and train tokenizer with very small vocabulary
-        logger.info("🔤 Training ultra-compact word-level tokenizer...")
-        tokenizer = WordTokenizer()
+        # Create and train BPE tokenizer
+        logger.info("🔤 Training BPE subword tokenizer...")
+        tokenizer = SubwordTokenizer()
         
-        # Use smaller sample for tokenizer
-        sample_size = min(2000, len(texts))
+        # Use subset for tokenizer training
+        sample_size = min(3000, len(texts))
         sample_texts = texts[:sample_size]
         all_text = "\n".join(sample_texts)
         
-        tokenizer.train_from_text(all_text, vocab_size=model_config.vocab_size)
+        # Train BPE with target vocabulary size
+        tokenizer.train_from_text(all_text, vocab_size=model_config.vocab_size, min_freq=2)
         model_config.vocab_size = tokenizer.vocab_size()
         
-        logger.info(f"✅ Tokenizer trained - Vocabulary size: {model_config.vocab_size:,}")
+        logger.info(f"✅ BPE tokenizer trained - Vocabulary size: {model_config.vocab_size:,}")
+        logger.info(f"✅ Number of BPE merges: {len(tokenizer.merges):,}")
         logger.info(f"Memory after tokenizer: {get_memory_usage()}")
         
+        # Test tokenizer with sample
+        test_text = "Hello, this is a test of subword tokenization!"
+        test_tokens = tokenizer.tokenize(test_text)
+        test_encoded = tokenizer.encode(test_text)
+        test_decoded = tokenizer.decode(test_encoded)
+        
+        logger.info(f"📝 Tokenizer test:")
+        logger.info(f"   Original: {test_text}")
+        logger.info(f"   Subwords: {test_tokens[:10]}{'...' if len(test_tokens) > 10 else ''}")
+        logger.info(f"   Decoded: {test_decoded}")
+        
         # Create on-demand dataset
-        logger.info("📦 Creating on-demand training dataset...")
-        dataset = OnDemandWordDataset(texts, tokenizer, model_config.seq_length)
+        logger.info("📦 Creating on-demand subword training dataset...")
+        dataset = OnDemandSubwordDataset(texts, tokenizer, model_config.seq_length)
         
         logger.info(f"Memory after dataset creation: {get_memory_usage()}")
         
-        # Ultra-conservative dataloader settings
+        # Conservative dataloader settings
         dataloader = DataLoader(
             dataset,
             batch_size=training_config.batch_size,
@@ -824,15 +878,15 @@ def main():
             num_workers=0,              # Critical: no multiprocessing
             pin_memory=False,           # Critical: disable pin memory
             drop_last=True,
-            persistent_workers=False    # Make sure this is False
+            persistent_workers=False
         )
         
         logger.info(f"📊 Dataset ready: {len(dataset):,} sequences, {len(dataloader):,} batches/epoch")
         
-        # Initialize ultra-small model
-        logger.info("🧠 Initializing ultra-compact model...")
+        # Initialize model
+        logger.info("🧠 Initializing subword transformer model...")
         with memory_cleanup():
-            model = WordTransformer(model_config).to(device)
+            model = SubwordTransformer(model_config).to(device)
         
         total_params, trainable_params = count_parameters(model)
         model_size_mb = total_params * 4 / 1024**2
@@ -861,7 +915,7 @@ def main():
         logger.info(f"Memory before training: {get_memory_usage()}")
         
         # Training loop
-        logger.info("🚀 Starting ultra-optimized training...")
+        logger.info("🚀 Starting subword-optimized training...")
         training_start = time.time()
         best_loss = float('inf')
         
@@ -901,19 +955,20 @@ def main():
                     with memory_cleanup():
                         # Create metadata
                         metadata = ModelMetadata(
-                            model_name="OASST1_WordTransformer_UltraCompact",
+                            model_name="OASST1_SubwordTransformer",
                             version=f"v1.0_epoch_{epoch}",
                             created_at=datetime.now().isoformat(),
                             last_modified=datetime.now().isoformat(),
                             model_config=model_config,
                             training_config=training_config,
                             dataset_info={
-                                "name": "OpenAssistant OASST1 (Ultra-Optimized)",
+                                "name": "OpenAssistant OASST1 (Subword-Optimized)",
                                 "num_samples": len(texts),
                                 "vocab_size": model_config.vocab_size,
                                 "seq_length": model_config.seq_length,
                                 "source": "oasst1_train.jsonl",
-                                "preprocessing": "Ultra-compact word-level tokenization"
+                                "preprocessing": "BPE subword tokenization",
+                                "num_merges": len(tokenizer.merges)
                             },
                             performance_metrics={
                                 "loss": avg_loss,
@@ -932,8 +987,8 @@ def main():
                             cuda_version=torch.version.cuda if device.type == 'cuda' else None,
                             model_hash="",
                             tokenizer_hash="",
-                            notes=f"Ultra-compact OASST1 word-level transformer. Trained on {len(texts):,} samples with minimal memory usage. Best model at epoch {epoch}.",
-                            tags=["oasst1", "word-level", "transformer", "ultra-compact", "best"]
+                            notes=f"Subword-level OASST1 transformer with BPE tokenization. Trained on {len(texts):,} samples. Vocabulary size: {model_config.vocab_size:,} with {len(tokenizer.merges):,} BPE merges. Best model at epoch {epoch}.",
+                            tags=["oasst1", "subword", "bpe", "transformer", "best"]
                         )
                         
                         model_id = model_manager.save_model(model, tokenizer, metadata, optimizer, scheduler)
@@ -960,10 +1015,11 @@ def main():
         # Training completion
         total_time = time.time() - training_start
         logger.info("=" * 70)
-        logger.info("✅ Ultra-optimized training completed successfully!")
+        logger.info("✅ Subword-optimized training completed successfully!")
         logger.info(f"🎯 Best loss achieved: {best_loss:.4f}")
         logger.info(f"🎯 Best perplexity: {calculate_perplexity(best_loss):.2f}")
         logger.info(f"⏱️  Total training time: {total_time/3600:.2f} hours")
+        logger.info(f"🔤 Final vocabulary: {model_config.vocab_size:,} tokens with {len(tokenizer.merges):,} BPE merges")
         logger.info(f"🚀 Average processing speed: {len(dataset) * model_config.seq_length * training_config.max_epochs / total_time:.0f} tokens/sec")
         logger.info(f"💾 Final memory state: {get_memory_usage()}")
         logger.info("=" * 70)

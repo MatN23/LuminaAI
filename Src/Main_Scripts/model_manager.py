@@ -14,7 +14,6 @@ from dataclasses import dataclass, asdict
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import os
 import warnings
 
 # Suppress TF CUDA factory warnings
@@ -51,8 +50,8 @@ class ModelConfig:
     num_heads: int = 16
     seq_length: int = 1024
     dropout: float = 0.1
-    model_type: str = "WordTransformer"
-    tokenizer_type: str = "word"
+    model_type: str = "SubwordTransformer"
+    tokenizer_type: str = "subword"
 
 @dataclass
 class TrainingConfig:
@@ -114,10 +113,10 @@ class ModelMetadata:
             self.tags = []
 
 # Custom config class to avoid AutoConfig issues
-class WordTransformerConfig(PretrainedConfig):
-    """Custom configuration class for WordTransformer."""
+class SubwordTransformerConfig(PretrainedConfig):
+    """Custom configuration class for SubwordTransformer."""
     
-    model_type = "word_transformer"
+    model_type = "subword_transformer"
     
     def __init__(
         self,
@@ -131,9 +130,9 @@ class WordTransformerConfig(PretrainedConfig):
         initializer_range=0.02,
         layer_norm_eps=1e-12,
         pad_token_id=0,
-        bos_token_id=1,
-        eos_token_id=2,
-        unk_token_id=3,
+        bos_token_id=2,
+        eos_token_id=3,
+        unk_token_id=1,
         use_cache=True,
         is_decoder=True,
         **kwargs
@@ -161,7 +160,7 @@ class WordTransformerConfig(PretrainedConfig):
 class HuggingFaceCompatibleModel(PreTrainedModel):
     """Wrapper to make our model compatible with HuggingFace/LM Studio."""
     
-    config_class = WordTransformerConfig
+    config_class = SubwordTransformerConfig
     
     def __init__(self, config, model):
         super().__init__(config)
@@ -225,10 +224,10 @@ class HuggingFaceCompatibleModel(PreTrainedModel):
         return generated
 
 class HuggingFaceCompatibleTokenizer(PreTrainedTokenizer):
-    """Wrapper to make our tokenizer compatible with HuggingFace."""
+    """Wrapper to make our subword tokenizer compatible with HuggingFace."""
     
-    def __init__(self, word_tokenizer, **kwargs):
-        self.word_tokenizer = word_tokenizer
+    def __init__(self, subword_tokenizer, **kwargs):
+        self.subword_tokenizer = subword_tokenizer
         super().__init__(
             bos_token="<s>",
             eos_token="</s>",
@@ -239,22 +238,25 @@ class HuggingFaceCompatibleTokenizer(PreTrainedTokenizer):
     
     @property
     def vocab_size(self):
-        return self.word_tokenizer.vocab_size()
+        return self.subword_tokenizer.vocab_size()
     
     def get_vocab(self):
-        return self.word_tokenizer.vocab
+        return self.subword_tokenizer.vocab
     
     def _tokenize(self, text):
-        return self.word_tokenizer.tokenize(text)
+        return self.subword_tokenizer.tokenize(text)
     
     def _convert_token_to_id(self, token):
-        return self.word_tokenizer.vocab.get(token, self.word_tokenizer.vocab.get("<unk>", 0))
+        return self.subword_tokenizer.vocab.get(token, self.subword_tokenizer.vocab.get("<unk>", 1))
     
     def _convert_id_to_token(self, index):
-        return self.word_tokenizer.reverse_vocab.get(index, "<unk>")
+        return self.subword_tokenizer.id_to_token.get(index, "<unk>")
     
     def convert_tokens_to_string(self, tokens):
-        return " ".join(tokens).replace(" ##", "")
+        # Join tokens and handle end-of-word markers
+        text = "".join(tokens)
+        text = text.replace("</w>", " ")
+        return text.strip()
     
     def build_inputs_with_special_tokens(self, token_ids_0, token_ids_1=None):
         bos = [self.bos_token_id] if self.bos_token_id is not None else []
@@ -270,13 +272,21 @@ class HuggingFaceCompatibleTokenizer(PreTrainedTokenizer):
             os.makedirs(save_directory)
         
         vocab_file = os.path.join(save_directory, "vocab.json")
-        with open(vocab_file, "w", encoding="utf-8") as f:
-            json.dump(self.word_tokenizer.vocab, f, ensure_ascii=False, indent=2)
+        merges_file = os.path.join(save_directory, "merges.txt")
         
-        return (vocab_file,)
+        # Save vocab
+        with open(vocab_file, "w", encoding="utf-8") as f:
+            json.dump(self.subword_tokenizer.vocab, f, ensure_ascii=False, indent=2)
+        
+        # Save merges
+        with open(merges_file, "w", encoding="utf-8") as f:
+            for pair in self.subword_tokenizer.merges:
+                f.write(f"{pair[0]} {pair[1]}\n")
+        
+        return (vocab_file, merges_file)
 
 class ModelManager:
-    """Enhanced model management system with LM Studio compatibility."""
+    """Enhanced model management system with LM Studio compatibility and subword tokenizer support."""
     
     def __init__(self, models_dir: str = "models"):
         self.models_dir = Path(models_dir)
@@ -286,7 +296,7 @@ class ModelManager:
         (self.models_dir / "checkpoints").mkdir(exist_ok=True)
         (self.models_dir / "metadata").mkdir(exist_ok=True)
         (self.models_dir / "tokenizers").mkdir(exist_ok=True)
-        (self.models_dir / "lm_studio").mkdir(exist_ok=True)  # New LM Studio directory
+        (self.models_dir / "lm_studio").mkdir(exist_ok=True)
         
         logger.info(f"ModelManager initialized with directory: {self.models_dir}")
         if HF_AVAILABLE:
@@ -320,9 +330,32 @@ class ModelManager:
         version_clean = metadata.version.replace(" ", "_").replace(".", "_").lower()
         return f"{name_clean}_{version_clean}_{timestamp}"
     
+    def _save_tokenizer_files(self, tokenizer, model_dir: Path) -> None:
+        """Save tokenizer in multiple formats for compatibility."""
+        # Save original pickle format
+        tokenizer_path = model_dir / "tokenizer.pkl"
+        with open(tokenizer_path, 'wb') as f:
+            pickle.dump(tokenizer, f)
+        
+        # Save vocabulary and merges in text format
+        vocab_path = model_dir / "vocab.json"
+        merges_path = model_dir / "merges.txt"
+        
+        with open(vocab_path, 'w', encoding='utf-8') as f:
+            json.dump(tokenizer.vocab, f, indent=2, ensure_ascii=False)
+        
+        with open(merges_path, 'w', encoding='utf-8') as f:
+            for pair in tokenizer.merges:
+                f.write(f"{pair[0]} {pair[1]}\n")
+        
+        logger.info(f"Tokenizer saved in multiple formats:")
+        logger.info(f"  Pickle: {tokenizer_path}")
+        logger.info(f"  Vocab: {vocab_path}")
+        logger.info(f"  Merges: {merges_path}")
+    
     def _save_for_lm_studio(self, model: nn.Module, tokenizer, metadata: ModelMetadata, 
                            model_id: str) -> bool:
-        """Save model in LM Studio compatible format."""
+        """Save model in LM Studio compatible format with subword tokenizer."""
         if not HF_AVAILABLE:
             logger.warning("Skipping LM Studio save - dependencies not available")
             return False
@@ -334,8 +367,8 @@ class ModelManager:
             
             logger.info(f"💾 Saving LM Studio compatible model: {model_id}")
             
-            # Create HuggingFace compatible config using our custom config class
-            hf_config = WordTransformerConfig(
+            # Create HuggingFace compatible config
+            hf_config = SubwordTransformerConfig(
                 vocab_size=metadata.model_config.vocab_size,
                 hidden_size=metadata.model_config.hidden_size,
                 num_hidden_layers=metadata.model_config.num_layers,
@@ -346,12 +379,12 @@ class ModelManager:
                 initializer_range=0.02,
                 layer_norm_eps=1e-12,
                 pad_token_id=tokenizer.vocab.get("<pad>", 0),
-                bos_token_id=tokenizer.vocab.get("<s>", 1),
-                eos_token_id=tokenizer.vocab.get("</s>", 2),
-                unk_token_id=tokenizer.vocab.get("<unk>", 3),
+                bos_token_id=tokenizer.vocab.get("<s>", 2),
+                eos_token_id=tokenizer.vocab.get("</s>", 3),
+                unk_token_id=tokenizer.vocab.get("<unk>", 1),
                 use_cache=True,
                 is_decoder=True,
-                architectures=["WordTransformerForCausalLM"],
+                architectures=["SubwordTransformerForCausalLM"],
                 torch_dtype="float32",
                 transformers_version="4.21.0"
             )
@@ -388,14 +421,14 @@ class ModelManager:
             model_card = {
                 "model_name": metadata.model_name,
                 "model_type": "causal-lm",
-                "architecture": "WordTransformer",
+                "architecture": "SubwordTransformer",
+                "tokenizer_type": "BPE (Byte Pair Encoding)",
                 "vocab_size": metadata.model_config.vocab_size,
                 "context_length": metadata.model_config.seq_length,
                 "hidden_size": metadata.model_config.hidden_size,
                 "num_layers": metadata.model_config.num_layers,
                 "num_heads": metadata.model_config.num_heads,
                 "parameters": f"{metadata.total_parameters:,}",
-                "tokenizer_type": "word-level",
                 "training_data": metadata.dataset_info.get("source", "Unknown"),
                 "license": "Custom License",
                 "usage": "Text generation and conversation",
@@ -428,15 +461,22 @@ class ModelManager:
             # Create README for LM Studio users
             readme_content = f"""# {metadata.model_name}
 
-A word-level transformer model for conversational AI.
+A subword-level transformer model using BPE tokenization for conversational AI.
 
 ## Model Details
-- **Architecture**: Word-level Transformer
+- **Architecture**: Subword-level Transformer with BPE
 - **Parameters**: {metadata.total_parameters:,}
 - **Context Length**: {metadata.model_config.seq_length}
 - **Vocabulary Size**: {metadata.model_config.vocab_size:,}
+- **Tokenizer**: Byte Pair Encoding (BPE)
 - **Training Loss**: {metadata.best_loss:.4f}
 - **Perplexity**: {metadata.best_perplexity:.2f}
+
+## Subword Tokenization Benefits
+- Better handling of out-of-vocabulary words
+- More efficient representation of morphologically rich languages
+- Reduced vocabulary size while maintaining semantic understanding
+- Better generalization to unseen word forms
 
 ## Usage in LM Studio
 
@@ -464,8 +504,8 @@ A word-level transformer model for conversational AI.
 <user> Hello! How are you today? <bot>
 Hello! I'm doing well, thank you for asking. How can I help you today?
 
-<user> Can you explain what artificial intelligence is? <bot>
-Artificial intelligence (AI) refers to computer systems that can perform tasks typically requiring human intelligence...
+<user> Can you explain what subword tokenization is? <bot>
+Subword tokenization is a technique that breaks text into smaller units than words but larger than characters...
 ```
 
 ## Training Details
@@ -474,6 +514,12 @@ Artificial intelligence (AI) refers to computer systems that can perform tasks t
 - **Epochs**: {metadata.epochs_trained}
 - **Hardware**: {metadata.hardware_used}
 - **Created**: {metadata.created_at}
+
+## Tokenization Examples
+The BPE tokenizer learns to merge frequent character pairs, creating subwords like:
+- "playing" → ["play", "ing</w>"]
+- "unhappy" → ["un", "happy</w>"]
+- "tokenization" → ["token", "ization</w>"]
 
 ## Notes
 {metadata.notes}
@@ -484,46 +530,6 @@ Custom License - See original training repository for details.
             
             with open(lm_studio_dir / "README.md", "w") as f:
                 f.write(readme_content)
-            
-            # Create GGUF conversion script
-            conversion_script = f"""#!/bin/bash
-# Convert {metadata.model_name} to GGUF format for optimized inference
-
-echo "Converting {metadata.model_name} to GGUF format..."
-
-# Requires llama.cpp tools to be installed and in PATH
-# Download from: https://github.com/ggerganov/llama.cpp
-
-# Convert to GGUF
-if command -v convert_hf_to_gguf.py &> /dev/null; then
-    python convert_hf_to_gguf.py . --outfile {model_id}.gguf --outtype f16
-    echo "✅ Base GGUF created: {model_id}.gguf"
-    
-    # Create quantized versions
-    if command -v quantize &> /dev/null; then
-        echo "Creating quantized versions..."
-        ./quantize {model_id}.gguf {model_id}_q4_0.gguf q4_0
-        ./quantize {model_id}.gguf {model_id}_q4_1.gguf q4_1  
-        ./quantize {model_id}.gguf {model_id}_q5_0.gguf q5_0
-        ./quantize {model_id}.gguf {model_id}_q5_1.gguf q5_1
-        ./quantize {model_id}.gguf {model_id}_q8_0.gguf q8_0
-        echo "✅ Quantized models created!"
-    else
-        echo "⚠️ 'quantize' tool not found - skipping quantization"
-    fi
-else
-    echo "❌ convert_hf_to_gguf.py not found"
-    echo "Please install llama.cpp tools first"
-fi
-
-echo "Conversion complete!"
-"""
-            
-            with open(lm_studio_dir / "convert_to_gguf.sh", "w") as f:
-                f.write(conversion_script)
-            
-            # Make script executable
-            os.chmod(lm_studio_dir / "convert_to_gguf.sh", 0o755)
             
             logger.info(f"✅ LM Studio model saved: {lm_studio_dir}")
             return True
@@ -553,10 +559,8 @@ echo "Conversion complete!"
                 'model_id': model_id
             }, model_path)
             
-            # Save tokenizer
-            tokenizer_path = model_dir / "tokenizer.pkl"
-            with open(tokenizer_path, 'wb') as f:
-                pickle.dump(tokenizer, f)
+            # Save tokenizer in multiple formats
+            self._save_tokenizer_files(tokenizer, model_dir)
             
             # Save optimizer and scheduler if provided
             if optimizer:
@@ -607,6 +611,7 @@ echo "Conversion complete!"
             logger.info(f"✅ Model saved successfully: {model_id}")
             logger.info(f"   Size: {metadata.model_size_mb:.2f} MB")
             logger.info(f"   Parameters: {metadata.total_parameters:,}")
+            logger.info(f"   Tokenizer: {metadata.model_config.tokenizer_type} (BPE)")
             logger.info(f"   Original format: {model_dir}")
             if lm_studio_success:
                 logger.info(f"   LM Studio format: {self.models_dir / 'lm_studio' / model_id}")
@@ -652,14 +657,43 @@ echo "Conversion complete!"
             metadata_dict['training_config'] = TrainingConfig(**metadata_dict['training_config'])
             metadata = ModelMetadata(**metadata_dict)
             
-            # Load tokenizer
-            tokenizer_path = model_dir / "tokenizer.pkl" 
-            with open(tokenizer_path, 'rb') as f:
-                tokenizer = pickle.load(f)
+            # Load tokenizer - try multiple formats
+            tokenizer = None
+            
+            # Try pickle format first (most complete)
+            tokenizer_pickle_path = model_dir / "tokenizer.pkl"
+            if tokenizer_pickle_path.exists():
+                with open(tokenizer_pickle_path, 'rb') as f:
+                    tokenizer = pickle.load(f)
+            else:
+                # Fallback: reconstruct from vocab and merges files
+                vocab_path = model_dir / "vocab.json"
+                merges_path = model_dir / "merges.txt"
+                
+                if vocab_path.exists() and merges_path.exists():
+                    from subword_transformer import SubwordTokenizer
+                    
+                    # Load vocab
+                    with open(vocab_path, 'r', encoding='utf-8') as f:
+                        vocab = json.load(f)
+                    
+                    # Load merges
+                    merges = []
+                    with open(merges_path, 'r', encoding='utf-8') as f:
+                        for line in f:
+                            line = line.strip()
+                            if line:
+                                parts = line.split()
+                                if len(parts) == 2:
+                                    merges.append((parts[0], parts[1]))
+                    
+                    tokenizer = SubwordTokenizer(vocab, merges)
+                else:
+                    raise FileNotFoundError("No tokenizer files found")
             
             # Load model
-            from word_transformer import WordTransformer
-            model = WordTransformer(metadata.model_config)
+            from subword_transformer import SubwordTransformer
+            model = SubwordTransformer(metadata.model_config)
             
             model_path = model_dir / "model.pt"
             checkpoint = torch.load(model_path, map_location='cpu')
@@ -669,6 +703,7 @@ echo "Conversion complete!"
             logger.info(f"   Name: {metadata.model_name} {metadata.version}")
             logger.info(f"   Parameters: {metadata.total_parameters:,}")
             logger.info(f"   Best Loss: {metadata.best_loss:.4f}")
+            logger.info(f"   Tokenizer: {metadata.model_config.tokenizer_type} (vocab: {tokenizer.vocab_size():,})")
             
             # Check if LM Studio version exists
             lm_studio_path = self.models_dir / "lm_studio" / model_id
@@ -712,7 +747,8 @@ echo "Conversion complete!"
                         'tags': metadata_dict.get('tags', []),
                         'hardware': metadata_dict['hardware_used'],
                         'notes': metadata_dict.get('notes', ''),
-                        'lm_studio_ready': lm_studio_available
+                        'lm_studio_ready': lm_studio_available,
+                        'tokenizer_type': metadata_dict.get('model_config', {}).get('tokenizer_type', 'subword')
                     }
                     
                     models.append(model_info)
@@ -886,7 +922,7 @@ echo "Conversion complete!"
             # Create comprehensive README
             readme_content = f"""# Exported Model: {model_id}
 
-This export contains a trained word-level transformer model.
+This export contains a trained subword-level transformer model with BPE tokenization.
 
 ## Export Contents
 
@@ -895,7 +931,7 @@ This export contains a trained word-level transformer model.
             if "original" in exported_formats:
                 readme_content += """### Original Format (`original/`)
 - Compatible with the original training framework
-- Contains: model.pt, tokenizer.pkl, metadata.json
+- Contains: model.pt, tokenizer.pkl, vocab.json, merges.txt, metadata.json
 - Use with: Your custom inference scripts
 
 """
@@ -903,7 +939,7 @@ This export contains a trained word-level transformer model.
             if "lm_studio" in exported_formats:
                 readme_content += """### LM Studio Format (`lm_studio/`)
 - Ready to use with LM Studio
-- Contains: HuggingFace compatible files
+- Contains: HuggingFace compatible files with BPE tokenizer
 - Use with: LM Studio, Ollama, or other HF-compatible tools
 
 #### LM Studio Usage:
@@ -917,6 +953,13 @@ This export contains a trained word-level transformer model.
 - **Export Date**: {export_info['exported_at']}
 - **Model ID**: {model_id}
 - **Formats**: {', '.join(exported_formats)}
+- **Tokenizer**: BPE (Byte Pair Encoding)
+
+## Subword Tokenization
+This model uses BPE tokenization which provides:
+- Better handling of out-of-vocabulary words
+- More efficient representation of morphologically rich languages
+- Reduced vocabulary size while maintaining semantic understanding
 
 ## License
 Custom License - See original training repository for details.
@@ -986,6 +1029,7 @@ Custom License - See original training repository for details.
                                 'parameters': model_card.get('parameters', 'Unknown'),
                                 'context_length': model_card.get('context_length', 'Unknown'),
                                 'architecture': model_card.get('architecture', 'Unknown'),
+                                'tokenizer_type': model_card.get('tokenizer_type', 'BPE'),
                                 'performance': model_card.get('performance', {}),
                                 'ready_for_lm_studio': True
                             })
@@ -1021,12 +1065,14 @@ Custom License - See original training repository for details.
             print(f"   Name: {best['name']} {best['version']}")
             print(f"   Loss: {best['best_loss']:.4f} (PPL: {best['best_perplexity']:.2f})")
             print(f"   Parameters: {best['parameters']:,}")
+            print(f"   Tokenizer: {best['tokenizer_type'].upper()}")
             print(f"   LM Studio Ready: {'✅' if best['lm_studio_ready'] else '❌'}")
             
             print(f"\n📋 ALL MODELS:")
             for i, model in enumerate(models, 1):
                 status = "🚀" if model['lm_studio_ready'] else "⚠️"
-                print(f"   {i}. {status} {model['name']} - Loss: {model['best_loss']:.4f} - {model['parameters']:,} params")
+                tokenizer_info = f"({model['tokenizer_type'].upper()})"
+                print(f"   {i}. {status} {model['name']} {tokenizer_info} - Loss: {model['best_loss']:.4f} - {model['parameters']:,} params")
         
         if HF_AVAILABLE:
             print(f"\n✅ LM Studio compatibility: ENABLED")

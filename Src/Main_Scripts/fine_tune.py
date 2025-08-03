@@ -19,7 +19,7 @@ import gc
 
 # Import shared components
 from model_manager import ModelManager, ModelConfig, TrainingConfig, ModelMetadata
-from word_transformer import WordTransformer, WordTokenizer
+from Main_Scripts.subword_transformer import WordTransformer, WordTokenizer
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
