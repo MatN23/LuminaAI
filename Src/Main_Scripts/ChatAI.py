@@ -43,6 +43,27 @@ def setup_device():
 
 device = setup_device()
 
+def ensure_tensor_device(tensor, target_device):
+    """Ensure tensor is on the target device."""
+    if tensor.device != target_device:
+        return tensor.to(target_device)
+    return tensor
+
+def validate_tokenizer(tokenizer):
+    """Validate that the tokenizer is working correctly."""
+    test_text = "Hello, how are you?"
+    try:
+        encoded = tokenizer.encode(test_text)
+        decoded = tokenizer.decode(encoded)
+        print(f"🔍 Tokenizer test:")
+        print(f"   Original: {test_text}")
+        print(f"   Encoded: {encoded[:10]}..." if len(encoded) > 10 else f"   Encoded: {encoded}")
+        print(f"   Decoded: {decoded}")
+        return len(encoded) > 0 and decoded.strip()
+    except Exception as e:
+        print(f"❌ Tokenizer validation failed: {e}")
+        return False
+
 # =====================================================================
 # AGENT TOOLS AND CAPABILITIES
 # =====================================================================
@@ -228,65 +249,70 @@ class TaskPlanner:
     def __init__(self, model: WordTransformer, tokenizer: WordTokenizer):
         self.model = model
         self.tokenizer = tokenizer
+        # Ensure model is on correct device
+        self.model = self.model.to(device)
     
     def plan_task(self, task_description: str, available_tools: List[str]) -> List[str]:
         """Decompose a task into actionable steps."""
-        # Create a planning prompt
-        tools_list = ", ".join(available_tools)
-        planning_prompt = f"""<user> Plan the following task step by step:
-Task: {task_description}
-Available tools: {tools_list}
-
-Create a numbered list of specific steps to complete this task. Each step should specify which tool to use and what action to take.
-<bot> Here's a step-by-step plan:
-
+        try:
+            # Create a planning prompt
+            tools_list = ", ".join(available_tools)
+            planning_prompt = f"""Task: {task_description}
+Tools: {tools_list}
+Plan:
 1."""
-        
-        # Generate plan using the model
-        plan_response = self._generate_with_model(planning_prompt, max_length=200)
-        
-        # Parse the response into steps
-        steps = self._parse_plan_response(plan_response)
-        
-        # Fallback if parsing fails
-        if not steps:
-            steps = [f"Execute task: {task_description}"]
-        
-        return steps
+            
+            # Generate plan using the model
+            plan_response = self._generate_with_model(planning_prompt, max_length=100)
+            
+            # Parse the response into steps
+            steps = self._parse_plan_response(plan_response)
+            
+            # Fallback if parsing fails
+            if not steps:
+                steps = [f"Execute task: {task_description}"]
+            
+            return steps
+        except Exception as e:
+            logger.error(f"Error in task planning: {e}")
+            return [f"Execute task: {task_description}"]
     
-    def _generate_with_model(self, prompt: str, max_length: int = 150) -> str:
-        """Generate text using the model."""
+    def _generate_with_model(self, prompt: str, max_length: int = 100) -> str:
+        """Generate text using the model with proper device handling."""
         try:
             self.model.eval()
             with torch.no_grad():
-                input_ids = torch.tensor(self.tokenizer.encode(prompt), dtype=torch.long).unsqueeze(0).to(device)
-                generated = input_ids.clone()
+                input_tokens = self.tokenizer.encode(prompt)
+                if not input_tokens:
+                    return ""
                 
+                input_ids = torch.tensor(input_tokens, dtype=torch.long).unsqueeze(0)
+                input_ids = ensure_tensor_device(input_ids, device)
+                
+                # Simple greedy generation to avoid sampling issues
                 for _ in range(max_length):
-                    if generated.size(1) >= self.model.config.seq_length:
+                    if input_ids.size(1) >= getattr(self.model.config, 'seq_length', 512):
                         break
                     
-                    logits = self.model(generated)
-                    next_token_logits = logits[0, -1, :] / 0.8
-                    probs = F.softmax(next_token_logits, dim=0)
+                    logits = self.model(input_ids)
+                    if hasattr(logits, 'logits'):
+                        logits = logits.logits
                     
-                    # Top-k sampling
-                    top_k_probs, top_k_indices = torch.topk(probs, 50)
-                    top_k_probs = top_k_probs / top_k_probs.sum()
+                    # Use greedy decoding for more stable results
+                    next_token_id = torch.argmax(logits[0, -1, :]).item()
                     
-                    try:
-                        chosen_idx = torch.multinomial(top_k_probs, 1).item()
-                        next_token_id = top_k_indices[chosen_idx].item()
-                    except:
-                        next_token_id = top_k_indices[0].item()
-                    
-                    generated = torch.cat([generated, torch.tensor([[next_token_id]], device=device)], dim=1)
-                    
-                    if next_token_id == self.tokenizer.vocab.get("</s>", -1):
+                    # Check for end token
+                    if next_token_id == self.tokenizer.vocab.get("</s>", -1) or next_token_id == 0:
                         break
+                    
+                    next_token_tensor = torch.tensor([[next_token_id]], device=device)
+                    input_ids = torch.cat([input_ids, next_token_tensor], dim=1)
                 
-                response_ids = generated[0][input_ids.size(1):].tolist()
-                return self.tokenizer.decode(response_ids)
+                # Decode only the generated part
+                generated_tokens = input_ids[0][len(self.tokenizer.encode(prompt)):].tolist()
+                response = self.tokenizer.decode(generated_tokens)
+                return response.strip()
+                    
         except Exception as e:
             logger.error(f"Error in model generation: {e}")
             return ""
@@ -309,7 +335,7 @@ Create a numbered list of specific steps to complete this task. Each step should
             elif line and not steps:  # If no numbered format, just use the content
                 steps.append(line)
         
-        return steps[:5]  # Limit to 5 steps for MVP
+        return steps[:3]  # Limit to 3 steps for MVP
 
 # =====================================================================
 # CORE AGENT CLASS
@@ -319,9 +345,13 @@ class WordLevelAgent:
     """Core agentic AI that can autonomously execute tasks."""
     
     def __init__(self, model: WordTransformer, tokenizer: WordTokenizer, metadata: ModelMetadata):
-        self.model = model
+        self.model = model.to(device)  # Ensure model is on correct device
         self.tokenizer = tokenizer
         self.metadata = metadata
+        
+        # Validate tokenizer
+        if not validate_tokenizer(tokenizer):
+            logger.warning("⚠️ Tokenizer validation failed - responses may be poor quality")
         
         # Initialize tools
         self.tools = {
@@ -526,10 +556,14 @@ class AgenticWordAIChat:
         print("   • /status <task_id> - Check task status")
         print("   • /capabilities - Show agent capabilities")
         print("   • /clear - Clear conversation history")
+        print("   • /debug - Toggle debug mode")
+        print("   • /simple <message> - Simple response without history")
         print("   • /exit - Exit chat")
         print("="*70)
         print(f"🧠 Autonomous mode: {'ON' if self.autonomous_mode else 'OFF'}")
         print("-"*70)
+        
+        debug_mode = False
         
         while True:
             try:
@@ -542,6 +576,11 @@ class AgenticWordAIChat:
                 if user_input.lower() == "/exit":
                     print("👋 Goodbye!")
                     break
+                
+                elif user_input.lower() == "/debug":
+                    debug_mode = not debug_mode
+                    print(f"🔍 Debug mode: {'ON' if debug_mode else 'OFF'}")
+                    continue
                 
                 elif user_input.lower() == "/clear":
                     self.conversation_history = []
@@ -589,6 +628,12 @@ class AgenticWordAIChat:
                         print("❌ Use '/auto on' or '/auto off'")
                     continue
                 
+                elif user_input.startswith("/simple "):
+                    simple_message = user_input[8:].strip()
+                    response = self._generate_simple_response(simple_message, debug_mode)
+                    print(f"🤖 AI: {response}")
+                    continue
+                
                 elif user_input.startswith("/task "):
                     task_description = user_input[6:].strip()
                     if task_description:
@@ -622,7 +667,7 @@ class AgenticWordAIChat:
                 
                 else:
                     # Normal conversational response
-                    response = self._generate_conversational_response(user_input)
+                    response = self._generate_conversational_response(user_input, debug_mode)
                     print(f"🤖 AI: {response}")
                 
                 # Add to conversation history
@@ -630,8 +675,8 @@ class AgenticWordAIChat:
                 self.conversation_history.append(f"<bot> {response if 'response' in locals() else 'Task executed'}")
                 
                 # Trim history
-                if len(self.conversation_history) > 20:
-                    self.conversation_history = self.conversation_history[-20:]
+                if len(self.conversation_history) > 10:  # Reduced history size
+                    self.conversation_history = self.conversation_history[-10:]
             
             except KeyboardInterrupt:
                 print("\n\n👋 Chat interrupted!")
@@ -652,56 +697,163 @@ class AgenticWordAIChat:
         text_lower = text.lower()
         return any(indicator in text_lower for indicator in task_indicators)
     
-    def _generate_conversational_response(self, user_input: str) -> str:
-        """Generate a conversational response."""
+    def _generate_simple_response(self, user_input: str, debug_mode: bool = False) -> str:
+        """Generate a simple response without conversation history."""
         try:
-            # Build context
-            context_parts = self.conversation_history[-6:] if self.conversation_history else []
-            context_parts.append(f"<user> {user_input}")
-            context_parts.append("<bot>")
-            context = " ".join(context_parts)
+            # Very simple prompt
+            prompt = f"Human: {user_input}\nAI:"
             
-            # Generate response using the model
-            self.agent.model.eval()
-            with torch.no_grad():
-                input_ids = torch.tensor(self.agent.tokenizer.encode(context), dtype=torch.long).unsqueeze(0).to(device)
-                generated = input_ids.clone()
-                
-                for _ in range(100):  # Max response length
-                    if generated.size(1) >= self.agent.model.config.seq_length:
-                        break
-                    
-                    logits = self.agent.model(generated)
-                    next_token_logits = logits[0, -1, :] / 0.8
-                    probs = F.softmax(next_token_logits, dim=0)
-                    
-                    # Top-k sampling
-                    top_k_probs, top_k_indices = torch.topk(probs, 50)
-                    top_k_probs = top_k_probs / top_k_probs.sum()
-                    
-                    try:
-                        chosen_idx = torch.multinomial(top_k_probs, 1).item()
-                        next_token_id = top_k_indices[chosen_idx].item()
-                    except:
-                        next_token_id = top_k_indices[0].item()
-                    
-                    generated = torch.cat([generated, torch.tensor([[next_token_id]], device=device)], dim=1)
-                    
-                    if next_token_id == self.agent.tokenizer.vocab.get("</s>", -1):
-                        break
-                
-                response_ids = generated[0][input_ids.size(1):].tolist()
-                response = self.agent.tokenizer.decode(response_ids)
-                
-                # Clean response
-                response = re.sub(r'<[^>]*>', '', response).strip()
-                response = re.sub(r'\s+', ' ', response)
-                
-                return response if response else "I'm not sure how to respond to that."
+            if debug_mode:
+                print(f"🔍 Simple prompt: {prompt}")
+            
+            return self._generate_with_model_safe(prompt, max_tokens=30, debug_mode=debug_mode)
+            
+        except Exception as e:
+            logger.error(f"Error generating simple response: {e}")
+            return "I'm having trouble generating a response. Please try again."
+    
+    def _generate_conversational_response(self, user_input: str, debug_mode: bool = False) -> str:
+        """Generate a conversational response with limited context."""
+        try:
+            # Build minimal context
+            if self.conversation_history:
+                recent_context = " ".join(self.conversation_history[-2:])  # Only last exchange
+                context = f"{recent_context} <user> {user_input}\n<bot>"
+            else:
+                context = f"<user> {user_input}\n<bot>"
+            
+            if debug_mode:
+                print(f"🔍 Context: {context[:100]}...")
+            
+            return self._generate_with_model_safe(context, max_tokens=50, debug_mode=debug_mode)
         
         except Exception as e:
             logger.error(f"Error generating response: {e}")
             return "Sorry, I encountered an error generating a response."
+    
+    def _generate_with_model_safe(self, prompt: str, max_tokens: int = 50, debug_mode: bool = False) -> str:
+        """Safely generate text with extensive error handling and debugging."""
+        try:
+            self.agent.model.eval()
+            
+            with torch.no_grad():
+                # Encode input
+                input_tokens = self.agent.tokenizer.encode(prompt)
+                if not input_tokens:
+                    return "I couldn't process your input."
+                
+                if debug_mode:
+                    print(f"🔍 Input tokens: {len(input_tokens)}")
+                
+                input_ids = torch.tensor(input_tokens, dtype=torch.long).unsqueeze(0)
+                input_ids = ensure_tensor_device(input_ids, device)
+                
+                generated_tokens = []
+                current_input = input_ids
+                
+                for step in range(max_tokens):
+                    try:
+                        # Get model output
+                        with torch.no_grad():
+                            output = self.agent.model(current_input)
+                        
+                        # Handle different output formats
+                        if hasattr(output, 'logits'):
+                            logits = output.logits
+                        elif isinstance(output, tuple):
+                            logits = output[0]
+                        else:
+                            logits = output
+                        
+                        # Get next token (greedy decoding)
+                        next_token_logits = logits[0, -1, :]
+                        next_token_id = torch.argmax(next_token_logits).item()
+                        
+                        # Check for stop conditions
+                        if next_token_id in [0, self.agent.tokenizer.vocab.get("</s>", -1), self.agent.tokenizer.vocab.get("<eos>", -1)]:
+                            break
+                        
+                        # Add token to generated sequence
+                        generated_tokens.append(next_token_id)
+                        
+                        # Update input for next iteration
+                        next_token_tensor = torch.tensor([[next_token_id]], device=device)
+                        current_input = torch.cat([current_input, next_token_tensor], dim=1)
+                        
+                        # Stop if we hit max sequence length
+                        if current_input.size(1) >= getattr(self.agent.model.config, 'seq_length', 512):
+                            break
+                    
+                    except Exception as step_error:
+                        if debug_mode:
+                            print(f"🔍 Step {step} error: {step_error}")
+                        break
+                
+                # Decode generated tokens
+                if generated_tokens:
+                    response = self.agent.tokenizer.decode(generated_tokens)
+                    
+                    # Clean up response
+                    response = response.strip()
+                    response = re.sub(r'<[^>]*>', '', response)  # Remove any XML tags
+                    response = re.sub(r'\s+', ' ', response)     # Normalize whitespace
+                    
+                    # Filter out obvious gibberish patterns
+                    if self._is_gibberish(response):
+                        if debug_mode:
+                            print(f"🔍 Detected gibberish: {response[:50]}...")
+                        return "I'm having trouble generating a coherent response. The model may need more training."
+                    
+                    if debug_mode:
+                        print(f"🔍 Generated: {response}")
+                    
+                    return response if response else "I'm not sure how to respond to that."
+                else:
+                    return "I couldn't generate a response."
+        
+        except Exception as e:
+            if debug_mode:
+                print(f"🔍 Generation error: {e}")
+            logger.error(f"Model generation error: {e}")
+            return "Sorry, I encountered an error while thinking."
+    
+    def _is_gibberish(self, text: str) -> bool:
+        """Detect if generated text is likely gibberish."""
+        if not text or len(text.strip()) < 2:
+            return True
+        
+        # Check for excessive repetition
+        words = text.split()
+        if len(words) > 5:
+            unique_words = len(set(words))
+            if unique_words / len(words) < 0.5:  # More than 50% repetition
+                return True
+        
+        # Check for random character sequences
+        if len(text) > 20 and ' ' not in text:  # Long string without spaces
+            return True
+        
+        # Check for excessive special characters or numbers
+        special_chars = sum(1 for c in text if not c.isalnum() and c not in ' .,!?-')
+        if len(text) > 0 and special_chars / len(text) > 0.3:
+            return True
+        
+        # Check for known gibberish patterns
+        gibberish_patterns = [
+            r'encrypted_text',
+            r'predicted_token',
+            r'ondrop',
+            r'setitems\d+',
+            r'_image[a-z]+',
+            r'alignment absorption',
+            r'\b[a-z]{15,}\b',  # Very long nonsense words
+        ]
+        
+        for pattern in gibberish_patterns:
+            if re.search(pattern, text, re.IGNORECASE):
+                return True
+        
+        return False
 
 # =====================================================================
 # MAIN FUNCTION
@@ -718,18 +870,32 @@ def main():
     print("="*70)
     
     # Initialize model manager
-    model_manager = ModelManager("models")
-    
-    # Check for available models
-    models = model_manager.list_models()
-    if not models:
-        print("❌ No trained models found!")
-        print("\n📝 To get started:")
-        print("   1. Run 'python Train.py' to train a model")
-        print("   2. Then run this script to start the agentic AI")
+    try:
+        model_manager = ModelManager("models")
+    except Exception as e:
+        print(f"❌ Failed to initialize ModelManager: {e}")
+        print("💡 Make sure you have the model_manager.py file and models directory")
         return 1
     
-    print(f"✅ Found {len(models)} trained model(s)")
+    # Check for available models
+    try:
+        models = model_manager.list_models()
+        if not models:
+            print("❌ No trained models found!")
+            print("\n📝 To get started:")
+            print("   1. Run 'python Train.py' to train a model")
+            print("   2. Then run this script to start the agentic AI")
+            return 1
+        
+        print(f"✅ Found {len(models)} trained model(s)")
+        
+        # Show model info
+        for model in models[:3]:  # Show first 3 models
+            print(f"   📁 {model['id']}: {model.get('model_name', 'Unknown')} (loss: {model.get('best_loss', 'N/A'):.4f})")
+    
+    except Exception as e:
+        print(f"❌ Error listing models: {e}")
+        return 1
     
     # Initialize agentic chat
     agentic_chat = AgenticWordAIChat(model_manager)

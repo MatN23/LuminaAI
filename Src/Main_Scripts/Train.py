@@ -2,10 +2,12 @@
 # Licensed under the Custom License below.
 
 import os
+import sys
 import json
 import time
 import math
 import logging
+import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any
@@ -18,18 +20,212 @@ import torch.nn.functional as F
 import gc
 from contextlib import contextmanager
 
-# Import shared components
+# Enhanced logging setup
+def setup_logging():
+    """Setup comprehensive logging."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler('training_debug.log', mode='w')
+        ]
+    )
+    logger = logging.getLogger(__name__)
+    logger.info("🔧 Debug logging initialized")
+    return logger
+
+logger = setup_logging()
+
+def check_environment():
+    """Comprehensive environment check."""
+    logger.info("🔍 Checking environment...")
+    
+    try:
+        # Python version
+        logger.info(f"Python version: {sys.version}")
+        
+        # PyTorch version and setup
+        logger.info(f"PyTorch version: {torch.__version__}")
+        logger.info(f"CUDA available: {torch.cuda.is_available()}")
+        if torch.cuda.is_available():
+            logger.info(f"CUDA version: {torch.version.cuda}")
+            logger.info(f"CUDA device count: {torch.cuda.device_count()}")
+            for i in range(torch.cuda.device_count()):
+                props = torch.cuda.get_device_properties(i)
+                logger.info(f"GPU {i}: {props.name} ({props.total_memory / 1024**3:.1f} GB)")
+        
+        # MPS availability
+        if hasattr(torch.backends, 'mps'):
+            logger.info(f"MPS available: {torch.backends.mps.is_available()}")
+            logger.info(f"MPS built: {torch.backends.mps.is_built()}")
+        
+        # Check current directory and files
+        cwd = Path.cwd()
+        logger.info(f"Current directory: {cwd}")
+        logger.info(f"Directory contents: {list(cwd.iterdir())}")
+        
+        # Check for required files
+        required_files = [
+            "model_manager.py",
+            "word_transformer.py",
+            "oasst1_data/oasst1_train.jsonl"
+        ]
+        
+        for file_path in required_files:
+            path = Path(file_path)
+            exists = path.exists()
+            logger.info(f"Required file {file_path}: {'✅ EXISTS' if exists else '❌ MISSING'}")
+            if exists and path.is_file():
+                size = path.stat().st_size / 1024**2
+                logger.info(f"  Size: {size:.2f} MB")
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ Environment check failed: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return False
+
+def test_imports():
+    """Test all required imports."""
+    logger.info("📦 Testing imports...")
+    
+    import_results = {}
+    
+    # Test basic imports
+    basic_imports = {
+        'torch': lambda: __import__('torch'),
+        'torch.nn': lambda: __import__('torch.nn'),
+        'torch.optim': lambda: __import__('torch.optim'),
+    }
+    
+    for name, import_func in basic_imports.items():
+        try:
+            import_func()
+            import_results[name] = "✅ SUCCESS"
+            logger.info(f"  {name}: ✅")
+        except Exception as e:
+            import_results[name] = f"❌ FAILED: {e}"
+            logger.error(f"  {name}: ❌ {e}")
+    
+    # Test custom imports
+    custom_imports = {
+        'model_manager': 'model_manager',
+        'word_transformer': 'word_transformer'
+    }
+    
+    for name, module in custom_imports.items():
+        try:
+            if module == 'model_manager':
+                from model_manager import ModelManager, ModelConfig, TrainingConfig, ModelMetadata
+                import_results[name] = "✅ SUCCESS"
+                logger.info(f"  {name}: ✅")
+            elif module == 'word_transformer':
+                from word_transformer import WordTransformer, WordTokenizer
+                import_results[name] = "✅ SUCCESS"
+                logger.info(f"  {name}: ✅")
+        except Exception as e:
+            import_results[name] = f"❌ FAILED: {e}"
+            logger.error(f"  {name}: ❌ {e}")
+            logger.error(f"    Traceback: {traceback.format_exc()}")
+    
+    # Check if all critical imports succeeded
+    critical_failed = [name for name, result in import_results.items() if "FAILED" in result]
+    
+    if critical_failed:
+        logger.error(f"❌ Critical imports failed: {critical_failed}")
+        return False, import_results
+    else:
+        logger.info("✅ All imports successful")
+        return True, import_results
+
+def test_data_loading():
+    """Test data loading functionality."""
+    logger.info("📚 Testing data loading...")
+    
+    data_path = Path("oasst1_data/oasst1_train.jsonl")
+    
+    if not data_path.exists():
+        logger.error(f"❌ Data file not found: {data_path}")
+        return False
+    
+    try:
+        # Try to read first few lines
+        line_count = 0
+        valid_lines = 0
+        
+        with open(data_path, 'r', encoding='utf-8') as f:
+            for i, line in enumerate(f):
+                line_count += 1
+                if i >= 10:  # Just test first 10 lines
+                    break
+                
+                try:
+                    line = line.strip()
+                    if line:
+                        record = json.loads(line)
+                        if record.get("text") and record.get("lang") == "en":
+                            valid_lines += 1
+                except:
+                    continue
+        
+        logger.info(f"  Total lines tested: {line_count}")
+        logger.info(f"  Valid lines: {valid_lines}")
+        
+        if valid_lines > 0:
+            logger.info("✅ Data loading test passed")
+            return True
+        else:
+            logger.error("❌ No valid data found")
+            return False
+            
+    except Exception as e:
+        logger.error(f"❌ Data loading test failed: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return False
+
+def run_comprehensive_debug():
+    """Run comprehensive debugging."""
+    logger.info("🚀 Starting comprehensive debug check...")
+    logger.info("=" * 70)
+    
+    # Step 1: Environment check
+    if not check_environment():
+        logger.error("❌ Environment check failed - stopping")
+        return False
+    
+    # Step 2: Import test
+    imports_ok, import_results = test_imports()
+    if not imports_ok:
+        logger.error("❌ Import test failed - stopping")
+        logger.error("Failed imports:")
+        for name, result in import_results.items():
+            if "FAILED" in result:
+                logger.error(f"  {name}: {result}")
+        return False
+    
+    # Step 3: Data loading test
+    if not test_data_loading():
+        logger.error("❌ Data loading test failed - stopping")
+        return False
+    
+    logger.info("=" * 70)
+    logger.info("✅ All debug checks passed! Proceeding with training.")
+    logger.info("=" * 70)
+    return True
+
+# Import shared components with error handling - MOVED TO TOP LEVEL
 try:
     from model_manager import ModelManager, ModelConfig, TrainingConfig, ModelMetadata
     from word_transformer import WordTransformer, WordTokenizer
+    IMPORTS_SUCCESSFUL = True
+    logger.info("✅ Successfully imported required modules")
 except ImportError as e:
-    print(f"Error importing required modules: {e}")
-    print("Please ensure model_manager.py and word_transformer.py are in the same directory")
-    exit(1)
-
-# Setup logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+    logger.error(f"❌ Import error: {e}")
+    logger.error("Running debug checks to identify the issue...")
+    IMPORTS_SUCCESSFUL = False
+    # We'll handle this in main() function
 
 @contextmanager
 def memory_cleanup():
@@ -58,109 +254,111 @@ def get_memory_usage():
         return "CPU mode"
 
 def setup_device():
-    """Setup the best available device with conservative memory settings."""
+    """Setup the best available device with very conservative memory settings."""
+    # Set very conservative memory limits FIRST
     if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available() and torch.backends.mps.is_built():
         device = torch.device("mps")
         logger.info("Using device: MPS (Apple Silicon)")
-        # Conservative memory settings for MPS
-        torch.mps.set_per_process_memory_fraction(0.7)
+        # Very conservative for MPS - it has memory issues
+        torch.mps.set_per_process_memory_fraction(0.4)
+        torch.mps.empty_cache()
     elif torch.cuda.is_available():
         device = torch.device("cuda")
         logger.info(f"Using device: CUDA ({torch.cuda.get_device_name()})")
         total_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
         logger.info(f"CUDA Memory: {total_memory:.1f} GB")
-        # Conservative memory settings
-        torch.cuda.set_per_process_memory_fraction(0.8)
-        # Disable some optimizations that use more memory
+        # Very conservative memory settings
+        torch.cuda.set_per_process_memory_fraction(0.5)  # Only use 50%
+        torch.cuda.empty_cache()
+        # Disable optimizations that use more memory
         torch.backends.cudnn.benchmark = False
         torch.backends.cuda.matmul.allow_tf32 = False
         torch.backends.cudnn.allow_tf32 = False
     else:
         device = torch.device("cpu")
         logger.info("Using device: CPU")
-        torch.set_num_threads(min(4, os.cpu_count() // 2 or 2))
-        torch.set_num_interop_threads(2)
+        torch.set_num_threads(min(2, os.cpu_count() // 4 or 1))  # Very conservative
+        torch.set_num_interop_threads(1)
     
     return device
 
 device = setup_device()
 
-class OptimizedWordDataset(Dataset):
-    """Memory-efficient word-level dataset with smaller sequences."""
+class OnDemandWordDataset(Dataset):
+    """Memory-efficient dataset that generates sequences on-the-fly."""
     
     def __init__(self, texts: List[str], tokenizer: WordTokenizer, seq_length: int, 
-                 overlap_ratio: float = 0.7, min_seq_length: int = 16):
+                 overlap_ratio: float = 0.5, min_seq_length: int = 16):
         self.tokenizer = tokenizer
         self.seq_length = seq_length
         self.min_seq_length = min_seq_length
-        self.sequences = []
         
-        logger.info("Creating memory-optimized word-level dataset...")
+        logger.info("Creating on-demand word-level dataset...")
         
-        # Pre-tokenize with memory-efficient chunking
-        all_tokens = []
+        # Don't store all sequences - just store text indices and positions
+        self.text_data = []
+        self.sequence_positions = []
+        
         valid_texts = 0
-        chunk_size = 1000  # Process texts in smaller chunks
+        for text_idx, text in enumerate(texts):
+            if not text or not text.strip():
+                continue
+                
+            # Pre-tokenize to check length, but don't store tokens
+            tokens = tokenizer.encode(text.strip())
+            if len(tokens) >= self.min_seq_length:
+                # Store positions where we can extract sequences
+                step_size = max(1, int(seq_length * overlap_ratio))
+                
+                # Limit sequences per text to avoid memory explosion
+                max_sequences_per_text = 10
+                sequences_added = 0
+                
+                for start_pos in range(0, len(tokens) - seq_length, step_size):
+                    if start_pos + seq_length + 1 <= len(tokens):
+                        self.sequence_positions.append((text_idx, start_pos))
+                        sequences_added += 1
+                        if sequences_added >= max_sequences_per_text:
+                            break
+                
+                # Only store the text, not pre-tokenized sequences
+                self.text_data.append(text.strip())
+                valid_texts += 1
+                
+                # Limit total dataset size
+                if len(self.sequence_positions) >= 50000:  # Hard limit
+                    break
         
-        for chunk_start in range(0, len(texts), chunk_size):
-            chunk_end = min(chunk_start + chunk_size, len(texts))
-            chunk_texts = texts[chunk_start:chunk_end]
-            
-            logger.info(f"Processing texts {chunk_start+1}-{chunk_end}/{len(texts)}")
-            
-            for text in chunk_texts:
-                if not text or not text.strip():
-                    continue
-                    
-                tokens = tokenizer.encode(text.strip())
-                if len(tokens) >= self.min_seq_length:
-                    all_tokens.extend(tokens + [tokenizer.vocab.get("</s>", 0)])
-                    valid_texts += 1
-            
-            # Periodic memory cleanup
-            if chunk_start % (chunk_size * 5) == 0:
-                gc.collect()
+        if not self.sequence_positions:
+            raise ValueError("No valid sequences created!")
         
-        if not all_tokens:
-            raise ValueError("No valid tokenized sequences found!")
-        
-        logger.info(f"Processed {valid_texts}/{len(texts)} valid texts")
-        logger.info(f"Total tokens: {len(all_tokens):,}")
-        
-        # Create overlapping sequences with memory-efficient approach
-        step_size = max(1, int(seq_length * overlap_ratio))
-        
-        # Limit total sequences to prevent OOM
-        max_sequences = min(100000, (len(all_tokens) - seq_length) // step_size + 1)
-        
-        for i in range(0, len(all_tokens) - seq_length, step_size):
-            if len(self.sequences) >= max_sequences:
-                break
-            if i + seq_length + 1 <= len(all_tokens):
-                self.sequences.append(all_tokens[i:i + seq_length + 1])
-        
-        if not self.sequences:
-            raise ValueError(f"No sequences created! Check seq_length ({seq_length}) vs available tokens ({len(all_tokens)})")
-        
-        logger.info(f"Created {len(self.sequences):,} training sequences (limited to {max_sequences:,})")
-        logger.info(f"Memory usage: ~{len(self.sequences) * seq_length * 4 / 1024**2:.2f} MB")
-        
-        # Clear the large token list to free memory
-        del all_tokens
-        gc.collect()
+        logger.info(f"Created {len(self.sequence_positions):,} sequence positions from {valid_texts} texts")
+        logger.info(f"Memory usage: ~{len(self.sequence_positions) * 8 / 1024**2:.2f} MB (positions only)")
     
     def __len__(self):
-        return len(self.sequences)
+        return len(self.sequence_positions)
     
     def __getitem__(self, idx):
-        seq = self.sequences[idx]
+        # Tokenize on-demand to save memory
+        text_idx, start_pos = self.sequence_positions[idx]
+        text = self.text_data[text_idx]
+        tokens = self.tokenizer.encode(text)
+        
+        # Extract sequence
+        seq = tokens[start_pos:start_pos + self.seq_length + 1]
+        
+        # Pad if necessary
+        if len(seq) < self.seq_length + 1:
+            pad_token = self.tokenizer.vocab.get("<pad>", 0)
+            seq.extend([pad_token] * (self.seq_length + 1 - len(seq)))
+        
         return (
             torch.tensor(seq[:-1], dtype=torch.long),
             torch.tensor(seq[1:], dtype=torch.long)
         )
 
 def load_and_process_data(data_path: str, max_samples: Optional[int] = None) -> List[str]:
-    """Enhanced data loading for OASST2 dataset with better memory management."""
+    """Enhanced data loading for OASST2 dataset with aggressive memory management."""
     data_path = Path(data_path)
     if not data_path.exists():
         raise FileNotFoundError(f"Data file not found: {data_path}")
@@ -176,15 +374,6 @@ def load_and_process_data(data_path: str, max_samples: Optional[int] = None) -> 
     texts = []
     processed_count = 0
     skipped_count = 0
-    stats = {
-        "deleted": 0,
-        "non_english": 0,
-        "empty_text": 0,
-        "short_text": 0,
-        "review_failed": 0,
-        "not_ready": 0,
-        "by_role": {"prompter": 0, "assistant": 0, "unknown": 0}
-    }
     
     try:
         with open(data_path, 'r', encoding='utf-8') as f:
@@ -201,69 +390,59 @@ def load_and_process_data(data_path: str, max_samples: Optional[int] = None) -> 
                     
                     # Skip deleted entries
                     if record.get("deleted", False):
-                        stats["deleted"] += 1
                         skipped_count += 1
                         continue
                     
                     # Filter for English language
                     if record.get("lang") != "en":
-                        stats["non_english"] += 1
                         skipped_count += 1
                         continue
                     
-                    # Skip entries that failed review (OASST2 specific)
+                    # Skip entries that failed review
                     if not record.get("review_result", True):
-                        stats["review_failed"] += 1
                         skipped_count += 1
                         continue
                     
-                    # Only use entries from ready conversation trees (OASST2 specific)
+                    # Only use entries from ready conversation trees
                     if record.get("tree_state") != "ready_for_export":
-                        stats["not_ready"] += 1
                         skipped_count += 1
                         continue
                     
                     # Extract text content
                     text = record.get("text", "").strip()
                     if not text:
-                        stats["empty_text"] += 1
                         skipped_count += 1
                         continue
                     
-                    # Filter very short texts AND very long texts to save memory
+                    # Filter very short texts and very long texts
                     word_count = len(text.split())
                     if word_count < 3:
-                        stats["short_text"] += 1
                         skipped_count += 1
                         continue
                     
-                    # Skip extremely long texts to save memory
-                    if word_count > 500:
-                        text = ' '.join(text.split()[:500])  # Truncate
+                    # Truncate very long texts to save memory
+                    if word_count > 100:  # Much shorter limit
+                        text = ' '.join(text.split()[:100])
                     
                     # Get role and add appropriate tokens
                     role = record.get("role", "").lower()
-                    stats["by_role"][role] = stats["by_role"].get(role, 0) + 1
                     
                     # Add role-specific formatting
                     if role in role_tokens:
                         formatted_text = f"{role_tokens[role]} {text}"
                     else:
                         formatted_text = text
-                        stats["by_role"]["unknown"] += 1
                     
                     texts.append(formatted_text)
                     processed_count += 1
                     
-                    # Progress logging with memory cleanup
-                    if processed_count % 2000 == 0:
+                    # Progress logging with aggressive memory cleanup
+                    if processed_count % 1000 == 0:
                         logger.info(f"Processed {processed_count:,} samples... {get_memory_usage()}")
-                        gc.collect()  # Periodic cleanup
+                        gc.collect()  # Frequent cleanup
                     
-                except (json.JSONDecodeError, KeyError, ValueError) as e:
+                except (json.JSONDecodeError, KeyError, ValueError):
                     skipped_count += 1
-                    if line_num % 5000 == 0:
-                        logger.warning(f"Line {line_num}: Skipped malformed entry")
                     continue
     
     except Exception as e:
@@ -273,32 +452,15 @@ def load_and_process_data(data_path: str, max_samples: Optional[int] = None) -> 
     if not texts:
         raise ValueError(f"No valid text data found in {data_path}")
     
-    # Log comprehensive statistics
-    total_chars = sum(len(text) for text in texts)
-    avg_length = total_chars / len(texts)
-    
-    logger.info("=" * 50)
-    logger.info("OASST2 Dataset Loading Statistics:")
-    logger.info(f"  Successfully processed: {processed_count:,}")
-    logger.info(f"  Skipped total: {skipped_count:,}")
-    logger.info(f"    - Deleted: {stats['deleted']:,}")
-    logger.info(f"    - Non-English: {stats['non_english']:,}")
-    logger.info(f"    - Empty text: {stats['empty_text']:,}")
-    logger.info(f"    - Too short: {stats['short_text']:,}")
-    logger.info(f"    - Review failed: {stats['review_failed']:,}")
-    logger.info(f"    - Tree not ready: {stats['not_ready']:,}")
-    logger.info(f"  By role:")
-    for role, count in stats["by_role"].items():
-        if count > 0:
-            logger.info(f"    - {role}: {count:,}")
-    logger.info(f"  Total characters: {total_chars:,}")
-    logger.info(f"  Average length: {avg_length:.1f} chars")
-    logger.info(f"  {get_memory_usage()}")
-    logger.info("=" * 50)
+    logger.info(f"Successfully processed: {processed_count:,}")
+    logger.info(f"Skipped: {skipped_count:,}")
+    logger.info(f"Final dataset size: {len(texts):,} texts")
+    logger.info(f"{get_memory_usage()}")
     
     return texts
+
 class AdaptiveLRScheduler:
-    """Improved learning rate scheduler with adaptive decay."""
+    """Simplified learning rate scheduler."""
     
     def __init__(self, optimizer, warmup_steps: int, total_steps: int, 
                  min_lr: float = 1e-6, decay_type: str = "cosine"):
@@ -309,23 +471,12 @@ class AdaptiveLRScheduler:
         self.base_lr = optimizer.param_groups[0]['lr']
         self.current_step = 0
         self.decay_type = decay_type
-        self.best_loss = float('inf')
-        self.patience_counter = 0
-        self.plateau_patience = 1000
         
     def step(self, loss: Optional[float] = None) -> float:
-        """Update learning rate with optional loss-based adaptation."""
+        """Update learning rate."""
         self.current_step += 1
         
-        # Track best loss for plateau detection
-        if loss is not None:
-            if loss < self.best_loss:
-                self.best_loss = loss
-                self.patience_counter = 0
-            else:
-                self.patience_counter += 1
-        
-        # Calculate base learning rate
+        # Calculate learning rate
         if self.current_step < self.warmup_steps:
             # Linear warmup
             lr = self.base_lr * self.current_step / self.warmup_steps
@@ -335,17 +486,8 @@ class AdaptiveLRScheduler:
             
             if self.decay_type == "cosine":
                 lr = self.min_lr + (self.base_lr - self.min_lr) * 0.5 * (1 + math.cos(math.pi * progress))
-            elif self.decay_type == "linear":
+            else:  # linear
                 lr = self.base_lr * (1 - progress) + self.min_lr * progress
-            else:  # exponential
-                lr = self.base_lr * (0.95 ** (progress * 100))
-                lr = max(lr, self.min_lr)
-        
-        # Apply plateau reduction if needed
-        if self.patience_counter > self.plateau_patience and loss is not None:
-            lr *= 0.5
-            self.patience_counter = 0
-            logger.info(f"Reducing LR due to plateau: {lr:.2e}")
         
         # Update optimizer
         for param_group in self.optimizer.param_groups:
@@ -356,14 +498,11 @@ class AdaptiveLRScheduler:
     def state_dict(self):
         return {
             'current_step': self.current_step,
-            'best_loss': self.best_loss,
-            'patience_counter': self.patience_counter,
             'warmup_steps': self.warmup_steps,
             'total_steps': self.total_steps,
             'min_lr': self.min_lr,
             'base_lr': self.base_lr,
-            'decay_type': self.decay_type,
-            'plateau_patience': self.plateau_patience
+            'decay_type': self.decay_type
         }
     
     def load_state_dict(self, state_dict):
@@ -372,7 +511,7 @@ class AdaptiveLRScheduler:
                 setattr(self, key, value)
 
 def count_parameters(model: nn.Module) -> Tuple[int, int]:
-    """Optimized parameter counting."""
+    """Count model parameters."""
     total = sum(p.numel() for p in model.parameters())
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     return total, trainable
@@ -383,122 +522,99 @@ def calculate_perplexity(loss: float) -> float:
 
 def train_epoch(model, dataloader, criterion, optimizer, scheduler, epoch: int, 
                 gradient_accumulation_steps: int = 1, max_grad_norm: float = 1.0,
-                log_interval: int = 50) -> Tuple[float, float, float]:
-    """Memory-optimized training loop with aggressive cleanup."""
+                log_interval: int = 25) -> Tuple[float, float, float]:
+    """Ultra memory-optimized training loop."""
     model.train()
     total_loss = 0.0
-    total_correct = 0
     total_tokens = 0
     accumulation_steps = 0
     batch_times = []
     
-    try:
-        optimizer.zero_grad()
+    optimizer.zero_grad()
+    
+    for batch_idx, (inputs, targets) in enumerate(dataloader):
+        batch_start = time.time()
         
-        for batch_idx, (inputs, targets) in enumerate(dataloader):
-            batch_start = time.time()
+        try:
+            # Move to device
+            inputs = inputs.to(device, non_blocking=True)
+            targets = targets.to(device, non_blocking=True)
             
-            try:
+            # Forward pass - be very careful with mixed precision
+            if device.type == 'cuda':
+                # Use bfloat16 for better stability
+                with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=True):
+                    logits = model(inputs)
+                    loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
+            else:
+                # No autocast for MPS/CPU - it can cause issues
+                logits = model(inputs)
+                loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
+            
+            loss = loss / gradient_accumulation_steps
+            loss.backward()
+            
+            # Clear logits immediately
+            del logits
+            
+            accumulation_steps += 1
+            
+            if accumulation_steps >= gradient_accumulation_steps:
+                if max_grad_norm > 0:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_grad_norm)
+                
+                optimizer.step()
+                current_lr = scheduler.step(loss.item() * gradient_accumulation_steps)
+                optimizer.zero_grad()
+                accumulation_steps = 0
+            
+            # Statistics
+            batch_loss = loss.item() * gradient_accumulation_steps
+            total_loss += batch_loss * inputs.size(0)
+            total_tokens += targets.numel()
+            
+            # Clear tensors
+            del inputs, targets, loss
+            
+            batch_times.append(time.time() - batch_start)
+            
+            # Aggressive memory cleanup every few batches
+            if batch_idx % 5 == 0:
                 with memory_cleanup():
-                    inputs, targets = inputs.to(device, non_blocking=True), targets.to(device, non_blocking=True)
-                    
-                    # Forward pass - disable autocast for MPS to save memory
-                    if device.type == 'cuda':
-                        with torch.autocast(device_type='cuda', enabled=True, dtype=torch.float16):
-                            logits = model(inputs)
-                            loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
-                    else:
-                        # Use regular precision for MPS/CPU
-                        logits = model(inputs)
-                        loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
-                    
-                    loss = loss / gradient_accumulation_steps
-                    
-                    # Backward pass
-                    loss.backward()
-                    accumulation_steps += 1
-                    
-                    # Clear intermediate activations
-                    del logits
-                    
-                    # Optimizer step with gradient accumulation
-                    if accumulation_steps >= gradient_accumulation_steps:
-                        if max_grad_norm > 0:
-                            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_grad_norm)
-                        
-                        optimizer.step()
-                        current_lr = scheduler.step(loss.item() * gradient_accumulation_steps)
-                        optimizer.zero_grad()
-                        accumulation_steps = 0
-                    
-                    # Efficient statistics calculation
-                    batch_loss = loss.item() * gradient_accumulation_steps
-                    total_loss += batch_loss * inputs.size(0)
-                    
-                    # Calculate accuracy less frequently to save memory
-                    if batch_idx % 10 == 0:
-                        with torch.no_grad():
-                            # Re-compute logits only for accuracy calculation
-                            if device.type == 'cuda':
-                                with torch.autocast(device_type='cuda', enabled=True, dtype=torch.float16):
-                                    logits = model(inputs)
-                            else:
-                                logits = model(inputs)
-                            preds = logits.argmax(dim=-1)
-                            correct = (preds == targets).sum().item()
-                            total_correct += correct
-                            del logits, preds
-                    
-                    total_tokens += targets.numel()
-                    batch_times.append(time.time() - batch_start)
-                    
-                    # Progress logging with memory monitoring
-                    if batch_idx % log_interval == 0 and batch_idx > 0:
-                        current_loss = total_loss / total_tokens
-                        accuracy = total_correct / (total_tokens // 10) * 100 if total_correct > 0 else 0
-                        avg_batch_time = sum(batch_times[-log_interval:]) / len(batch_times[-log_interval:])
-                        tokens_per_sec = targets.numel() / avg_batch_time
-                        
-                        logger.info(f"Epoch {epoch} | Batch {batch_idx}/{len(dataloader)} | "
-                                   f"Loss: {current_loss:.4f} | Acc: {accuracy:.2f}% | "
-                                   f"LR: {current_lr:.2e} | Speed: {tokens_per_sec:.0f} tok/s | "
-                                   f"{get_memory_usage()}")
-                    
-                    # Aggressive memory cleanup every 25 batches
-                    if batch_idx % 25 == 0:
-                        with memory_cleanup():
-                            pass
+                    pass
             
-            except RuntimeError as e:
-                if "out of memory" in str(e).lower():
-                    logger.error(f"OOM at epoch {epoch}, batch {batch_idx}. Clearing cache and skipping batch...")
-                    logger.info(f"Current memory: {get_memory_usage()}")
-                    
-                    # Aggressive cleanup
-                    optimizer.zero_grad()
-                    with memory_cleanup():
-                        pass
-                    
-                    # Skip this batch and continue
-                    continue
-                else:
-                    raise e
+            # Logging
+            if batch_idx % log_interval == 0 and batch_idx > 0:
+                current_loss = total_loss / total_tokens
+                avg_batch_time = sum(batch_times[-log_interval:]) / len(batch_times[-log_interval:])
+                tokens_per_sec = targets.numel() / avg_batch_time if batch_times else 0
+                
+                logger.info(f"Epoch {epoch} | Batch {batch_idx}/{len(dataloader)} | "
+                           f"Loss: {current_loss:.4f} | LR: {current_lr:.2e} | "
+                           f"Speed: {tokens_per_sec:.0f} tok/s | {get_memory_usage()}")
+        
+        except RuntimeError as e:
+            if "out of memory" in str(e).lower():
+                logger.error(f"OOM at batch {batch_idx}. Clearing cache and skipping batch...")
+                
+                # Aggressive cleanup
+                optimizer.zero_grad()
+                with memory_cleanup():
+                    pass
+                
+                # Skip this batch
+                continue
+            else:
+                raise e
     
-    except Exception as e:
-        logger.error(f"Training error at epoch {epoch}: {e}")
-        raise e
-    
-    # Calculate final metrics
     avg_loss = total_loss / total_tokens if total_tokens > 0 else float('inf')
-    accuracy = total_correct / (total_tokens // 10) if total_correct > 0 else 0.0
     avg_batch_time = sum(batch_times) / len(batch_times) if batch_times else 0.0
     
-    return avg_loss, accuracy, avg_batch_time
+    return avg_loss, 0.0, avg_batch_time
 
 def generate_sample_text(model, tokenizer, prompt: str = "<user> Hello", 
-                        max_length: int = 30, temperature: float = 0.8,
-                        top_k: int = 50, top_p: float = 0.9) -> str:
-    """Memory-efficient text generation."""
+                        max_length: int = 20, temperature: float = 0.8) -> str:
+    """Ultra lightweight text generation."""
     model.eval()
     
     try:
@@ -507,22 +623,11 @@ def generate_sample_text(model, tokenizer, prompt: str = "<user> Hello",
             generated = input_ids.clone()
             
             for _ in range(max_length):
-                if generated.size(1) >= min(model.config.seq_length, 256):  # Limit context length
+                if generated.size(1) >= 64:  # Very short context
                     break
                 
-                # Only use the last part of the sequence if it's getting too long
-                if generated.size(1) > 128:
-                    context = generated[:, -128:]
-                else:
-                    context = generated
-                
-                logits = model(context)
+                logits = model(generated)
                 next_token_logits = logits[0, -1, :] / temperature
-                
-                # Top-k sampling only to save memory
-                if top_k > 0:
-                    indices_to_remove = next_token_logits < torch.topk(next_token_logits, top_k)[0][..., -1, None]
-                    next_token_logits[indices_to_remove] = float('-inf')
                 
                 probs = F.softmax(next_token_logits, dim=-1)
                 next_token = torch.multinomial(probs, 1)
@@ -544,6 +649,71 @@ def generate_sample_text(model, tokenizer, prompt: str = "<user> Hello",
         model.train()
         with memory_cleanup():
             pass
+
+def get_ultra_conservative_config():
+    """Get extremely conservative configuration to avoid OOM."""
+    
+    if device.type == 'cuda':
+        # Small model for CUDA
+        model_config = ModelConfig(
+            vocab_size=32000,
+            hidden_size=2048,
+            num_layers=24,
+            num_heads=16,
+            seq_length=1024,      # Very short
+            dropout=0.1,
+            model_type="WordTransformer",
+            tokenizer_type="word"
+        )
+        batch_size = 32
+        max_samples = 5000
+        
+    elif device.type == 'mps':
+        # Tiny model for MPS
+        model_config = ModelConfig(
+            vocab_size=4000,
+            hidden_size=128,
+            num_layers=3,
+            num_heads=4,
+            seq_length=128,      # Very short
+            dropout=0.1,
+            model_type="WordTransformer",
+            tokenizer_type="word"
+        )
+        batch_size = 32
+        max_samples = 2000
+        
+    else:  # CPU
+        # Minimal model for CPU
+        model_config = ModelConfig(
+            vocab_size=4000,
+            hidden_size=128,
+            num_layers=2,
+            num_heads=2,
+            seq_length=128,
+            dropout=0.1,
+            model_type="WordTransformer",
+            tokenizer_type="word"
+        )
+        batch_size = 32
+        max_samples = 1000
+    
+    training_config = TrainingConfig(
+        learning_rate=1e-3,      # Higher LR for faster training
+        weight_decay=0.01,
+        batch_size=batch_size,
+        gradient_accumulation_steps=8,  # Simulate larger batches
+        max_epochs=200,           # Fewer epochs
+        warmup_ratio=0.1,
+        save_every=1000,
+        eval_every=500,
+        max_grad_norm=1.0,
+        label_smoothing=0.0,     # Disable to save memory
+        beta1=0.9,
+        beta2=0.95
+    )
+    
+    return model_config, training_config, max_samples
 
 def validate_training_setup():
     """Validate that all required files and dependencies are available."""
@@ -571,61 +741,53 @@ def validate_training_setup():
     return True
 
 def main():
-    """Main training function with memory-optimized configuration."""
+    """Main training function with ultra-conservative memory usage."""
     
-    logger.info("🚀 Starting Memory-Optimized OASST1 Word-Level Transformer Training")
+    logger.info("🚀 Starting Ultra Memory-Optimized OASST1 Word-Level Transformer Training")
     logger.info("=" * 70)
     logger.info(f"Initial memory: {get_memory_usage()}")
+    
+    # Handle imports - if they failed initially, run debug and try again
+    if not IMPORTS_SUCCESSFUL:
+        logger.error("❌ Imports failed initially - running debug checks")
+        if not run_comprehensive_debug():
+            logger.error("❌ Debug checks failed - cannot proceed")
+            return 1
+        
+        # Try to import again after debug
+        try:
+            # Use global keyword to avoid local variable issue
+            global ModelManager, ModelConfig, TrainingConfig, ModelMetadata
+            global WordTransformer, WordTokenizer
+            
+            from model_manager import ModelManager, ModelConfig, TrainingConfig, ModelMetadata
+            from word_transformer import WordTransformer, WordTokenizer
+            logger.info("✅ Successfully imported modules after debug")
+            
+        except ImportError as e:
+            logger.error(f"❌ Still cannot import after debug: {e}")
+            return 1
     
     # Validate setup
     if not validate_training_setup():
         logger.error("❌ Training setup validation failed!")
         return 1
     
-    # Memory-optimized configuration
-    model_config = ModelConfig(
-        vocab_size=32000,     # Standard tokenizer vocab
-        hidden_size=1024,     # Decent size for agentic tasks
-        num_layers=12,        # Good for reasoning
-        num_heads=16,         # Keep this
-        seq_length=4096,      # Need longer context for tool use
-        dropout=0.1,
-        model_type="WordTransformer",
-        tokenizer_type="word"
-    )
+    # Get ultra-conservative configuration
+    model_config, training_config, max_samples = get_ultra_conservative_config()
     
-    # Very conservative batch sizes
-    if device.type == 'cuda':
-        batch_size = 8
-        max_samples = 50000  # Limit dataset size
-    elif device.type == 'mps':
-        batch_size = 1
-        max_samples = 25000
-    else:
-        batch_size = 1
-        max_samples = 10000
-    
-    training_config = TrainingConfig(
-        learning_rate=1e-4,    # Lower LR for stability
-        weight_decay=0.01,
-        batch_size=batch_size,
-        gradient_accumulation_steps=8,  # Higher accumulation to simulate larger batches
-        max_epochs=100,         # Fewer epochs
-        warmup_ratio=0.05,
-        save_every=1000,
-        eval_every=500,
-        max_grad_norm=1.0,
-        label_smoothing=0.1,
-        beta1=0.9,
-        beta2=0.95
-    )
+    logger.info(f"Using ultra-conservative config:")
+    logger.info(f"  Model size: {model_config.hidden_size}x{model_config.num_layers}")
+    logger.info(f"  Batch size: {training_config.batch_size}")
+    logger.info(f"  Max samples: {max_samples}")
+    logger.info(f"  Sequence length: {model_config.seq_length}")
     
     # Initialize model manager
     model_manager = ModelManager("models")
     
     try:
-        # Load and process OASST1 training data with memory limits
-        logger.info("📚 Loading OASST1 dataset (memory-limited)...")
+        # Load and process OASST1 training data with strict limits
+        logger.info("📚 Loading OASST1 dataset (ultra-limited)...")
         texts = load_and_process_data("oasst1_data/oasst1_train.jsonl", max_samples)
         
         if len(texts) == 0:
@@ -633,12 +795,12 @@ def main():
         
         logger.info(f"Memory after data loading: {get_memory_usage()}")
         
-        # Create and train tokenizer with smaller vocabulary
-        logger.info("🔤 Training compact word-level tokenizer...")
+        # Create and train tokenizer with very small vocabulary
+        logger.info("🔤 Training ultra-compact word-level tokenizer...")
         tokenizer = WordTokenizer()
         
         # Use smaller sample for tokenizer
-        sample_size = min(10000, len(texts))
+        sample_size = min(2000, len(texts))
         sample_texts = texts[:sample_size]
         all_text = "\n".join(sample_texts)
         
@@ -648,26 +810,27 @@ def main():
         logger.info(f"✅ Tokenizer trained - Vocabulary size: {model_config.vocab_size:,}")
         logger.info(f"Memory after tokenizer: {get_memory_usage()}")
         
-        # Create memory-optimized dataset
-        logger.info("📦 Creating memory-optimized training dataset...")
-        dataset = OptimizedWordDataset(texts, tokenizer, model_config.seq_length)
+        # Create on-demand dataset
+        logger.info("📦 Creating on-demand training dataset...")
+        dataset = OnDemandWordDataset(texts, tokenizer, model_config.seq_length)
         
         logger.info(f"Memory after dataset creation: {get_memory_usage()}")
         
-        # Very conservative dataloader settings
+        # Ultra-conservative dataloader settings
         dataloader = DataLoader(
             dataset,
             batch_size=training_config.batch_size,
             shuffle=True,
-            num_workers=0,  # No multiprocessing to save memory
-            pin_memory=False,  # Disable pin_memory to save memory
-            drop_last=True  # Drop last incomplete batch
+            num_workers=0,              # Critical: no multiprocessing
+            pin_memory=False,           # Critical: disable pin memory
+            drop_last=True,
+            persistent_workers=False    # Make sure this is False
         )
         
         logger.info(f"📊 Dataset ready: {len(dataset):,} sequences, {len(dataloader):,} batches/epoch")
         
-        # Initialize smaller model
-        logger.info("🧠 Initializing memory-efficient model...")
+        # Initialize ultra-small model
+        logger.info("🧠 Initializing ultra-compact model...")
         with memory_cleanup():
             model = WordTransformer(model_config).to(device)
         
@@ -676,7 +839,7 @@ def main():
         logger.info(f"Model parameters: {total_params:,} (~{model_size_mb:.1f}MB)")
         logger.info(f"Memory after model creation: {get_memory_usage()}")
         
-        # Training components with memory-efficient settings
+        # Training components
         optimizer = optim.AdamW(
             model.parameters(),
             lr=training_config.learning_rate,
@@ -686,11 +849,10 @@ def main():
         )
         
         criterion = nn.CrossEntropyLoss(
-            label_smoothing=training_config.label_smoothing,
             ignore_index=tokenizer.vocab.get("<pad>", 0)
         )
         
-        # Enhanced scheduler
+        # Simple scheduler
         total_steps = len(dataloader) * training_config.max_epochs // training_config.gradient_accumulation_steps
         warmup_steps = int(total_steps * training_config.warmup_ratio)
         scheduler = AdaptiveLRScheduler(optimizer, warmup_steps, total_steps, decay_type="cosine")
@@ -699,7 +861,7 @@ def main():
         logger.info(f"Memory before training: {get_memory_usage()}")
         
         # Training loop
-        logger.info("🚀 Starting memory-optimized training...")
+        logger.info("🚀 Starting ultra-optimized training...")
         training_start = time.time()
         best_loss = float('inf')
         
@@ -709,7 +871,7 @@ def main():
             try:
                 logger.info(f"Starting epoch {epoch}, memory: {get_memory_usage()}")
                 
-                # Train epoch with memory monitoring
+                # Train epoch
                 avg_loss, accuracy, avg_batch_time = train_epoch(
                     model, dataloader, criterion, optimizer, scheduler, epoch,
                     training_config.gradient_accumulation_steps,
@@ -719,50 +881,43 @@ def main():
                 # Calculate metrics
                 perplexity = calculate_perplexity(avg_loss)
                 epoch_time = time.time() - epoch_start
-                tokens_per_sec = len(dataset) * model_config.seq_length / epoch_time
                 
-                # Comprehensive logging
-                logger.info("=" * 60)
+                # Logging
+                logger.info("=" * 50)
                 logger.info(f"📊 Epoch {epoch}/{training_config.max_epochs} Summary:")
                 logger.info(f"   Loss: {avg_loss:.4f} | Perplexity: {perplexity:.2f}")
-                logger.info(f"   Accuracy: {accuracy*100:.2f}% | Time: {epoch_time:.1f}s")
-                logger.info(f"   Speed: {tokens_per_sec:.0f} tokens/sec")
-                logger.info(f"   {get_memory_usage()}")
+                logger.info(f"   Time: {epoch_time:.1f}s | {get_memory_usage()}")
                 
-                # Sample generation every few epochs (with memory cleanup)
-                if epoch % 2 == 0:
+                # Sample generation every few epochs
+                if epoch % 3 == 0:
                     with memory_cleanup():
-                        sample_prompts = ["<user> What is AI?", "<assistant> I can help"]
-                        for prompt in sample_prompts[:1]:  # Just one to save memory
-                            sample = generate_sample_text(model, tokenizer, prompt, 20)
-                            logger.info(f"   Sample: {prompt} → {sample}")
+                        sample = generate_sample_text(model, tokenizer, "<user> Hello", 15)
+                        logger.info(f"   Sample: <user> Hello → {sample}")
                 
-                # Model saving with memory cleanup
+                # Model saving
                 if avg_loss < best_loss:
                     best_loss = avg_loss
                     
                     with memory_cleanup():
-                        # Create comprehensive metadata
+                        # Create metadata
                         metadata = ModelMetadata(
-                            model_name="OASST1_WordTransformer_Compact",
+                            model_name="OASST1_WordTransformer_UltraCompact",
                             version=f"v1.0_epoch_{epoch}",
                             created_at=datetime.now().isoformat(),
                             last_modified=datetime.now().isoformat(),
                             model_config=model_config,
                             training_config=training_config,
                             dataset_info={
-                                "name": "OpenAssistant OASST1 (Memory-Optimized)",
+                                "name": "OpenAssistant OASST1 (Ultra-Optimized)",
                                 "num_samples": len(texts),
                                 "vocab_size": model_config.vocab_size,
                                 "seq_length": model_config.seq_length,
                                 "source": "oasst1_train.jsonl",
-                                "preprocessing": "Word-level tokenization with role formatting and memory optimization"
+                                "preprocessing": "Ultra-compact word-level tokenization"
                             },
                             performance_metrics={
                                 "loss": avg_loss,
                                 "perplexity": perplexity,
-                                "accuracy": accuracy,
-                                "tokens_per_second": tokens_per_sec,
                                 "batch_time_ms": avg_batch_time * 1000
                             },
                             model_size_mb=model_size_mb,
@@ -777,16 +932,16 @@ def main():
                             cuda_version=torch.version.cuda if device.type == 'cuda' else None,
                             model_hash="",
                             tokenizer_hash="",
-                            notes=f"Memory-optimized OASST1 word-level transformer. Trained on {len(texts):,} samples with reduced model size and aggressive memory management. Best model at epoch {epoch}.",
-                            tags=["oasst1", "word-level", "transformer", "memory-optimized", "best-model", f"epoch-{epoch}"]
+                            notes=f"Ultra-compact OASST1 word-level transformer. Trained on {len(texts):,} samples with minimal memory usage. Best model at epoch {epoch}.",
+                            tags=["oasst1", "word-level", "transformer", "ultra-compact", "best"]
                         )
                         
                         model_id = model_manager.save_model(model, tokenizer, metadata, optimizer, scheduler)
                         logger.info(f"💾 Best model saved: {model_id}")
                 
-                logger.info("=" * 60)
+                logger.info("=" * 50)
                 
-                # Aggressive cleanup after each epoch
+                # Cleanup after each epoch
                 with memory_cleanup():
                     pass
                 
@@ -794,20 +949,18 @@ def main():
                 logger.error(f"❌ Error in epoch {epoch}: {e}")
                 logger.info(f"Memory state: {get_memory_usage()}")
                 
-                # Try to recover from OOM
                 if "out of memory" in str(e).lower():
                     logger.info("Attempting to recover from OOM...")
                     with memory_cleanup():
                         pass
-                    # Skip to next epoch
                     continue
                 else:
                     raise e
         
-        # Training completion summary
+        # Training completion
         total_time = time.time() - training_start
         logger.info("=" * 70)
-        logger.info("✅ Memory-optimized training completed successfully!")
+        logger.info("✅ Ultra-optimized training completed successfully!")
         logger.info(f"🎯 Best loss achieved: {best_loss:.4f}")
         logger.info(f"🎯 Best perplexity: {calculate_perplexity(best_loss):.2f}")
         logger.info(f"⏱️  Total training time: {total_time/3600:.2f} hours")

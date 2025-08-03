@@ -14,11 +14,26 @@ from dataclasses import dataclass, asdict
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import os
+import warnings
+
+# Suppress TF CUDA factory warnings
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+
+# Optional: Hide all Python warnings
+warnings.filterwarnings('ignore')
+
+# Attempt to suppress TensorFlow's logger (if TF is used indirectly)
+try:
+    import tensorflow as tf
+    tf.get_logger().setLevel('ERROR')
+except ImportError:
+    pass
 
 # LM Studio compatibility imports
 try:
     import safetensors.torch as st
-    from transformers import PreTrainedModel, PreTrainedTokenizer, AutoConfig
+    from transformers import PreTrainedModel, PreTrainedTokenizer, AutoConfig, PretrainedConfig
     from transformers.modeling_outputs import CausalLMOutputWithPast
     HF_AVAILABLE = True
 except ImportError:
@@ -30,9 +45,9 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ModelConfig:
     """Configuration for the transformer model."""
-    vocab_size: int = 32000000000000000000
-    hidden_size: int = 2024
-    num_layers: int = 16
+    vocab_size: int = 32000
+    hidden_size: int = 1024
+    num_layers: int = 12
     num_heads: int = 16
     seq_length: int = 1024
     dropout: float = 0.1
@@ -44,7 +59,7 @@ class TrainingConfig:
     """Configuration for training parameters."""
     learning_rate: float = 3e-4
     weight_decay: float = 0.01
-    batch_size: int = 4
+    batch_size: int = 32
     gradient_accumulation_steps: int = 8
     max_epochs: int = 50
     warmup_ratio: float = 0.1
@@ -98,8 +113,55 @@ class ModelMetadata:
         if self.tags is None:
             self.tags = []
 
+# Custom config class to avoid AutoConfig issues
+class WordTransformerConfig(PretrainedConfig):
+    """Custom configuration class for WordTransformer."""
+    
+    model_type = "word_transformer"
+    
+    def __init__(
+        self,
+        vocab_size=32000,
+        hidden_size=1024,
+        num_hidden_layers=12,
+        num_attention_heads=16,
+        max_position_embeddings=1024,
+        hidden_dropout_prob=0.1,
+        attention_probs_dropout_prob=0.1,
+        initializer_range=0.02,
+        layer_norm_eps=1e-12,
+        pad_token_id=0,
+        bos_token_id=1,
+        eos_token_id=2,
+        unk_token_id=3,
+        use_cache=True,
+        is_decoder=True,
+        **kwargs
+    ):
+        super().__init__(
+            pad_token_id=pad_token_id,
+            bos_token_id=bos_token_id,
+            eos_token_id=eos_token_id,
+            unk_token_id=unk_token_id,
+            **kwargs
+        )
+        
+        self.vocab_size = vocab_size
+        self.hidden_size = hidden_size
+        self.num_hidden_layers = num_hidden_layers
+        self.num_attention_heads = num_attention_heads
+        self.max_position_embeddings = max_position_embeddings
+        self.hidden_dropout_prob = hidden_dropout_prob
+        self.attention_probs_dropout_prob = attention_probs_dropout_prob
+        self.initializer_range = initializer_range
+        self.layer_norm_eps = layer_norm_eps
+        self.use_cache = use_cache
+        self.is_decoder = is_decoder
+
 class HuggingFaceCompatibleModel(PreTrainedModel):
     """Wrapper to make our model compatible with HuggingFace/LM Studio."""
+    
+    config_class = WordTransformerConfig
     
     def __init__(self, config, model):
         super().__init__(config)
@@ -124,7 +186,7 @@ class HuggingFaceCompatibleModel(PreTrainedModel):
             attentions=None,
         )
     
-    def generate(self, input_ids, max_length=1000, temperature=0.7, top_k=50, top_p=0.9, **kwargs):
+    def generate(self, input_ids, max_length=100, temperature=0.7, top_k=50, top_p=0.9, **kwargs):
         """Generation method for compatibility."""
         self.eval()
         generated = input_ids.clone()
@@ -272,28 +334,27 @@ class ModelManager:
             
             logger.info(f"💾 Saving LM Studio compatible model: {model_id}")
             
-            # Create HuggingFace compatible config
-            hf_config = AutoConfig.from_dict({
-                "model_type": "custom_word_transformer",
-                "vocab_size": metadata.model_config.vocab_size,
-                "hidden_size": metadata.model_config.hidden_size,
-                "num_hidden_layers": metadata.model_config.num_layers,
-                "num_attention_heads": metadata.model_config.num_heads,
-                "max_position_embeddings": metadata.model_config.seq_length,
-                "hidden_dropout_prob": metadata.model_config.dropout,
-                "attention_probs_dropout_prob": metadata.model_config.dropout,
-                "initializer_range": 0.02,
-                "layer_norm_eps": 1e-12,
-                "pad_token_id": tokenizer.vocab.get("<pad>", 0),
-                "bos_token_id": tokenizer.vocab.get("<s>", 1),
-                "eos_token_id": tokenizer.vocab.get("</s>", 2),
-                "unk_token_id": tokenizer.vocab.get("<unk>", 3),
-                "use_cache": True,
-                "is_decoder": True,
-                "architectures": ["WordTransformerForCausalLM"],
-                "torch_dtype": "float32",
-                "transformers_version": "4.21.0"
-            })
+            # Create HuggingFace compatible config using our custom config class
+            hf_config = WordTransformerConfig(
+                vocab_size=metadata.model_config.vocab_size,
+                hidden_size=metadata.model_config.hidden_size,
+                num_hidden_layers=metadata.model_config.num_layers,
+                num_attention_heads=metadata.model_config.num_heads,
+                max_position_embeddings=metadata.model_config.seq_length,
+                hidden_dropout_prob=metadata.model_config.dropout,
+                attention_probs_dropout_prob=metadata.model_config.dropout,
+                initializer_range=0.02,
+                layer_norm_eps=1e-12,
+                pad_token_id=tokenizer.vocab.get("<pad>", 0),
+                bos_token_id=tokenizer.vocab.get("<s>", 1),
+                eos_token_id=tokenizer.vocab.get("</s>", 2),
+                unk_token_id=tokenizer.vocab.get("<unk>", 3),
+                use_cache=True,
+                is_decoder=True,
+                architectures=["WordTransformerForCausalLM"],
+                torch_dtype="float32",
+                transformers_version="4.21.0"
+            )
             
             # Save config
             hf_config.save_pretrained(lm_studio_dir)
@@ -469,6 +530,8 @@ echo "Conversion complete!"
             
         except Exception as e:
             logger.error(f"❌ Failed to save LM Studio format: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return False
     
     def save_model(self, model: nn.Module, tokenizer, metadata: ModelMetadata,

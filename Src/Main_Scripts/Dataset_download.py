@@ -114,7 +114,7 @@ def validate_dataset_quality(dataset, split_name: str):
     
     return stats
 
-def download_and_save_dataset(output_dir: Path, max_train_examples: int = 50000) -> bool:
+def download_and_save_dataset(output_dir: Path) -> bool:
     """Download OASST1 dataset and save to JSONL files with enhanced processing."""
     try:
         logger.info("📦 Loading OpenAssistant dataset (oasst1)...")
@@ -130,24 +130,25 @@ def download_and_save_dataset(output_dir: Path, max_train_examples: int = 50000)
         
         logger.info("✅ Dataset loaded successfully!")
         
+        # Filter for English only
+        logger.info("🔍 Filtering for English samples only...")
+        train_english = ds['train'].filter(lambda example: example.get('lang') == 'en')
+        val_english = ds['validation'].filter(lambda example: example.get('lang') == 'en')
+        
         # Log dataset information
-        train_size = len(ds['train'])
-        val_size = len(ds['validation'])
-        logger.info(f"📊 Full train split size: {train_size:,}")
-        logger.info(f"📊 Full validation split size: {val_size:,}")
+        train_size = len(train_english)
+        val_size = len(val_english)
+        logger.info(f"📊 English train split size: {train_size:,}")
+        logger.info(f"📊 English validation split size: {val_size:,}")
         
         # Analyze dataset structure
-        analyze_dataset_sample(ds['train'], 'train')
-        train_stats = validate_dataset_quality(ds['train'], 'train')
+        analyze_dataset_sample(train_english, 'train')
+        train_stats = validate_dataset_quality(train_english, 'train')
         
-        # Create train subset if needed
-        actual_train_size = min(max_train_examples, train_size)
-        if actual_train_size < train_size:
-            logger.info(f"📊 Using train subset size: {actual_train_size:,}")
-            train_subset = ds["train"].select(range(actual_train_size))
-        else:
-            logger.info(f"📊 Using full train split: {actual_train_size:,}")
-            train_subset = ds["train"]
+        # Use all English data (remove max_train_examples limit)
+        actual_train_size = train_size
+        logger.info(f"📊 Using all English train data: {actual_train_size:,}")
+        train_subset = train_english
         
         # Save train split with enhanced processing
         train_path = output_dir / "oasst1_train.jsonl"
@@ -204,7 +205,7 @@ def download_and_save_dataset(output_dir: Path, max_train_examples: int = 50000)
         val_skipped = 0
         
         with open(val_path, 'w', encoding='utf-8') as f:
-            for i, example in enumerate(ds["validation"]):
+            for i, example in enumerate(val_english):
                 try:
                     clean_example = {
                         'message_id': str(example.get('message_id', '')),
@@ -330,10 +331,9 @@ def main():
                 logger.info("⚠️  Existing files are invalid, re-downloading...")
         
         # Download and save dataset
-        max_train_examples = 100000  # Adjust based on your needs
-        logger.info(f"📊 Maximum training samples: {max_train_examples:,}")
+        logger.info(f"📊 Downloading all English samples")
         
-        success = download_and_save_dataset(output_dir, max_train_examples)
+        success = download_and_save_dataset(output_dir)
         
         if not success:
             logger.error("❌ Dataset download failed!")
