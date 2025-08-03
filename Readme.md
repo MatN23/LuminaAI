@@ -42,8 +42,8 @@
 
 ### System Requirements
 - **Operating System**: Windows 10+, macOS 10.14+, or Linux
-- **RAM**: 4GB minimum, 8GB recommended
-- **Storage**: 2GB free space
+- **RAM**: 16GB minimum, 32GB recommended
+- **Storage**: 5GB free space
 - **Network**: Internet connection for initial setup
 
 ### Software Dependencies
