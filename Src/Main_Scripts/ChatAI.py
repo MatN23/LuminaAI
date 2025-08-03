@@ -24,6 +24,20 @@ from subword_transformer import SubwordTransformer, SubwordTokenizer  # Changed 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+@dataclass
+class GenerationConfig:
+    """Configuration for text generation with sampling parameters."""
+    max_tokens: int = 50
+    temperature: float = 0.7
+    top_p: float = 0.9
+    top_k: int = 50
+    use_greedy: bool = False
+    repetition_penalty: float = 1.1
+    pad_token_id: int = 0
+    eos_token_id: Optional[int] = None
+    min_length: int = 1
+    do_sample: bool = True
+
 def setup_device():
     """Setup the best available device with proper error handling."""
     try:
@@ -53,6 +67,20 @@ def validate_tokenizer(tokenizer):
     """Validate that the subword tokenizer is working correctly."""
     test_text = "Hello, how are you?"
     try:
+        # Test required methods exist
+        required_methods = ['tokenize', 'encode', 'decode', 'vocab_size']
+        for method in required_methods:
+            if not hasattr(tokenizer, method):
+                print(f"❌ Missing required method: {method}")
+                return False
+        
+        # Test required attributes
+        required_attrs = ['vocab', 'merges']
+        for attr in required_attrs:
+            if not hasattr(tokenizer, attr):
+                print(f"❌ Missing required attribute: {attr}")
+                return False
+        
         # Test subword tokenization methods
         subwords = tokenizer.tokenize(test_text)
         encoded = tokenizer.encode(test_text)
@@ -70,6 +98,76 @@ def validate_tokenizer(tokenizer):
     except Exception as e:
         print(f"❌ Subword tokenizer validation failed: {e}")
         return False
+
+def apply_repetition_penalty(logits: torch.Tensor, input_ids: torch.Tensor, penalty: float = 1.1) -> torch.Tensor:
+    """Apply repetition penalty to logits."""
+    if penalty == 1.0:
+        return logits
+    
+    score = torch.gather(logits, 1, input_ids)
+    # If score < 0 then repetition penalty has to be multiplied to reduce the previous token probability
+    score = torch.where(score < 0, score * penalty, score / penalty)
+    logits.scatter_(1, input_ids, score)
+    return logits
+
+def apply_temperature(logits: torch.Tensor, temperature: float) -> torch.Tensor:
+    """Apply temperature scaling to logits."""
+    if temperature <= 0.0:
+        temperature = 1.0
+    return logits / temperature
+
+def top_k_filtering(logits: torch.Tensor, top_k: int) -> torch.Tensor:
+    """Filter logits to only keep top k tokens."""
+    if top_k <= 0:
+        return logits
+    
+    top_k = min(top_k, logits.size(-1))
+    indices_to_remove = logits < torch.topk(logits, top_k)[0][..., -1, None]
+    logits[indices_to_remove] = -float('inf')
+    return logits
+
+def top_p_filtering(logits: torch.Tensor, top_p: float) -> torch.Tensor:
+    """Filter logits using nucleus (top-p) sampling."""
+    if top_p >= 1.0:
+        return logits
+    
+    sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+    cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+    
+    # Remove tokens with cumulative probability above the threshold
+    sorted_indices_to_remove = cumulative_probs > top_p
+    # Shift the indices to the right to keep also the first token above the threshold
+    sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+    sorted_indices_to_remove[..., 0] = 0
+    
+    indices_to_remove = sorted_indices_to_remove.scatter(-1, sorted_indices, sorted_indices_to_remove)
+    logits[indices_to_remove] = -float('inf')
+    return logits
+
+def sample_next_token(logits: torch.Tensor, config: GenerationConfig) -> int:
+    """Sample next token using the specified sampling strategy."""
+    if config.use_greedy:
+        return torch.argmax(logits, dim=-1).item()
+    
+    # Apply temperature
+    logits = apply_temperature(logits, config.temperature)
+    
+    # Apply top-k filtering
+    if config.top_k > 0:
+        logits = top_k_filtering(logits, config.top_k)
+    
+    # Apply top-p filtering
+    if config.top_p < 1.0:
+        logits = top_p_filtering(logits, config.top_p)
+    
+    # Sample from the filtered distribution
+    if config.do_sample:
+        probs = F.softmax(logits, dim=-1)
+        next_token = torch.multinomial(probs, num_samples=1).item()
+    else:
+        next_token = torch.argmax(logits, dim=-1).item()
+    
+    return next_token
 
 # =====================================================================
 # AGENT TOOLS AND CAPABILITIES
@@ -258,6 +356,16 @@ class TaskPlanner:
         self.tokenizer = tokenizer
         # Ensure model is on correct device
         self.model = self.model.to(device)
+        
+        # Default generation config for planning
+        self.generation_config = GenerationConfig(
+            max_tokens=100,
+            temperature=0.3,  # Lower temperature for more focused planning
+            top_p=0.8,
+            top_k=30,
+            use_greedy=False,
+            do_sample=True
+        )
     
     def plan_task(self, task_description: str, available_tools: List[str]) -> List[str]:
         """Decompose a task into actionable steps."""
@@ -270,7 +378,7 @@ Plan:
 1."""
             
             # Generate plan using the model
-            plan_response = self._generate_with_model(planning_prompt, max_length=100)
+            plan_response = self._generate_with_model(planning_prompt, self.generation_config)
             
             # Parse the response into steps
             steps = self._parse_plan_response(plan_response)
@@ -284,8 +392,8 @@ Plan:
             logger.error(f"Error in task planning: {e}")
             return [f"Execute task: {task_description}"]
     
-    def _generate_with_model(self, prompt: str, max_length: int = 100) -> str:
-        """Generate text using the subword model with proper device handling."""
+    def _generate_with_model(self, prompt: str, config: GenerationConfig) -> str:
+        """Generate text using the subword model with advanced sampling."""
         try:
             self.model.eval()
             with torch.no_grad():
@@ -296,33 +404,71 @@ Plan:
                 input_ids = torch.tensor(input_tokens, dtype=torch.long).unsqueeze(0)
                 input_ids = ensure_tensor_device(input_ids, device)
                 
-                # Simple greedy generation to avoid sampling issues
-                for _ in range(max_length):
-                    if input_ids.size(1) >= getattr(self.model.config, 'seq_length', 512):
-                        break
-                    
-                    logits = self.model(input_ids)
-                    if hasattr(logits, 'logits'):
-                        logits = logits.logits
-                    
-                    # Use greedy decoding for more stable results
-                    next_token_id = torch.argmax(logits[0, -1, :]).item()
-                    
-                    # Check for end token - Updated for subword tokenizer
-                    if next_token_id == self.tokenizer.vocab.get("</s>", -1) or next_token_id == 0:
-                        break
-                    
-                    next_token_tensor = torch.tensor([[next_token_id]], device=device)
-                    input_ids = torch.cat([input_ids, next_token_tensor], dim=1)
+                # Set up stop tokens
+                eos_tokens = [
+                    config.pad_token_id,
+                    self.tokenizer.vocab.get("</s>", -1),
+                    self.tokenizer.vocab.get("<eos>", -1),
+                    self.tokenizer.vocab.get("<|endoftext|>", -1)
+                ]
+                eos_tokens = [t for t in eos_tokens if t != -1]
                 
-                # Decode only the generated part
-                generated_tokens = input_ids[0][len(self.tokenizer.encode(prompt)):].tolist()
-                response = self.tokenizer.decode(generated_tokens)
-                return response.strip()
+                generated_tokens = []
+                current_input = input_ids
+                
+                for step in range(config.max_tokens):
+                    # Check sequence length limit
+                    max_seq_len = getattr(self.model.config, 'seq_length', 512)
+                    if current_input.size(1) >= max_seq_len:
+                        break
+                    
+                    # Get model output
+                    output = self.model(current_input)
+                    if hasattr(output, 'logits'):
+                        logits = output.logits
+                    elif isinstance(output, tuple):
+                        logits = output[0]
+                    else:
+                        logits = output
+                    
+                    next_token_logits = logits[0, -1, :].clone()
+                    
+                    # Apply repetition penalty
+                    if config.repetition_penalty != 1.0:
+                        next_token_logits = apply_repetition_penalty(
+                            next_token_logits.unsqueeze(0), 
+                            current_input, 
+                            config.repetition_penalty
+                        ).squeeze(0)
+                    
+                    # Sample next token
+                    next_token_id = sample_next_token(next_token_logits, config)
+                    
+                    # Check for stop conditions
+                    if next_token_id in eos_tokens:
+                        break
+                    
+                    # Add token to generated sequence
+                    generated_tokens.append(next_token_id)
+                    
+                    # Update input for next iteration
+                    next_token_tensor = torch.tensor([[next_token_id]], device=device)
+                    current_input = torch.cat([current_input, next_token_tensor], dim=1)
+                
+                # Decode generated tokens
+                if generated_tokens:
+                    response = self.tokenizer.decode(generated_tokens)
+                    return response.strip()
+                
+                return ""
                     
         except Exception as e:
             logger.error(f"Error in model generation: {e}")
             return ""
+        finally:
+            # Clean up GPU memory
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
     
     def _parse_plan_response(self, response: str) -> List[str]:
         """Parse the model's response into actionable steps."""
@@ -356,6 +502,16 @@ class WordLevelAgent:  # Keeping the class name for compatibility
         self.tokenizer = tokenizer
         self.metadata = metadata
         
+        # Default generation config
+        self.generation_config = GenerationConfig(
+            max_tokens=50,
+            temperature=0.7,
+            top_p=0.9,
+            top_k=50,
+            use_greedy=False,
+            do_sample=True
+        )
+        
         # Validate tokenizer
         if not validate_tokenizer(tokenizer):
             logger.warning("⚠️ Subword tokenizer validation failed - responses may be poor quality")
@@ -376,6 +532,15 @@ class WordLevelAgent:  # Keeping the class name for compatibility
         self.completed_tasks = []
         
         logger.info(f"🤖 Agent initialized with {len(self.tools)} tools (subword tokenization)")
+    
+    def update_generation_config(self, **kwargs):
+        """Update generation configuration parameters."""
+        for key, value in kwargs.items():
+            if hasattr(self.generation_config, key):
+                setattr(self.generation_config, key, value)
+                logger.info(f"Updated {key} to {value}")
+            else:
+                logger.warning(f"Unknown generation parameter: {key}")
     
     def list_capabilities(self) -> Dict[str, str]:
         """List agent capabilities."""
@@ -546,14 +711,24 @@ class AgenticWordAIChat:  # Keeping class name for compatibility
             if debug_mode:
                 print(f"🔍 Context: {context[:100]}...")
             
-            return self._generate_with_model_safe(context, max_tokens=50, debug_mode=debug_mode)
+            # Use conversational config
+            conv_config = GenerationConfig(
+                max_tokens=50,
+                temperature=0.7,
+                top_p=0.9,
+                top_k=50,
+                use_greedy=False,
+                do_sample=True
+            )
+            
+            return self._generate_with_model_safe(context, conv_config, debug_mode)
         
         except Exception as e:
             logger.error(f"Error generating response: {e}")
             return "Sorry, I encountered an error generating a response."
     
-    def _generate_with_model_safe(self, prompt: str, max_tokens: int = 50, debug_mode: bool = False) -> str:
-        """Safely generate text with extensive error handling and debugging for subword tokenization."""
+    def _generate_with_model_safe(self, prompt: str, config: GenerationConfig, debug_mode: bool = False) -> str:
+        """Safely generate text with extensive error handling and advanced sampling."""
         try:
             self.agent.model.eval()
             
@@ -566,15 +741,30 @@ class AgenticWordAIChat:  # Keeping class name for compatibility
                 if debug_mode:
                     print(f"🔍 Input tokens: {len(input_tokens)}")
                     print(f"🔍 Input subwords: {self.agent.tokenizer.tokenize(prompt)[:10]}...")
+                    print(f"🔍 Generation config: temp={config.temperature}, top_p={config.top_p}, top_k={config.top_k}, greedy={config.use_greedy}")
                 
                 input_ids = torch.tensor(input_tokens, dtype=torch.long).unsqueeze(0)
                 input_ids = ensure_tensor_device(input_ids, device)
                 
+                # Set up stop tokens
+                eos_tokens = [
+                    config.pad_token_id,
+                    self.agent.tokenizer.vocab.get("</s>", -1),
+                    self.agent.tokenizer.vocab.get("<eos>", -1),
+                    self.agent.tokenizer.vocab.get("<|endoftext|>", -1)
+                ]
+                eos_tokens = [t for t in eos_tokens if t != -1]
+                
                 generated_tokens = []
                 current_input = input_ids
                 
-                for step in range(max_tokens):
+                for step in range(config.max_tokens):
                     try:
+                        # Check sequence length limit
+                        max_seq_len = getattr(self.agent.model.config, 'seq_length', 512)
+                        if current_input.size(1) >= max_seq_len:
+                            break
+                        
                         # Get model output
                         with torch.no_grad():
                             output = self.agent.model(current_input)
@@ -587,19 +777,21 @@ class AgenticWordAIChat:  # Keeping class name for compatibility
                         else:
                             logits = output
                         
-                        # Get next token (greedy decoding)
-                        next_token_logits = logits[0, -1, :]
-                        next_token_id = torch.argmax(next_token_logits).item()
+                        next_token_logits = logits[0, -1, :].clone()
                         
-                        # Check for stop conditions - Updated for subword tokenizer
-                        stop_tokens = [
-                            0,  # pad token
-                            self.agent.tokenizer.vocab.get("</s>", -1),
-                            self.agent.tokenizer.vocab.get("<eos>", -1),
-                            self.agent.tokenizer.vocab.get("<|endoftext|>", -1)
-                        ]
+                        # Apply repetition penalty
+                        if config.repetition_penalty != 1.0:
+                            next_token_logits = apply_repetition_penalty(
+                                next_token_logits.unsqueeze(0), 
+                                current_input, 
+                                config.repetition_penalty
+                            ).squeeze(0)
                         
-                        if next_token_id in stop_tokens:
+                        # Sample next token using advanced sampling
+                        next_token_id = sample_next_token(next_token_logits, config)
+                        
+                        # Check for stop conditions
+                        if next_token_id in eos_tokens:
                             break
                         
                         # Add token to generated sequence
@@ -608,10 +800,6 @@ class AgenticWordAIChat:  # Keeping class name for compatibility
                         # Update input for next iteration
                         next_token_tensor = torch.tensor([[next_token_id]], device=device)
                         current_input = torch.cat([current_input, next_token_tensor], dim=1)
-                        
-                        # Stop if we hit max sequence length
-                        if current_input.size(1) >= getattr(self.agent.model.config, 'seq_length', 512):
-                            break
                     
                     except Exception as step_error:
                         if debug_mode:
@@ -635,7 +823,8 @@ class AgenticWordAIChat:  # Keeping class name for compatibility
                     
                     if debug_mode:
                         print(f"🔍 Generated tokens: {generated_tokens}")
-                        print(f"🔍 Generated subwords: {[self.agent.tokenizer.vocab_reverse.get(t, f'<unk:{t}>') for t in generated_tokens[:10]]}")
+                        if hasattr(self.agent.tokenizer, 'vocab_reverse'):
+                            print(f"🔍 Generated subwords: {[self.agent.tokenizer.vocab_reverse.get(t, f'<unk:{t}>') for t in generated_tokens[:10]]}")
                         print(f"🔍 Final response: {response}")
                     
                     return response if response else "I'm not sure how to respond to that."
@@ -647,6 +836,11 @@ class AgenticWordAIChat:  # Keeping class name for compatibility
                 print(f"🔍 Generation error: {e}")
             logger.error(f"Model generation error: {e}")
             return "Sorry, I encountered an error while thinking."
+        
+        finally:
+            # Clean up GPU memory
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
     
     def _is_gibberish(self, text: str) -> bool:
         """Detect if generated text is likely gibberish - updated for subword tokens."""
@@ -722,6 +916,15 @@ class AgenticWordAIChat:  # Keeping class name for compatibility
         print(f"\n🔤 Tokenization: Subword (BPE) - Vocab: {self.agent.tokenizer.vocab_size():,}")
         print(f"   BPE Merges: {len(self.agent.tokenizer.merges):,}")
         
+        # Show current generation settings
+        config = self.agent.generation_config
+        print(f"\n⚙️ Generation Settings:")
+        print(f"   • Temperature: {config.temperature}")
+        print(f"   • Top-p: {config.top_p}")
+        print(f"   • Top-k: {config.top_k}")
+        print(f"   • Greedy: {config.use_greedy}")
+        print(f"   • Repetition penalty: {config.repetition_penalty}")
+        
         print("\n💬 Commands:")
         print("   • Normal chat - Just type your message")
         print("   • /task <description> - Execute a task autonomously")
@@ -729,7 +932,9 @@ class AgenticWordAIChat:  # Keeping class name for compatibility
         print("   • /tasks - List all tasks")
         print("   • /status <task_id> - Check task status")
         print("   • /capabilities - Show agent capabilities")
-        print("   • /tokenize <text> - Test subword tokenization")  # New command
+        print("   • /tokenize <text> - Test subword tokenization")
+        print("   • /generation - Show/modify generation settings")
+        print("   • /presets - Load generation presets")
         print("   • /clear - Clear conversation history")
         print("   • /debug - Toggle debug mode")
         print("   • /simple <message> - Simple response without history")
@@ -768,8 +973,16 @@ class AgenticWordAIChat:  # Keeping class name for compatibility
                         print(f"   • {name}: {desc}")
                     continue
                 
+                elif user_input.lower() == "/generation":
+                    self._handle_generation_settings()
+                    continue
+                
+                elif user_input.lower() == "/presets":
+                    self._handle_generation_presets()
+                    continue
+                
                 elif user_input.startswith("/tokenize "):
-                    # New command to test subword tokenization
+                    # Test subword tokenization
                     text = user_input[10:].strip()
                     if text:
                         subwords = self.agent.tokenizer.tokenize(text)
@@ -878,6 +1091,79 @@ class AgenticWordAIChat:  # Keeping class name for compatibility
                 print(f"\n❌ Error: {e}")
                 logger.error(f"Chat error: {e}")
     
+    def _handle_generation_settings(self):
+        """Handle generation settings modification."""
+        config = self.agent.generation_config
+        print(f"\n⚙️ Current Generation Settings:")
+        print(f"   1. Temperature: {config.temperature}")
+        print(f"   2. Top-p: {config.top_p}")
+        print(f"   3. Top-k: {config.top_k}")
+        print(f"   4. Greedy: {config.use_greedy}")
+        print(f"   5. Repetition penalty: {config.repetition_penalty}")
+        print(f"   6. Max tokens: {config.max_tokens}")
+        print(f"   7. Do sample: {config.do_sample}")
+        
+        try:
+            choice = input("\nEnter setting number to modify (or press Enter to skip): ").strip()
+            if not choice:
+                return
+            
+            choice = int(choice)
+            
+            if choice == 1:
+                temp = float(input("Enter temperature (0.1-2.0): "))
+                self.agent.update_generation_config(temperature=max(0.1, min(2.0, temp)))
+            elif choice == 2:
+                top_p = float(input("Enter top-p (0.1-1.0): "))
+                self.agent.update_generation_config(top_p=max(0.1, min(1.0, top_p)))
+            elif choice == 3:
+                top_k = int(input("Enter top-k (1-100): "))
+                self.agent.update_generation_config(top_k=max(1, min(100, top_k)))
+            elif choice == 4:
+                greedy = input("Use greedy decoding? (y/n): ").lower().startswith('y')
+                self.agent.update_generation_config(use_greedy=greedy)
+            elif choice == 5:
+                penalty = float(input("Enter repetition penalty (1.0-1.5): "))
+                self.agent.update_generation_config(repetition_penalty=max(1.0, min(1.5, penalty)))
+            elif choice == 6:
+                max_tokens = int(input("Enter max tokens (10-200): "))
+                self.agent.update_generation_config(max_tokens=max(10, min(200, max_tokens)))
+            elif choice == 7:
+                do_sample = input("Enable sampling? (y/n): ").lower().startswith('y')
+                self.agent.update_generation_config(do_sample=do_sample)
+            else:
+                print("❌ Invalid choice")
+                
+        except ValueError:
+            print("❌ Invalid input")
+    
+    def _handle_generation_presets(self):
+        """Handle generation preset selection."""
+        presets = {
+            "1": ("Creative", {"temperature": 0.9, "top_p": 0.95, "top_k": 40, "use_greedy": False, "repetition_penalty": 1.1}),
+            "2": ("Balanced", {"temperature": 0.7, "top_p": 0.9, "top_k": 50, "use_greedy": False, "repetition_penalty": 1.1}),
+            "3": ("Focused", {"temperature": 0.3, "top_p": 0.8, "top_k": 30, "use_greedy": False, "repetition_penalty": 1.2}),
+            "4": ("Precise", {"temperature": 0.1, "top_p": 0.7, "top_k": 20, "use_greedy": False, "repetition_penalty": 1.3}),
+            "5": ("Greedy", {"temperature": 1.0, "top_p": 1.0, "top_k": 0, "use_greedy": True, "repetition_penalty": 1.0})
+        }
+        
+        print("\n🎛️ Generation Presets:")
+        for key, (name, settings) in presets.items():
+            print(f"   {key}. {name}")
+            print(f"      Temperature: {settings['temperature']}, Top-p: {settings['top_p']}, "
+                  f"Top-k: {settings['top_k']}, Greedy: {settings['use_greedy']}")
+        
+        try:
+            choice = input("\nSelect preset (1-5): ").strip()
+            if choice in presets:
+                name, settings = presets[choice]
+                self.agent.update_generation_config(**settings)
+                print(f"✅ Applied {name} preset")
+            else:
+                print("❌ Invalid choice")
+        except Exception as e:
+            print(f"❌ Error applying preset: {e}")
+    
     def _is_task_request(self, text: str) -> bool:
         """Detect if user input is a task request."""
         task_indicators = [
@@ -899,7 +1185,17 @@ class AgenticWordAIChat:  # Keeping class name for compatibility
             if debug_mode:
                 print(f"🔍 Simple prompt: {prompt}")
             
-            return self._generate_with_model_safe(prompt, max_tokens=30, debug_mode=debug_mode)
+            # Use simple config for basic responses
+            simple_config = GenerationConfig(
+                max_tokens=30,
+                temperature=0.7,
+                top_p=0.9,
+                top_k=50,
+                use_greedy=False,
+                do_sample=True
+            )
+            
+            return self._generate_with_model_safe(prompt, simple_config, debug_mode)
             
         except Exception as e:
             logger.error(f"Error generating simple response: {e}")
@@ -915,6 +1211,7 @@ def main():
     print("🤖 AGENTIC SUBWORD-LEVEL AI SYSTEM")
     print("   Autonomous Task Execution + Conversational AI")
     print("   🔤 Subword Tokenization (BPE) for Enhanced Efficiency")
+    print("   ⚙️ Advanced Sampling: Temperature, Top-p, Top-k, Greedy")
     print("="*70)
     print(f"🔧 Device: {device}")
     print(f"🐍 PyTorch: {torch.__version__}")
@@ -944,11 +1241,15 @@ def main():
         for model in models[:3]:  # Show first 3 models
             print(f"   📁 {model['id']}: {model.get('model_name', 'Unknown')} (loss: {model.get('best_loss', 'N/A'):.4f})")
             # Check if it's a subword model
-            metadata = model_manager._load_metadata(model['id'])
-            if metadata and metadata.model_config.tokenizer_type == "subword":
-                print(f"      🔤 Subword model - Vocab: {metadata.model_config.vocab_size:,}")
-                if hasattr(metadata.dataset_info, 'num_merges'):
-                    print(f"      🔀 BPE Merges: {metadata.dataset_info.get('num_merges', 'Unknown')}")
+            try:
+                metadata = model_manager._load_metadata(model['id'])
+                if metadata and hasattr(metadata, 'model_config') and hasattr(metadata.model_config, 'tokenizer_type'):
+                    if metadata.model_config.tokenizer_type == "subword":
+                        print(f"      🔤 Subword model - Vocab: {metadata.model_config.vocab_size:,}")
+                        if hasattr(metadata, 'dataset_info') and hasattr(metadata.dataset_info, 'num_merges'):
+                            print(f"      🔀 BPE Merges: {getattr(metadata.dataset_info, 'num_merges', 'Unknown')}")
+            except Exception as e:
+                logger.debug(f"Could not load metadata for {model['id']}: {e}")
     
     except Exception as e:
         print(f"❌ Error listing models: {e}")

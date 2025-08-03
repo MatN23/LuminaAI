@@ -22,6 +22,19 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 # Optional: Hide all Python warnings
 warnings.filterwarnings('ignore')
 
+# Around lines 24-28, wrap in try-except:
+try:
+    import safetensors.torch as st
+    from transformers import PreTrainedModel, PreTrainedTokenizer, AutoConfig, PretrainedConfig
+    from transformers.modeling_outputs import CausalLMOutputWithPast
+    HF_AVAILABLE = True
+except ImportError:
+    HF_AVAILABLE = False
+    PreTrainedModel = object  # Add these fallback classes
+    PreTrainedTokenizer = object
+    PretrainedConfig = object
+    logging.warning("HuggingFace transformers/safetensors not available. LM Studio compatibility disabled.")
+
 # Attempt to suppress TensorFlow's logger (if TF is used indirectly)
 try:
     import tensorflow as tf
@@ -113,7 +126,7 @@ class ModelMetadata:
             self.tags = []
 
 # Custom config class to avoid AutoConfig issues
-class SubwordTransformerConfig(PretrainedConfig):
+class SubwordTransformerConfig(PretrainedConfig if HF_AVAILABLE else object):
     """Custom configuration class for SubwordTransformer."""
     
     model_type = "subword_transformer"
