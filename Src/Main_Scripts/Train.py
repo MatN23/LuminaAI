@@ -325,78 +325,89 @@ def setup_device():
 
 device = setup_device()
 
-class OnDemandSubwordDataset(Dataset):
-    """Memory-efficient dataset that generates subword sequences on-the-fly."""
+class FixedSubwordDataset(Dataset):
+    """Fixed memory-efficient dataset that pre-tokenizes and stores sequences properly."""
     
     def __init__(self, texts: List[str], tokenizer: SubwordTokenizer, seq_length: int, 
-                 overlap_ratio: float = 0.5, min_seq_length: int = 16):
+                 overlap_ratio: float = 0.5, min_seq_length: int = 16, max_sequences: int = 50000):
         self.tokenizer = tokenizer
         self.seq_length = seq_length
         self.min_seq_length = min_seq_length
         
-        logger.info("Creating on-demand subword-level dataset...")
+        logger.info("Creating fixed subword-level dataset...")
         
-        # Don't store all sequences - just store text indices and positions
-        self.text_data = []
-        self.sequence_positions = []
-        
+        # Pre-tokenize all texts and extract valid sequences
+        self.sequences = []
         valid_texts = 0
-        for text_idx, text in enumerate(texts):
+        
+        for text_idx, text in enumerate(texts[:max_sequences // 10]):  # Limit input texts
             if not text or not text.strip():
                 continue
                 
-            # Pre-tokenize to check length, but don't store tokens
+            # Tokenize the text
             tokens = tokenizer.encode(text.strip())
-            if len(tokens) >= self.min_seq_length:
-                # Store positions where we can extract sequences
-                step_size = max(1, int(seq_length * overlap_ratio))
-                
-                # Limit sequences per text to avoid memory explosion
-                max_sequences_per_text = 10
-                sequences_added = 0
-                
-                for start_pos in range(0, len(tokens) - seq_length, step_size):
-                    if start_pos + seq_length + 1 <= len(tokens):
-                        self.sequence_positions.append((text_idx, start_pos))
-                        sequences_added += 1
-                        if sequences_added >= max_sequences_per_text:
-                            break
-                
-                # Only store the text, not pre-tokenized sequences
-                self.text_data.append(text.strip())
+            if len(tokens) < self.min_seq_length:
+                continue
+            
+            # Extract overlapping sequences from this text
+            step_size = max(1, int(seq_length * overlap_ratio))
+            sequences_from_text = 0
+            max_sequences_per_text = 15  # Limit sequences per text
+            
+            for start_pos in range(0, len(tokens) - seq_length, step_size):
+                if start_pos + seq_length + 1 <= len(tokens):
+                    # Extract the sequence (input + target)
+                    sequence = tokens[start_pos:start_pos + seq_length + 1]
+                    self.sequences.append(sequence)
+                    sequences_from_text += 1
+                    
+                    if sequences_from_text >= max_sequences_per_text:
+                        break
+                    
+                    # Stop if we have enough sequences total
+                    if len(self.sequences) >= max_sequences:
+                        break
+            
+            if sequences_from_text > 0:
                 valid_texts += 1
-                
-                # Limit total dataset size
-                if len(self.sequence_positions) >= 50000:  # Hard limit
-                    break
+            
+            # Progress logging
+            if valid_texts % 100 == 0 and valid_texts > 0:
+                logger.info(f"Processed {valid_texts} texts, created {len(self.sequences):,} sequences")
+            
+            # Stop if we have enough sequences
+            if len(self.sequences) >= max_sequences:
+                break
         
-        if not self.sequence_positions:
-            raise ValueError("No valid sequences created!")
+        if not self.sequences:
+            raise ValueError("No valid sequences created from the input texts!")
         
-        logger.info(f"Created {len(self.sequence_positions):,} sequence positions from {valid_texts} texts")
-        logger.info(f"Memory usage: ~{len(self.sequence_positions) * 8 / 1024**2:.2f} MB (positions only)")
+        # Add padding token for consistency
+        self.pad_token_id = tokenizer.vocab.get("<pad>", 0)
+        
+        logger.info(f"✅ Created {len(self.sequences):,} sequences from {valid_texts} texts")
+        logger.info(f"✅ Sequence length: {seq_length}, Min length: {min_seq_length}")
+        logger.info(f"✅ Memory usage: ~{len(self.sequences) * (seq_length + 1) * 4 / 1024**2:.2f} MB")
     
     def __len__(self):
-        return len(self.sequence_positions)
+        return len(self.sequences)
     
     def __getitem__(self, idx):
-        # Tokenize on-demand to save memory
-        text_idx, start_pos = self.sequence_positions[idx]
-        text = self.text_data[text_idx]
-        tokens = self.tokenizer.encode(text)
+        sequence = self.sequences[idx]
         
-        # Extract sequence
-        seq = tokens[start_pos:start_pos + self.seq_length + 1]
+        # Ensure sequence is the right length
+        if len(sequence) < self.seq_length + 1:
+            # Pad if too short
+            sequence = sequence + [self.pad_token_id] * (self.seq_length + 1 - len(sequence))
+        elif len(sequence) > self.seq_length + 1:
+            # Truncate if too long
+            sequence = sequence[:self.seq_length + 1]
         
-        # Pad if necessary
-        if len(seq) < self.seq_length + 1:
-            pad_token = self.tokenizer.vocab.get("<pad>", 0)
-            seq.extend([pad_token] * (self.seq_length + 1 - len(seq)))
+        # Split into input and target
+        input_ids = torch.tensor(sequence[:-1], dtype=torch.long)
+        target_ids = torch.tensor(sequence[1:], dtype=torch.long)
         
-        return (
-            torch.tensor(seq[:-1], dtype=torch.long),
-            torch.tensor(seq[1:], dtype=torch.long)
-        )
+        return input_ids, target_ids
 
 def load_and_process_data(data_path: str, max_samples: Optional[int] = None) -> List[str]:
     """Enhanced data loading for OASST2 dataset with aggressive memory management."""
@@ -864,9 +875,15 @@ def main():
         logger.info(f"   Subwords: {test_tokens[:10]}{'...' if len(test_tokens) > 10 else ''}")
         logger.info(f"   Decoded: {test_decoded}")
         
-        # Create on-demand dataset
-        logger.info("📦 Creating on-demand subword training dataset...")
-        dataset = OnDemandSubwordDataset(texts, tokenizer, model_config.seq_length)
+        # Create fixed dataset with pre-tokenized sequences
+        logger.info("📦 Creating fixed subword training dataset...")
+        dataset = FixedSubwordDataset(
+            texts, 
+            tokenizer, 
+            model_config.seq_length,
+            overlap_ratio=0.5,
+            max_sequences=min(50000, len(texts) * 10)  # Reasonable limit
+        )
         
         logger.info(f"Memory after dataset creation: {get_memory_usage()}")
         
