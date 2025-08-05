@@ -793,7 +793,7 @@ def validate_training_setup():
     return True
 
 def main():
-    """Main training function with subword tokenization."""
+    """Main training function with fixed model saving."""
     
     logger.info("🚀 Starting Subword-Level OASST1 Transformer Training")
     logger.info("=" * 70)
@@ -834,7 +834,7 @@ def main():
     logger.info(f"  Max samples: {max_samples}")
     logger.info(f"  Sequence length: {model_config.seq_length}")
     
-    # Initialize model manager
+    # Initialize model manager with the FIXED version
     model_manager = ModelManager("models")
     
     try:
@@ -904,12 +904,6 @@ def main():
         logger.info("🧠 Initializing subword transformer model...")
         with memory_cleanup():
             model = SubwordTransformer(model_config)
-    
-            # Add multi-GPU support
-            if torch.cuda.device_count() > 1:
-                print(f"Using {torch.cuda.device_count()} GPUs")
-                model = torch.nn.DataParallel(model)
-    
             model = model.to(device)
         
         total_params, trainable_params = count_parameters(model)
@@ -972,51 +966,85 @@ def main():
                         sample = generate_sample_text(model, tokenizer, "<user> Hello", 15)
                         logger.info(f"   Sample: <user> Hello → {sample}")
                 
-                # Model saving
+                # FIXED MODEL SAVING - Only save if loss improved
                 if avg_loss < best_loss:
                     best_loss = avg_loss
                     
                     with memory_cleanup():
-                        # Create metadata
+                        # Create comprehensive metadata with proper dataclass initialization
                         metadata = ModelMetadata(
                             model_name="OASST1_SubwordTransformer",
                             version=f"v1.0_epoch_{epoch}",
                             created_at=datetime.now().isoformat(),
                             last_modified=datetime.now().isoformat(),
-                            model_config=model_config,
-                            training_config=training_config,
+                            model_config=model_config,  # This is already a ModelConfig object
+                            training_config=training_config,  # This is already a TrainingConfig object
                             dataset_info={
                                 "name": "OpenAssistant OASST1 (Subword-Optimized)",
+                                "source": "oasst1_train.jsonl",
                                 "num_samples": len(texts),
                                 "vocab_size": model_config.vocab_size,
                                 "seq_length": model_config.seq_length,
-                                "source": "oasst1_train.jsonl",
                                 "preprocessing": "BPE subword tokenization",
-                                "num_merges": len(tokenizer.merges)
+                                "num_merges": len(tokenizer.merges),
+                                "tokenizer_type": "BPE (Byte Pair Encoding)",
+                                "language": "English",
+                                "dataset_version": "OASST1",
                             },
                             performance_metrics={
-                                "loss": avg_loss,
-                                "perplexity": perplexity,
-                                "batch_time_ms": avg_batch_time * 1000
+                                "loss": float(avg_loss),  # Ensure it's a float
+                                "perplexity": float(perplexity),
+                                "batch_time_ms": float(avg_batch_time * 1000),
+                                "epoch": int(epoch),
+                                "learning_rate": float(scheduler.optimizer.param_groups[0]['lr']),
+                                "gradient_norm": 0.0,  # You can track this if needed
                             },
-                            model_size_mb=model_size_mb,
-                            total_parameters=total_params,
-                            trainable_parameters=trainable_params,
-                            training_time_hours=(time.time() - training_start) / 3600,
-                            epochs_trained=epoch,
-                            best_loss=best_loss,
-                            best_perplexity=calculate_perplexity(best_loss),
-                            hardware_used=f"{device.type.upper()}",
+                            model_size_mb=float(model_size_mb),
+                            total_parameters=int(total_params),
+                            trainable_parameters=int(trainable_params),
+                            training_time_hours=float((time.time() - training_start) / 3600),
+                            epochs_trained=int(epoch),
+                            best_loss=float(best_loss),
+                            best_perplexity=float(calculate_perplexity(best_loss)),
+                            hardware_used=f"{device.type.upper()}" + (f" ({torch.cuda.get_device_name()})" if device.type == 'cuda' else ""),
                             pytorch_version=torch.__version__,
                             cuda_version=torch.version.cuda if device.type == 'cuda' else None,
-                            model_hash="",
-                            tokenizer_hash="",
-                            notes=f"Subword-level OASST1 transformer with BPE tokenization. Trained on {len(texts):,} samples. Vocabulary size: {model_config.vocab_size:,} with {len(tokenizer.merges):,} BPE merges. Best model at epoch {epoch}.",
-                            tags=["oasst1", "subword", "bpe", "transformer", "best"]
+                            model_hash="",  # Will be calculated by save_model
+                            tokenizer_hash="",  # Will be calculated by save_model
+                            notes=f"Subword-level OASST1 transformer with BPE tokenization. "
+                                  f"Trained on {len(texts):,} samples with vocabulary size of {model_config.vocab_size:,} "
+                                  f"tokens using {len(tokenizer.merges):,} BPE merges. "
+                                  f"Best performance achieved at epoch {epoch} with loss {best_loss:.4f} "
+                                  f"and perplexity {calculate_perplexity(best_loss):.2f}. "
+                                  f"Model uses {model_config.hidden_size}-dimensional embeddings with "
+                                  f"{model_config.num_layers} transformer layers and {model_config.num_heads} attention heads. "
+                                  f"Training performed on {device.type.upper()} with conservative memory settings.",
+                            tags=["oasst1", "subword", "bpe", "transformer", "conversational", "best", f"epoch_{epoch}"]
                         )
                         
-                        model_id = model_manager.save_model(model, tokenizer, metadata, optimizer, scheduler)
-                        logger.info(f"💾 Best model saved: {model_id}")
+                        try:
+                            # Use the FIXED save_model method
+                            model_id = model_manager.save_model(
+                                model=model, 
+                                tokenizer=tokenizer, 
+                                metadata=metadata, 
+                                optimizer=optimizer, 
+                                scheduler=scheduler,
+                                force_cpu_save=True  # Move to CPU for stable saving
+                            )
+                            logger.info(f"💾 Best model saved successfully: {model_id}")
+                            
+                            # Validate the saved model
+                            validation = model_manager.validate_model(model_id)
+                            if validation['valid']:
+                                logger.info(f"✅ Model validation passed")
+                            else:
+                                logger.warning(f"⚠️ Model validation issues: {validation['issues']}")
+                            
+                        except Exception as save_error:
+                            logger.error(f"❌ Failed to save model: {save_error}")
+                            logger.error(f"Save error traceback: {traceback.format_exc()}")
+                            # Continue training even if save fails
                 
                 logger.info("=" * 50)
                 
@@ -1046,6 +1074,11 @@ def main():
         logger.info(f"🔤 Final vocabulary: {model_config.vocab_size:,} tokens with {len(tokenizer.merges):,} BPE merges")
         logger.info(f"🚀 Average processing speed: {len(dataset) * model_config.seq_length * training_config.max_epochs / total_time:.0f} tokens/sec")
         logger.info(f"💾 Final memory state: {get_memory_usage()}")
+        
+        # Print final model summary
+        logger.info("\n" + "=" * 70)
+        logger.info("📊 FINAL MODEL SUMMARY")
+        model_manager.print_model_summary()
         logger.info("=" * 70)
         
         return 0
@@ -1056,8 +1089,7 @@ def main():
     except Exception as e:
         logger.error(f"❌ Training failed with error: {e}")
         logger.info(f"Memory state at failure: {get_memory_usage()}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return 1
     finally:
         # Final cleanup

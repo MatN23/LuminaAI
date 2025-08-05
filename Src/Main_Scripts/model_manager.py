@@ -1,5 +1,5 @@
+# Fixed Model Manager - Corrected Saving System
 # Copyright (c) 2025 Matias Nielsen. All rights reserved.
-# Licensed under the Custom License below.
 
 import os
 import json
@@ -9,20 +9,18 @@ import shutil
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any, Tuple, Union
 from dataclasses import dataclass, asdict
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import warnings
 
-# Suppress TF CUDA factory warnings
+# Suppress warnings
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-
-# Optional: Hide all Python warnings
 warnings.filterwarnings('ignore')
 
-# Around lines 24-28, wrap in try-except:
+# HuggingFace imports with fallback
 try:
     import safetensors.torch as st
     from transformers import PreTrainedModel, PreTrainedTokenizer, AutoConfig, PretrainedConfig
@@ -30,26 +28,9 @@ try:
     HF_AVAILABLE = True
 except ImportError:
     HF_AVAILABLE = False
-    PreTrainedModel = object  # Add these fallback classes
+    PreTrainedModel = object
     PreTrainedTokenizer = object
     PretrainedConfig = object
-    logging.warning("HuggingFace transformers/safetensors not available. LM Studio compatibility disabled.")
-
-# Attempt to suppress TensorFlow's logger (if TF is used indirectly)
-try:
-    import tensorflow as tf
-    tf.get_logger().setLevel('ERROR')
-except ImportError:
-    pass
-
-# LM Studio compatibility imports
-try:
-    import safetensors.torch as st
-    from transformers import PreTrainedModel, PreTrainedTokenizer, AutoConfig, PretrainedConfig
-    from transformers.modeling_outputs import CausalLMOutputWithPast
-    HF_AVAILABLE = True
-except ImportError:
-    HF_AVAILABLE = False
     logging.warning("HuggingFace transformers/safetensors not available. LM Studio compatibility disabled.")
 
 logger = logging.getLogger(__name__)
@@ -125,181 +106,8 @@ class ModelMetadata:
         if self.tags is None:
             self.tags = []
 
-# Custom config class to avoid AutoConfig issues
-class SubwordTransformerConfig(PretrainedConfig if HF_AVAILABLE else object):
-    """Custom configuration class for SubwordTransformer."""
-    
-    model_type = "subword_transformer"
-    
-    def __init__(
-        self,
-        vocab_size=32000,
-        hidden_size=1024,
-        num_hidden_layers=12,
-        num_attention_heads=16,
-        max_position_embeddings=1024,
-        hidden_dropout_prob=0.1,
-        attention_probs_dropout_prob=0.1,
-        initializer_range=0.02,
-        layer_norm_eps=1e-12,
-        pad_token_id=0,
-        bos_token_id=2,
-        eos_token_id=3,
-        unk_token_id=1,
-        use_cache=True,
-        is_decoder=True,
-        **kwargs
-    ):
-        super().__init__(
-            pad_token_id=pad_token_id,
-            bos_token_id=bos_token_id,
-            eos_token_id=eos_token_id,
-            unk_token_id=unk_token_id,
-            **kwargs
-        )
-        
-        self.vocab_size = vocab_size
-        self.hidden_size = hidden_size
-        self.num_hidden_layers = num_hidden_layers
-        self.num_attention_heads = num_attention_heads
-        self.max_position_embeddings = max_position_embeddings
-        self.hidden_dropout_prob = hidden_dropout_prob
-        self.attention_probs_dropout_prob = attention_probs_dropout_prob
-        self.initializer_range = initializer_range
-        self.layer_norm_eps = layer_norm_eps
-        self.use_cache = use_cache
-        self.is_decoder = is_decoder
-
-class HuggingFaceCompatibleModel(PreTrainedModel):
-    """Wrapper to make our model compatible with HuggingFace/LM Studio."""
-    
-    config_class = SubwordTransformerConfig
-    
-    def __init__(self, config, model):
-        super().__init__(config)
-        self.model = model
-        self.config = config
-        
-    def forward(self, input_ids, attention_mask=None, labels=None, **kwargs):
-        logits = self.model(input_ids)
-        
-        loss = None
-        if labels is not None:
-            shift_logits = logits[..., :-1, :].contiguous()
-            shift_labels = labels[..., 1:].contiguous()
-            loss_fct = nn.CrossEntropyLoss()
-            loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-        
-        return CausalLMOutputWithPast(
-            loss=loss,
-            logits=logits,
-            past_key_values=None,
-            hidden_states=None,
-            attentions=None,
-        )
-    
-    def generate(self, input_ids, max_length=100, temperature=0.7, top_k=50, top_p=0.9, **kwargs):
-        """Generation method for compatibility."""
-        self.eval()
-        generated = input_ids.clone()
-        
-        with torch.no_grad():
-            for _ in range(max_length - input_ids.size(1)):
-                if generated.size(1) >= self.config.max_position_embeddings:
-                    break
-                
-                logits = self.model(generated)
-                next_token_logits = logits[0, -1, :] / temperature
-                
-                # Top-k filtering
-                if top_k > 0:
-                    indices_to_remove = next_token_logits < torch.topk(next_token_logits, top_k)[0][..., -1, None]
-                    next_token_logits[indices_to_remove] = float('-inf')
-                
-                # Top-p filtering
-                if top_p < 1.0:
-                    sorted_logits, sorted_indices = torch.sort(next_token_logits, descending=True)
-                    cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
-                    sorted_indices_to_remove = cumulative_probs > top_p
-                    sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
-                    sorted_indices_to_remove[..., 0] = 0
-                    indices_to_remove = sorted_indices[sorted_indices_to_remove]
-                    next_token_logits[indices_to_remove] = float('-inf')
-                
-                probs = F.softmax(next_token_logits, dim=-1)
-                next_token = torch.multinomial(probs, 1)
-                generated = torch.cat([generated, next_token.unsqueeze(0)], dim=1)
-                
-                # Stop on EOS token
-                if next_token.item() == self.config.eos_token_id:
-                    break
-        
-        return generated
-
-class HuggingFaceCompatibleTokenizer(PreTrainedTokenizer):
-    """Wrapper to make our subword tokenizer compatible with HuggingFace."""
-    
-    def __init__(self, subword_tokenizer, **kwargs):
-        self.subword_tokenizer = subword_tokenizer
-        super().__init__(
-            bos_token="<s>",
-            eos_token="</s>",
-            unk_token="<unk>",
-            pad_token="<pad>",
-            **kwargs
-        )
-    
-    @property
-    def vocab_size(self):
-        return self.subword_tokenizer.vocab_size()
-    
-    def get_vocab(self):
-        return self.subword_tokenizer.vocab
-    
-    def _tokenize(self, text):
-        return self.subword_tokenizer.tokenize(text)
-    
-    def _convert_token_to_id(self, token):
-        return self.subword_tokenizer.vocab.get(token, self.subword_tokenizer.vocab.get("<unk>", 1))
-    
-    def _convert_id_to_token(self, index):
-        return self.subword_tokenizer.id_to_token.get(index, "<unk>")
-    
-    def convert_tokens_to_string(self, tokens):
-        # Join tokens and handle end-of-word markers
-        text = "".join(tokens)
-        text = text.replace("</w>", " ")
-        return text.strip()
-    
-    def build_inputs_with_special_tokens(self, token_ids_0, token_ids_1=None):
-        bos = [self.bos_token_id] if self.bos_token_id is not None else []
-        eos = [self.eos_token_id] if self.eos_token_id is not None else []
-        
-        if token_ids_1 is None:
-            return bos + token_ids_0 + eos
-        return bos + token_ids_0 + eos + token_ids_1 + eos
-    
-    def save_vocabulary(self, save_directory, filename_prefix=None):
-        """Save vocabulary files."""
-        if not os.path.isdir(save_directory):
-            os.makedirs(save_directory)
-        
-        vocab_file = os.path.join(save_directory, "vocab.json")
-        merges_file = os.path.join(save_directory, "merges.txt")
-        
-        # Save vocab
-        with open(vocab_file, "w", encoding="utf-8") as f:
-            json.dump(self.subword_tokenizer.vocab, f, ensure_ascii=False, indent=2)
-        
-        # Save merges
-        with open(merges_file, "w", encoding="utf-8") as f:
-            for pair in self.subword_tokenizer.merges:
-                f.write(f"{pair[0]} {pair[1]}\n")
-        
-        return (vocab_file, merges_file)
-
 class ModelManager:
-    """Enhanced model management system with LM Studio compatibility and subword tokenizer support."""
+    """Fixed model management system with proper saving/loading."""
     
     def __init__(self, models_dir: str = "models"):
         self.models_dir = Path(models_dir)
@@ -309,30 +117,41 @@ class ModelManager:
         (self.models_dir / "checkpoints").mkdir(exist_ok=True)
         (self.models_dir / "metadata").mkdir(exist_ok=True)
         (self.models_dir / "tokenizers").mkdir(exist_ok=True)
-        (self.models_dir / "lm_studio").mkdir(exist_ok=True)
+        if HF_AVAILABLE:
+            (self.models_dir / "lm_studio").mkdir(exist_ok=True)
         
         logger.info(f"ModelManager initialized with directory: {self.models_dir}")
         if HF_AVAILABLE:
             logger.info("✅ LM Studio compatibility enabled")
         else:
-            logger.warning("⚠️ LM Studio compatibility disabled - install transformers and safetensors")
+            logger.warning("⚠️ LM Studio compatibility disabled")
     
     def _calculate_hash(self, obj: Any) -> str:
         """Calculate SHA256 hash of an object."""
         try:
             if hasattr(obj, 'state_dict'):
-                state_bytes = pickle.dumps(obj.state_dict())
+                # For PyTorch models
+                state_bytes = pickle.dumps({k: v.cpu() for k, v in obj.state_dict().items()})
+            elif hasattr(obj, 'vocab') and hasattr(obj, 'merges'):
+                # For tokenizers
+                state_bytes = pickle.dumps({
+                    'vocab': obj.vocab,
+                    'merges': obj.merges,
+                    'vocab_size': getattr(obj, 'vocab_size', lambda: len(obj.vocab))()
+                })
             else:
                 state_bytes = pickle.dumps(obj)
             return hashlib.sha256(state_bytes).hexdigest()[:16]
         except Exception as e:
             logger.warning(f"Could not calculate hash: {e}")
-            return "unknown"
+            return datetime.now().strftime("%Y%m%d_%H%M%S")
     
     def _get_model_size(self, model_path: Path) -> float:
         """Calculate model file size in MB."""
         try:
-            return model_path.stat().st_size / (1024 * 1024)
+            if model_path.exists():
+                return model_path.stat().st_size / (1024 * 1024)
+            return 0.0
         except Exception:
             return 0.0
     
@@ -340,397 +159,450 @@ class ModelManager:
         """Generate unique model ID."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         name_clean = metadata.model_name.replace(" ", "_").lower()
-        version_clean = metadata.version.replace(" ", "_").replace(".", "_").lower()
+        name_clean = "".join(c for c in name_clean if c.isalnum() or c == "_")
+        version_clean = metadata.version.replace(".", "_").replace(" ", "_").lower()
+        version_clean = "".join(c for c in version_clean if c.isalnum() or c == "_")
         return f"{name_clean}_{version_clean}_{timestamp}"
     
-    def _save_tokenizer_files(self, tokenizer, model_dir: Path) -> None:
-        """Save tokenizer in multiple formats for compatibility."""
-        # Save original pickle format
-        tokenizer_path = model_dir / "tokenizer.pkl"
-        with open(tokenizer_path, 'wb') as f:
-            pickle.dump(tokenizer, f)
-        
-        # Save vocabulary and merges in text format
-        vocab_path = model_dir / "vocab.json"
-        merges_path = model_dir / "merges.txt"
-        
-        with open(vocab_path, 'w', encoding='utf-8') as f:
-            json.dump(tokenizer.vocab, f, indent=2, ensure_ascii=False)
-        
-        with open(merges_path, 'w', encoding='utf-8') as f:
-            for pair in tokenizer.merges:
-                f.write(f"{pair[0]} {pair[1]}\n")
-        
-        logger.info(f"Tokenizer saved in multiple formats:")
-        logger.info(f"  Pickle: {tokenizer_path}")
-        logger.info(f"  Vocab: {vocab_path}")
-        logger.info(f"  Merges: {merges_path}")
-    
-    def _save_for_lm_studio(self, model: nn.Module, tokenizer, metadata: ModelMetadata, 
-                           model_id: str) -> bool:
-        """Save model in LM Studio compatible format with subword tokenizer."""
-        if not HF_AVAILABLE:
-            logger.warning("Skipping LM Studio save - dependencies not available")
-            return False
-        
+    def _save_tokenizer_safely(self, tokenizer, tokenizer_dir: Path) -> bool:
+        """Save tokenizer with comprehensive error handling."""
         try:
-            # Create LM Studio model directory
-            lm_studio_dir = self.models_dir / "lm_studio" / model_id
-            lm_studio_dir.mkdir(parents=True, exist_ok=True)
+            tokenizer_dir.mkdir(exist_ok=True)
             
-            logger.info(f"💾 Saving LM Studio compatible model: {model_id}")
+            # Method 1: Save as pickle (most reliable)
+            tokenizer_pkl_path = tokenizer_dir / "tokenizer.pkl"
+            with open(tokenizer_pkl_path, 'wb') as f:
+                pickle.dump(tokenizer, f, protocol=pickle.HIGHEST_PROTOCOL)
+            logger.info(f"✅ Tokenizer saved as pickle: {tokenizer_pkl_path}")
             
-            # Create HuggingFace compatible config
-            hf_config = SubwordTransformerConfig(
-                vocab_size=metadata.model_config.vocab_size,
-                hidden_size=metadata.model_config.hidden_size,
-                num_hidden_layers=metadata.model_config.num_layers,
-                num_attention_heads=metadata.model_config.num_heads,
-                max_position_embeddings=metadata.model_config.seq_length,
-                hidden_dropout_prob=metadata.model_config.dropout,
-                attention_probs_dropout_prob=metadata.model_config.dropout,
-                initializer_range=0.02,
-                layer_norm_eps=1e-12,
-                pad_token_id=tokenizer.vocab.get("<pad>", 0),
-                bos_token_id=tokenizer.vocab.get("<s>", 2),
-                eos_token_id=tokenizer.vocab.get("</s>", 3),
-                unk_token_id=tokenizer.vocab.get("<unk>", 1),
-                use_cache=True,
-                is_decoder=True,
-                architectures=["SubwordTransformerForCausalLM"],
-                torch_dtype="float32",
-                transformers_version="4.21.0"
-            )
-            
-            # Save config
-            hf_config.save_pretrained(lm_studio_dir)
-            
-            # Create and save HuggingFace compatible model
-            hf_model = HuggingFaceCompatibleModel(hf_config, model)
-            
-            # Save model weights using safetensors
-            try:
-                state_dict = {}
-                for name, param in hf_model.named_parameters():
-                    state_dict[name] = param.detach().cpu()
+            # Method 2: Save vocabulary and merges separately
+            if hasattr(tokenizer, 'vocab') and hasattr(tokenizer, 'merges'):
+                vocab_path = tokenizer_dir / "vocab.json"
+                merges_path = tokenizer_dir / "merges.txt"
                 
-                # Save as safetensors (preferred by LM Studio)
-                safetensors_path = lm_studio_dir / "model.safetensors"
-                st.save_file(state_dict, safetensors_path)
-                logger.info(f"✅ Saved safetensors: {safetensors_path}")
+                # Save vocabulary
+                with open(vocab_path, 'w', encoding='utf-8') as f:
+                    json.dump(tokenizer.vocab, f, indent=2, ensure_ascii=False)
                 
-                # Also save as regular PyTorch (backup)
-                torch.save(state_dict, lm_studio_dir / "pytorch_model.bin")
+                # Save merges
+                with open(merges_path, 'w', encoding='utf-8') as f:
+                    for merge in tokenizer.merges:
+                        if isinstance(merge, (list, tuple)) and len(merge) == 2:
+                            f.write(f"{merge[0]} {merge[1]}\n")
                 
-            except Exception as e:
-                logger.warning(f"Failed to save as safetensors: {e}. Using PyTorch format.")
-                hf_model.save_pretrained(lm_studio_dir, safe_serialization=False)
+                logger.info(f"✅ Tokenizer vocab saved: {vocab_path}")
+                logger.info(f"✅ Tokenizer merges saved: {merges_path}")
             
-            # Create and save HuggingFace compatible tokenizer
-            hf_tokenizer = HuggingFaceCompatibleTokenizer(tokenizer)
-            hf_tokenizer.save_pretrained(lm_studio_dir)
-            
-            # Save comprehensive model card
-            model_card = {
-                "model_name": metadata.model_name,
-                "model_type": "causal-lm",
-                "architecture": "SubwordTransformer",
-                "tokenizer_type": "BPE (Byte Pair Encoding)",
-                "vocab_size": metadata.model_config.vocab_size,
-                "context_length": metadata.model_config.seq_length,
-                "hidden_size": metadata.model_config.hidden_size,
-                "num_layers": metadata.model_config.num_layers,
-                "num_heads": metadata.model_config.num_heads,
-                "parameters": f"{metadata.total_parameters:,}",
-                "training_data": metadata.dataset_info.get("source", "Unknown"),
-                "license": "Custom License",
-                "usage": "Text generation and conversation",
-                "prompt_format": "<user> {prompt} <bot>",
-                "stop_tokens": ["</s>", "<user>"],
-                "recommended_settings": {
-                    "temperature": 0.8,
-                    "top_k": 50,
-                    "top_p": 0.9,
-                    "repetition_penalty": 1.1,
-                    "max_tokens": 512
+            # Method 3: Save tokenizer metadata
+            tokenizer_info = {
+                'type': type(tokenizer).__name__,
+                'vocab_size': getattr(tokenizer, 'vocab_size', lambda: len(getattr(tokenizer, 'vocab', {})))(),
+                'special_tokens': {
+                    'pad_token': getattr(tokenizer, 'vocab', {}).get('<pad>', 0),
+                    'unk_token': getattr(tokenizer, 'vocab', {}).get('<unk>', 1),
+                    'bos_token': getattr(tokenizer, 'vocab', {}).get('<s>', 2),
+                    'eos_token': getattr(tokenizer, 'vocab', {}).get('</s>', 3),
                 },
-                "performance": {
-                    "loss": metadata.best_loss,
-                    "perplexity": metadata.best_perplexity,
-                    "training_time_hours": metadata.training_time_hours,
-                    "epochs_trained": metadata.epochs_trained
-                },
-                "technical_details": {
-                    "pytorch_version": metadata.pytorch_version,
-                    "hardware_used": metadata.hardware_used,
-                    "created_at": metadata.created_at,
-                    "model_id": model_id
-                }
+                'num_merges': len(getattr(tokenizer, 'merges', [])),
+                'saved_at': datetime.now().isoformat()
             }
             
-            with open(lm_studio_dir / "model_card.json", "w") as f:
-                json.dump(model_card, f, indent=2)
+            tokenizer_info_path = tokenizer_dir / "tokenizer_info.json"
+            with open(tokenizer_info_path, 'w', encoding='utf-8') as f:
+                json.dump(tokenizer_info, f, indent=2)
             
-            # Create README for LM Studio users
-            readme_content = f"""# {metadata.model_name}
-
-A subword-level transformer model using BPE tokenization for conversational AI.
-
-## Model Details
-- **Architecture**: Subword-level Transformer with BPE
-- **Parameters**: {metadata.total_parameters:,}
-- **Context Length**: {metadata.model_config.seq_length}
-- **Vocabulary Size**: {metadata.model_config.vocab_size:,}
-- **Tokenizer**: Byte Pair Encoding (BPE)
-- **Training Loss**: {metadata.best_loss:.4f}
-- **Perplexity**: {metadata.best_perplexity:.2f}
-
-## Subword Tokenization Benefits
-- Better handling of out-of-vocabulary words
-- More efficient representation of morphologically rich languages
-- Reduced vocabulary size while maintaining semantic understanding
-- Better generalization to unseen word forms
-
-## Usage in LM Studio
-
-### Loading the Model
-1. Open LM Studio
-2. Click "Load Model" 
-3. Navigate to this folder
-4. Select and load the model
-
-### Prompt Format
-```
-<user> Your question or message here <bot>
-```
-
-### Recommended Settings
-- **Temperature**: 0.8
-- **Top-K**: 50
-- **Top-P**: 0.9  
-- **Repetition Penalty**: 1.1
-- **Max Tokens**: 512
-- **Stop Tokens**: `</s>`, `<user>`
-
-## Example Conversation
-```
-<user> Hello! How are you today? <bot>
-Hello! I'm doing well, thank you for asking. How can I help you today?
-
-<user> Can you explain what subword tokenization is? <bot>
-Subword tokenization is a technique that breaks text into smaller units than words but larger than characters...
-```
-
-## Training Details
-- **Dataset**: {metadata.dataset_info.get('source', 'Custom dataset')}
-- **Training Time**: {metadata.training_time_hours:.2f} hours
-- **Epochs**: {metadata.epochs_trained}
-- **Hardware**: {metadata.hardware_used}
-- **Created**: {metadata.created_at}
-
-## Tokenization Examples
-The BPE tokenizer learns to merge frequent character pairs, creating subwords like:
-- "playing" → ["play", "ing</w>"]
-- "unhappy" → ["un", "happy</w>"]
-- "tokenization" → ["token", "ization</w>"]
-
-## Notes
-{metadata.notes}
-
-## License
-Custom License - See original training repository for details.
-"""
-            
-            with open(lm_studio_dir / "README.md", "w") as f:
-                f.write(readme_content)
-            
-            logger.info(f"✅ LM Studio model saved: {lm_studio_dir}")
+            logger.info(f"✅ Tokenizer info saved: {tokenizer_info_path}")
             return True
             
         except Exception as e:
-            logger.error(f"❌ Failed to save LM Studio format: {e}")
-            import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
+            logger.error(f"❌ Failed to save tokenizer: {e}")
             return False
     
+    def _load_tokenizer_safely(self, tokenizer_dir: Path):
+        """Load tokenizer with multiple fallback methods."""
+        if not tokenizer_dir.exists():
+            raise FileNotFoundError(f"Tokenizer directory not found: {tokenizer_dir}")
+        
+        # Method 1: Try loading pickle first
+        tokenizer_pkl_path = tokenizer_dir / "tokenizer.pkl"
+        if tokenizer_pkl_path.exists():
+            try:
+                with open(tokenizer_pkl_path, 'rb') as f:
+                    tokenizer = pickle.load(f)
+                logger.info(f"✅ Tokenizer loaded from pickle: {tokenizer_pkl_path}")
+                return tokenizer
+            except Exception as e:
+                logger.warning(f"Failed to load tokenizer pickle: {e}")
+        
+        # Method 2: Reconstruct from vocab and merges
+        vocab_path = tokenizer_dir / "vocab.json"
+        merges_path = tokenizer_dir / "merges.txt"
+        
+        if vocab_path.exists() and merges_path.exists():
+            try:
+                # Import here to avoid circular imports
+                from subword_transformer import SubwordTokenizer
+                
+                # Load vocabulary
+                with open(vocab_path, 'r', encoding='utf-8') as f:
+                    vocab = json.load(f)
+                
+                # Load merges
+                merges = []
+                with open(merges_path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and ' ' in line:
+                            parts = line.split(' ', 1)
+                            if len(parts) == 2:
+                                merges.append((parts[0], parts[1]))
+                
+                # Create tokenizer
+                tokenizer = SubwordTokenizer(vocab=vocab, merges=merges)
+                logger.info(f"✅ Tokenizer reconstructed from vocab/merges")
+                return tokenizer
+                
+            except Exception as e:
+                logger.error(f"Failed to reconstruct tokenizer: {e}")
+        
+        # Method 3: Check if there's a tokenizer info file for debugging
+        tokenizer_info_path = tokenizer_dir / "tokenizer_info.json"
+        if tokenizer_info_path.exists():
+            try:
+                with open(tokenizer_info_path, 'r', encoding='utf-8') as f:
+                    info = json.load(f)
+                logger.info(f"Tokenizer info available: {info}")
+            except:
+                pass
+        
+        raise FileNotFoundError(f"Could not load tokenizer from {tokenizer_dir}")
+    
     def save_model(self, model: nn.Module, tokenizer, metadata: ModelMetadata,
-                   optimizer=None, scheduler=None) -> str:
-        """Save model with comprehensive metadata and LM Studio compatibility."""
+                   optimizer=None, scheduler=None, force_cpu_save: bool = True) -> str:
+        """Save model with comprehensive error handling and validation."""
         try:
+            logger.info("💾 Starting model save process...")
+            
             # Generate model ID
             model_id = self._generate_model_id(metadata)
+            logger.info(f"Generated model ID: {model_id}")
             
             # Create model directory
             model_dir = self.models_dir / "checkpoints" / model_id
             model_dir.mkdir(parents=True, exist_ok=True)
             
-            # Save original model format
+            # Move model to CPU for saving if requested (more stable)
+            original_device = next(model.parameters()).device
+            if force_cpu_save and original_device.type != 'cpu':
+                logger.info("Moving model to CPU for saving...")
+                model = model.cpu()
+            
+            # Save model state dict
             model_path = model_dir / "model.pt"
-            torch.save({
+            model_save_data = {
                 'model_state_dict': model.state_dict(),
-                'model_config': asdict(metadata.model_config),
-                'model_id': model_id
-            }, model_path)
+                'model_config': asdict(metadata.model_config) if hasattr(metadata.model_config, '__dict__') else metadata.model_config,
+                'model_id': model_id,
+                'model_type': metadata.model_config.model_type,
+                'vocab_size': metadata.model_config.vocab_size,
+                'pytorch_version': torch.__version__,
+                'saved_at': datetime.now().isoformat()
+            }
             
-            # Save tokenizer in multiple formats
-            self._save_tokenizer_files(tokenizer, model_dir)
+            torch.save(model_save_data, model_path)
+            logger.info(f"✅ Model state saved: {model_path}")
             
-            # Save optimizer and scheduler if provided
-            if optimizer:
-                optimizer_path = model_dir / "optimizer.pt"
-                torch.save(optimizer.state_dict(), optimizer_path)
+            # Move model back to original device
+            if force_cpu_save and original_device.type != 'cpu':
+                model = model.to(original_device)
             
-            if scheduler:
-                scheduler_path = model_dir / "scheduler.pt"
-                torch.save(scheduler.state_dict(), scheduler_path)
+            # Save tokenizer
+            tokenizer_dir = model_dir / "tokenizer"
+            if not self._save_tokenizer_safely(tokenizer, tokenizer_dir):
+                logger.error("Failed to save tokenizer - model save incomplete")
+                # Don't fail completely, but warn
             
-            # Calculate hashes and file size
+            # Save optimizer state if provided
+            if optimizer is not None:
+                try:
+                    optimizer_path = model_dir / "optimizer.pt"
+                    optimizer_state = optimizer.state_dict()
+                    torch.save(optimizer_state, optimizer_path)
+                    logger.info(f"✅ Optimizer state saved: {optimizer_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to save optimizer: {e}")
+            
+            # Save scheduler state if provided
+            if scheduler is not None:
+                try:
+                    scheduler_path = model_dir / "scheduler.pt"
+                    if hasattr(scheduler, 'state_dict'):
+                        scheduler_state = scheduler.state_dict()
+                    else:
+                        # Custom scheduler - save what we can
+                        scheduler_state = {
+                            'current_step': getattr(scheduler, 'current_step', 0),
+                            'warmup_steps': getattr(scheduler, 'warmup_steps', 0),
+                            'total_steps': getattr(scheduler, 'total_steps', 0)
+                        }
+                    torch.save(scheduler_state, scheduler_path)
+                    logger.info(f"✅ Scheduler state saved: {scheduler_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to save scheduler: {e}")
+            
+            # Calculate and update metadata
             metadata.model_hash = self._calculate_hash(model)
             metadata.tokenizer_hash = self._calculate_hash(tokenizer)
             metadata.model_size_mb = self._get_model_size(model_path)
             metadata.last_modified = datetime.now().isoformat()
             
-            # Save metadata
+            # Save comprehensive metadata
             metadata_path = self.models_dir / "metadata" / f"{model_id}.json"
+            metadata_dict = asdict(metadata)
+            
+            # Convert non-serializable objects
+            if isinstance(metadata_dict.get('model_config'), object):
+                metadata_dict['model_config'] = asdict(metadata.model_config)
+            if isinstance(metadata_dict.get('training_config'), object):
+                metadata_dict['training_config'] = asdict(metadata.training_config)
+            
             with open(metadata_path, 'w', encoding='utf-8') as f:
-                json.dump(asdict(metadata), f, indent=2, default=str)
+                json.dump(metadata_dict, f, indent=2, ensure_ascii=False, default=str)
             
-            # Save for LM Studio compatibility
-            lm_studio_success = self._save_for_lm_studio(model, tokenizer, metadata, model_id)
+            logger.info(f"✅ Metadata saved: {metadata_path}")
             
-            # Create symlink to latest model if this is the best
+            # Create model summary
+            summary_path = model_dir / "model_summary.txt"
+            summary_content = f"""Model Summary: {model_id}
+{'='*50}
+
+Basic Information:
+- Name: {metadata.model_name}
+- Version: {metadata.version}
+- Type: {metadata.model_config.model_type}
+- Created: {metadata.created_at}
+- Model ID: {model_id}
+
+Architecture:
+- Vocabulary Size: {metadata.model_config.vocab_size:,}
+- Hidden Size: {metadata.model_config.hidden_size}
+- Layers: {metadata.model_config.num_layers}
+- Attention Heads: {metadata.model_config.num_heads}
+- Sequence Length: {metadata.model_config.seq_length}
+- Dropout: {metadata.model_config.dropout}
+
+Model Statistics:
+- Total Parameters: {metadata.total_parameters:,}
+- Trainable Parameters: {metadata.trainable_parameters:,}
+- Model Size: {metadata.model_size_mb:.2f} MB
+- Best Loss: {metadata.best_loss:.4f}
+- Best Perplexity: {metadata.best_perplexity:.2f}
+
+Training Information:
+- Epochs Trained: {metadata.epochs_trained}
+- Training Time: {metadata.training_time_hours:.2f} hours
+- Hardware: {metadata.hardware_used}
+- PyTorch Version: {metadata.pytorch_version}
+
+Dataset:
+- Source: {metadata.dataset_info.get('source', 'Unknown')}
+- Samples: {metadata.dataset_info.get('num_samples', 'Unknown')}
+
+Files:
+- Model: model.pt
+- Tokenizer: tokenizer/
+- Metadata: ../metadata/{model_id}.json
+- Optimizer: {'optimizer.pt (saved)' if optimizer else 'optimizer.pt (not saved)'}
+- Scheduler: {'scheduler.pt (saved)' if scheduler else 'scheduler.pt (not saved)'}
+
+Notes:
+{metadata.notes}
+
+Tags: {', '.join(metadata.tags)}
+"""
+            
+            with open(summary_path, 'w', encoding='utf-8') as f:
+                f.write(summary_content)
+            
+            logger.info(f"✅ Model summary saved: {summary_path}")
+            
+            # Handle "best" model linking
             if "best" in metadata.tags:
-                latest_link = self.models_dir / "latest_best"
-                if latest_link.exists():
-                    latest_link.unlink()
-                try:
-                    latest_link.symlink_to(f"checkpoints/{model_id}")
-                except OSError:
-                    # Fallback for systems that don't support symlinks
-                    with open(latest_link, 'w') as f:
-                        f.write(model_id)
-                
-                # Also create LM Studio latest link
-                if lm_studio_success:
-                    lm_latest_link = self.models_dir / "lm_studio" / "latest_best"
-                    if lm_latest_link.exists():
-                        lm_latest_link.unlink()
-                    try:
-                        lm_latest_link.symlink_to(model_id)
-                    except OSError:
-                        with open(lm_latest_link, 'w') as f:
-                            f.write(model_id)
+                self._update_best_model_link(model_id)
             
-            logger.info(f"✅ Model saved successfully: {model_id}")
+            # Success message
+            logger.info("=" * 50)
+            logger.info(f"✅ Model saved successfully!")
+            logger.info(f"   Model ID: {model_id}")
+            logger.info(f"   Location: {model_dir}")
             logger.info(f"   Size: {metadata.model_size_mb:.2f} MB")
             logger.info(f"   Parameters: {metadata.total_parameters:,}")
-            logger.info(f"   Tokenizer: {metadata.model_config.tokenizer_type} (BPE)")
-            logger.info(f"   Original format: {model_dir}")
-            if lm_studio_success:
-                logger.info(f"   LM Studio format: {self.models_dir / 'lm_studio' / model_id}")
-                logger.info("   🚀 Ready for LM Studio!")
+            logger.info(f"   Loss: {metadata.best_loss:.4f}")
+            logger.info(f"   Perplexity: {metadata.best_perplexity:.2f}")
+            logger.info("=" * 50)
             
             return model_id
             
         except Exception as e:
             logger.error(f"❌ Failed to save model: {e}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            
+            # Cleanup on failure
+            if 'model_dir' in locals() and model_dir.exists():
+                try:
+                    shutil.rmtree(model_dir)
+                    logger.info("Cleaned up incomplete model directory")
+                except:
+                    pass
+            
             raise
     
-    def load_model(self, model_id: str) -> Tuple[nn.Module, Any, ModelMetadata]:
-        """Load model with tokenizer and metadata."""
+    def _update_best_model_link(self, model_id: str):
+        """Update symlink/reference to best model."""
         try:
-            # Handle special case for 'latest' or 'best'
-            if model_id in ['latest', 'best', 'latest_best']:
-                latest_link = self.models_dir / "latest_best"
-                if latest_link.exists():
-                    if latest_link.is_symlink():
-                        model_path = latest_link.readlink()
-                        model_id = model_path.name if model_path.name != "checkpoints" else model_path.parent.name
-                    else:
-                        with open(latest_link, 'r') as f:
-                            model_id = f.read().strip()
-                else:
-                    # Find best model by loss
-                    models = self.list_models()
-                    if not models:
-                        raise FileNotFoundError("No models available")
-                    model_id = min(models, key=lambda x: x['best_loss'])['id']
+            latest_link = self.models_dir / "latest_best"
             
+            # Remove existing link
+            if latest_link.exists():
+                if latest_link.is_symlink():
+                    latest_link.unlink()
+                else:
+                    latest_link.unlink()
+            
+            # Create new link
+            try:
+                # Try symlink first
+                latest_link.symlink_to(f"checkpoints/{model_id}")
+                logger.info(f"✅ Best model symlink updated: {latest_link}")
+            except OSError:
+                # Fallback to text file
+                with open(latest_link, 'w') as f:
+                    f.write(model_id)
+                logger.info(f"✅ Best model reference updated: {latest_link}")
+                
+        except Exception as e:
+            logger.warning(f"Failed to update best model link: {e}")
+    
+    def load_model(self, model_id: str, device: Optional[torch.device] = None):
+        """Load model with comprehensive error handling."""
+        try:
+            logger.info(f"🔄 Loading model: {model_id}")
+            
+            # Handle special model IDs
+            if model_id in ['latest', 'best', 'latest_best']:
+                model_id = self._resolve_special_model_id(model_id)
+            
+            # Check if model exists
             model_dir = self.models_dir / "checkpoints" / model_id
             if not model_dir.exists():
-                raise FileNotFoundError(f"Model not found: {model_id}")
+                available_models = [d.name for d in (self.models_dir / "checkpoints").iterdir() if d.is_dir()]
+                raise FileNotFoundError(f"Model '{model_id}' not found. Available models: {available_models}")
             
             # Load metadata
             metadata_path = self.models_dir / "metadata" / f"{model_id}.json"
+            if not metadata_path.exists():
+                raise FileNotFoundError(f"Metadata not found: {metadata_path}")
+            
             with open(metadata_path, 'r', encoding='utf-8') as f:
                 metadata_dict = json.load(f)
             
             # Reconstruct metadata object
-            metadata_dict['model_config'] = ModelConfig(**metadata_dict['model_config'])
-            metadata_dict['training_config'] = TrainingConfig(**metadata_dict['training_config'])
+            model_config = ModelConfig(**metadata_dict['model_config'])
+            training_config = TrainingConfig(**metadata_dict['training_config'])
+            
+            metadata_dict['model_config'] = model_config
+            metadata_dict['training_config'] = training_config
             metadata = ModelMetadata(**metadata_dict)
             
-            # Load tokenizer - try multiple formats
-            tokenizer = None
+            logger.info(f"✅ Metadata loaded: {metadata.model_name} {metadata.version}")
             
-            # Try pickle format first (most complete)
-            tokenizer_pickle_path = model_dir / "tokenizer.pkl"
-            if tokenizer_pickle_path.exists():
-                with open(tokenizer_pickle_path, 'rb') as f:
-                    tokenizer = pickle.load(f)
-            else:
-                # Fallback: reconstruct from vocab and merges files
-                vocab_path = model_dir / "vocab.json"
-                merges_path = model_dir / "merges.txt"
-                
-                if vocab_path.exists() and merges_path.exists():
-                    from subword_transformer import SubwordTokenizer
-                    
-                    # Load vocab
-                    with open(vocab_path, 'r', encoding='utf-8') as f:
-                        vocab = json.load(f)
-                    
-                    # Load merges
-                    merges = []
-                    with open(merges_path, 'r', encoding='utf-8') as f:
-                        for line in f:
-                            line = line.strip()
-                            if line:
-                                parts = line.split()
-                                if len(parts) == 2:
-                                    merges.append((parts[0], parts[1]))
-                    
-                    tokenizer = SubwordTokenizer(vocab, merges)
-                else:
-                    raise FileNotFoundError("No tokenizer files found")
+            # Load tokenizer
+            tokenizer_dir = model_dir / "tokenizer"
+            tokenizer = self._load_tokenizer_safely(tokenizer_dir)
+            
+            logger.info(f"✅ Tokenizer loaded: vocab_size={tokenizer.vocab_size()}")
             
             # Load model
-            from subword_transformer import SubwordTransformer
-            model = SubwordTransformer(metadata.model_config)
-            
             model_path = model_dir / "model.pt"
-            checkpoint = torch.load(model_path, map_location='cpu')
-            model.load_state_dict(checkpoint['model_state_dict'])
+            if not model_path.exists():
+                raise FileNotFoundError(f"Model file not found: {model_path}")
             
-            logger.info(f"✅ Model loaded successfully: {model_id}")
+            # Import model class
+            if metadata.model_config.model_type == "SubwordTransformer":
+                from subword_transformer import SubwordTransformer
+                model = SubwordTransformer(model_config)
+            else:
+                raise ValueError(f"Unknown model type: {metadata.model_config.model_type}")
+            
+            # Load checkpoint
+            checkpoint_device = 'cpu' if device is None else device
+            checkpoint = torch.load(model_path, map_location=checkpoint_device)
+            
+            # Load state dict
+            if 'model_state_dict' in checkpoint:
+                state_dict = checkpoint['model_state_dict']
+            else:
+                state_dict = checkpoint
+            
+            # Load with error handling
+            try:
+                missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=True)
+                if missing_keys:
+                    logger.warning(f"Missing keys in checkpoint: {missing_keys}")
+                if unexpected_keys:
+                    logger.warning(f"Unexpected keys in checkpoint: {unexpected_keys}")
+            except Exception as e:
+                logger.error(f"Failed to load state dict: {e}")
+                raise
+            
+            # Move to device if specified
+            if device is not None:
+                model = model.to(device)
+            
+            logger.info("=" * 50)
+            logger.info(f"✅ Model loaded successfully!")
+            logger.info(f"   Model ID: {model_id}")
             logger.info(f"   Name: {metadata.model_name} {metadata.version}")
             logger.info(f"   Parameters: {metadata.total_parameters:,}")
+            logger.info(f"   Vocab Size: {model_config.vocab_size:,}")
             logger.info(f"   Best Loss: {metadata.best_loss:.4f}")
-            logger.info(f"   Tokenizer: {metadata.model_config.tokenizer_type} (vocab: {tokenizer.vocab_size():,})")
-            
-            # Check if LM Studio version exists
-            lm_studio_path = self.models_dir / "lm_studio" / model_id
-            if lm_studio_path.exists():
-                logger.info(f"   🚀 LM Studio version available at: {lm_studio_path}")
+            logger.info(f"   Device: {next(model.parameters()).device}")
+            logger.info("=" * 50)
             
             return model, tokenizer, metadata
             
         except Exception as e:
-            logger.error(f"❌ Failed to load model {model_id}: {e}")
+            logger.error(f"❌ Failed to load model '{model_id}': {e}")
             raise
     
+    def _resolve_special_model_id(self, special_id: str) -> str:
+        """Resolve special model IDs like 'latest', 'best'."""
+        latest_link = self.models_dir / "latest_best"
+        
+        if latest_link.exists():
+            try:
+                if latest_link.is_symlink():
+                    # Resolve symlink
+                    target = latest_link.readlink()
+                    return target.name if target.name != "checkpoints" else target.parent.name
+                else:
+                    # Read from text file
+                    with open(latest_link, 'r') as f:
+                        return f.read().strip()
+            except Exception as e:
+                logger.warning(f"Failed to resolve {special_id}: {e}")
+        
+        # Fallback: find best model by loss
+        models = self.list_models()
+        if not models:
+            raise FileNotFoundError("No models available")
+        
+        best_model = min(models, key=lambda x: x['best_loss'])
+        return best_model['id']
+    
     def list_models(self) -> List[Dict[str, Any]]:
-        """List all available models with their metadata."""
+        """List all available models."""
         models = []
         
         try:
@@ -744,24 +616,23 @@ Custom License - See original training repository for details.
                         metadata_dict = json.load(f)
                     
                     model_id = metadata_file.stem
-                    lm_studio_available = (self.models_dir / "lm_studio" / model_id).exists()
                     
                     model_info = {
                         'id': model_id,
-                        'name': metadata_dict['model_name'],
-                        'version': metadata_dict['version'],
-                        'created_at': metadata_dict['created_at'],
-                        'best_loss': metadata_dict['best_loss'],
-                        'best_perplexity': metadata_dict['best_perplexity'],
-                        'size_mb': metadata_dict['model_size_mb'],
-                        'parameters': metadata_dict['total_parameters'],
-                        'epochs': metadata_dict['epochs_trained'],
-                        'training_hours': metadata_dict['training_time_hours'],
+                        'name': metadata_dict.get('model_name', 'Unknown'),
+                        'version': metadata_dict.get('version', 'Unknown'),
+                        'created_at': metadata_dict.get('created_at', 'Unknown'),
+                        'best_loss': metadata_dict.get('best_loss', float('inf')),
+                        'best_perplexity': metadata_dict.get('best_perplexity', float('inf')),
+                        'size_mb': metadata_dict.get('model_size_mb', 0.0),
+                        'parameters': metadata_dict.get('total_parameters', 0),
+                        'epochs': metadata_dict.get('epochs_trained', 0),
+                        'training_hours': metadata_dict.get('training_time_hours', 0.0),
                         'tags': metadata_dict.get('tags', []),
-                        'hardware': metadata_dict['hardware_used'],
+                        'hardware': metadata_dict.get('hardware_used', 'Unknown'),
                         'notes': metadata_dict.get('notes', ''),
-                        'lm_studio_ready': lm_studio_available,
-                        'tokenizer_type': metadata_dict.get('model_config', {}).get('tokenizer_type', 'subword')
+                        'tokenizer_type': metadata_dict.get('model_config', {}).get('tokenizer_type', 'unknown'),
+                        'model_type': metadata_dict.get('model_config', {}).get('model_type', 'Unknown')
                     }
                     
                     models.append(model_info)
@@ -770,7 +641,7 @@ Custom License - See original training repository for details.
                     logger.warning(f"Could not load metadata for {metadata_file}: {e}")
                     continue
             
-            # Sort by best loss (ascending)
+            # Sort by best loss
             models.sort(key=lambda x: x['best_loss'])
             
         except Exception as e:
@@ -778,65 +649,138 @@ Custom License - See original training repository for details.
         
         return models
     
-    def delete_model(self, model_id: str) -> bool:
-        """Delete a model and all its associated files."""
+    def validate_model(self, model_id: str) -> Dict[str, Any]:
+        """Validate a saved model and return status."""
         try:
             model_dir = self.models_dir / "checkpoints" / model_id
             metadata_path = self.models_dir / "metadata" / f"{model_id}.json"
-            lm_studio_dir = self.models_dir / "lm_studio" / model_id
+            
+            validation_result = {
+                'model_id': model_id,
+                'valid': True,
+                'issues': [],
+                'files': {}
+            }
+            
+            # Check model directory
+            if not model_dir.exists():
+                validation_result['valid'] = False
+                validation_result['issues'].append("Model directory missing")
+                return validation_result
+            
+            # Check metadata
+            if metadata_path.exists():
+                validation_result['files']['metadata'] = "✅ Present"
+            else:
+                validation_result['valid'] = False
+                validation_result['files']['metadata'] = "❌ Missing"
+                validation_result['issues'].append("Metadata file missing")
+            
+            # Check model file
+            model_path = model_dir / "model.pt"
+            if model_path.exists():
+                validation_result['files']['model'] = f"✅ Present ({model_path.stat().st_size / 1024**2:.1f} MB)"
+            else:
+                validation_result['valid'] = False
+                validation_result['files']['model'] = "❌ Missing"
+                validation_result['issues'].append("Model file missing")
+            
+            # Check tokenizer
+            tokenizer_dir = model_dir / "tokenizer"
+            if tokenizer_dir.exists():
+                tokenizer_files = list(tokenizer_dir.iterdir())
+                validation_result['files']['tokenizer'] = f"✅ Present ({len(tokenizer_files)} files)"
+            else:
+                validation_result['valid'] = False
+                validation_result['files']['tokenizer'] = "❌ Missing"
+                validation_result['issues'].append("Tokenizer directory missing")
+            
+            # Check optional files
+            optional_files = ['optimizer.pt', 'scheduler.pt', 'model_summary.txt']
+            for optional_file in optional_files:
+                file_path = model_dir / optional_file
+                if file_path.exists():
+                    validation_result['files'][optional_file] = "✅ Present"
+                else:
+                    validation_result['files'][optional_file] = "⚠️ Missing (optional)"
+            
+            return validation_result
+            
+        except Exception as e:
+            return {
+                'model_id': model_id,
+                'valid': False,
+                'issues': [f"Validation error: {e}"],
+                'files': {}
+            }
+    
+    def delete_model(self, model_id: str) -> bool:
+        """Delete a model and all associated files."""
+        try:
+            logger.info(f"🗑️ Deleting model: {model_id}")
+            
+            model_dir = self.models_dir / "checkpoints" / model_id
+            metadata_path = self.models_dir / "metadata" / f"{model_id}.json"
+            
+            deleted_items = []
             
             # Remove model directory
             if model_dir.exists():
                 shutil.rmtree(model_dir)
-            
-            # Remove LM Studio directory
-            if lm_studio_dir.exists():
-                shutil.rmtree(lm_studio_dir)
-                logger.info(f"   Removed LM Studio version")
+                deleted_items.append("model directory")
+                logger.info(f"   Removed model directory: {model_dir}")
             
             # Remove metadata
             if metadata_path.exists():
                 metadata_path.unlink()
+                deleted_items.append("metadata")
+                logger.info(f"   Removed metadata: {metadata_path}")
             
-            # Update latest links if this was the latest
-            for latest_link_name in ["latest_best"]:
-                latest_link = self.models_dir / latest_link_name
-                lm_latest_link = self.models_dir / "lm_studio" / latest_link_name
+            # Update latest links if this was the latest model
+            self._cleanup_best_model_links(model_id)
+            
+            if deleted_items:
+                logger.info(f"✅ Model '{model_id}' deleted successfully (removed: {', '.join(deleted_items)})")
+                return True
+            else:
+                logger.warning(f"⚠️ No files found for model '{model_id}'")
+                return False
                 
-                for link in [latest_link, lm_latest_link]:
-                    if link.exists():
-                        try:
-                            if link.is_symlink():
-                                current_latest = link.readlink().name
-                                if "checkpoints" in str(link.readlink()):
-                                    current_latest = link.readlink().name
-                            else:
-                                with open(link, 'r') as f:
-                                    current_latest = f.read().strip()
-                            
-                            if current_latest == model_id:
-                                link.unlink()
-                                # Find new best model
-                                remaining_models = self.list_models()
-                                if remaining_models:
-                                    best_model = min(remaining_models, key=lambda x: x['best_loss'])
-                                    try:
-                                        if link == lm_latest_link:
-                                            link.symlink_to(best_model['id'])
-                                        else:
-                                            link.symlink_to(f"checkpoints/{best_model['id']}")
-                                    except OSError:
-                                        with open(link, 'w') as f:
-                                            f.write(best_model['id'])
-                        except Exception:
-                            pass
-            
-            logger.info(f"✅ Model deleted: {model_id}")
-            return True
-            
         except Exception as e:
-            logger.error(f"❌ Failed to delete model {model_id}: {e}")
+            logger.error(f"❌ Failed to delete model '{model_id}': {e}")
             return False
+    
+    def _cleanup_best_model_links(self, deleted_model_id: str):
+        """Clean up best model links if the deleted model was the best."""
+        try:
+            latest_link = self.models_dir / "latest_best"
+            
+            if latest_link.exists():
+                # Check if the deleted model was the current best
+                current_best_id = None
+                try:
+                    if latest_link.is_symlink():
+                        target = latest_link.readlink()
+                        current_best_id = target.name if target.name != "checkpoints" else target.parent.name
+                    else:
+                        with open(latest_link, 'r') as f:
+                            current_best_id = f.read().strip()
+                except:
+                    pass
+                
+                if current_best_id == deleted_model_id:
+                    # Remove the old link
+                    latest_link.unlink()
+                    logger.info("   Removed outdated best model link")
+                    
+                    # Find new best model
+                    remaining_models = self.list_models()
+                    if remaining_models:
+                        new_best = min(remaining_models, key=lambda x: x['best_loss'])
+                        self._update_best_model_link(new_best['id'])
+                        logger.info(f"   Updated best model link to: {new_best['id']}")
+        except Exception as e:
+            logger.warning(f"Failed to cleanup best model links: {e}")
     
     def get_model_info(self, model_id: str) -> Optional[Dict[str, Any]]:
         """Get detailed information about a specific model."""
@@ -848,10 +792,19 @@ Custom License - See original training repository for details.
             with open(metadata_path, 'r', encoding='utf-8') as f:
                 model_info = json.load(f)
             
-            # Add LM Studio availability info
-            lm_studio_path = self.models_dir / "lm_studio" / model_id
-            model_info['lm_studio_available'] = lm_studio_path.exists()
-            model_info['lm_studio_path'] = str(lm_studio_path) if lm_studio_path.exists() else None
+            # Add validation info
+            validation = self.validate_model(model_id)
+            model_info['validation'] = validation
+            
+            # Add file paths
+            model_dir = self.models_dir / "checkpoints" / model_id
+            model_info['paths'] = {
+                'model_dir': str(model_dir),
+                'metadata': str(metadata_path),
+                'model_file': str(model_dir / "model.pt"),
+                'tokenizer_dir': str(model_dir / "tokenizer"),
+                'summary': str(model_dir / "model_summary.txt")
+            }
             
             return model_info
                 
@@ -859,40 +812,13 @@ Custom License - See original training repository for details.
             logger.error(f"Error getting model info for {model_id}: {e}")
             return None
     
-    def cleanup_old_models(self, keep_best: int = 5) -> int:
-        """Clean up old models, keeping only the best N models."""
+    def export_model(self, model_id: str, export_path: str) -> bool:
+        """Export model for sharing or deployment."""
         try:
-            models = self.list_models()
-            if len(models) <= keep_best:
-                return 0
+            logger.info(f"📦 Exporting model: {model_id}")
             
-            # Sort by loss and keep only the best
-            models_to_delete = models[keep_best:]
-            deleted_count = 0
-            
-            for model in models_to_delete:
-                if self.delete_model(model['id']):
-                    deleted_count += 1
-            
-            logger.info(f"🧹 Cleaned up {deleted_count} old models, kept best {keep_best}")
-            return deleted_count
-            
-        except Exception as e:
-            logger.error(f"Error during cleanup: {e}")
-            return 0
-    
-    def export_model(self, model_id: str, export_path: str, format: str = "both") -> bool:
-        """Export model for sharing or deployment.
-        
-        Args:
-            model_id: ID of the model to export
-            export_path: Path to export to
-            format: 'original', 'lm_studio', or 'both'
-        """
-        try:
             model_dir = self.models_dir / "checkpoints" / model_id
             metadata_path = self.models_dir / "metadata" / f"{model_id}.json"
-            lm_studio_dir = self.models_dir / "lm_studio" / model_id
             
             if not model_dir.exists() or not metadata_path.exists():
                 raise FileNotFoundError(f"Model {model_id} not found")
@@ -900,163 +826,110 @@ Custom License - See original training repository for details.
             export_path = Path(export_path)
             export_path.mkdir(parents=True, exist_ok=True)
             
-            exported_formats = []
-            
-            # Export original format
-            if format in ["original", "both"]:
-                original_export = export_path / "original"
-                shutil.copytree(model_dir, original_export, dirs_exist_ok=True)
-                shutil.copy2(metadata_path, original_export / "metadata.json")
-                exported_formats.append("original")
-                logger.info(f"   Exported original format to: {original_export}")
-            
-            # Export LM Studio format
-            if format in ["lm_studio", "both"] and lm_studio_dir.exists():
-                lm_studio_export = export_path / "lm_studio"
-                shutil.copytree(lm_studio_dir, lm_studio_export, dirs_exist_ok=True)
-                exported_formats.append("lm_studio")
-                logger.info(f"   Exported LM Studio format to: {lm_studio_export}")
-            elif format in ["lm_studio", "both"]:
-                logger.warning(f"   LM Studio format not available for model {model_id}")
+            # Copy model files
+            shutil.copytree(model_dir, export_path / "model", dirs_exist_ok=True)
+            shutil.copy2(metadata_path, export_path / "metadata.json")
             
             # Create export info
             export_info = {
                 'model_id': model_id,
                 'exported_at': datetime.now().isoformat(),
-                'export_version': '2.0',
-                'exported_formats': exported_formats,
-                'original_available': format in ["original", "both"],
-                'lm_studio_available': format in ["lm_studio", "both"] and lm_studio_dir.exists()
+                'export_version': '1.0',
+                'contents': {
+                    'model': 'Complete model checkpoint',
+                    'metadata': 'Model metadata and configuration',
+                    'tokenizer': 'Tokenizer files and vocabulary',
+                    'summary': 'Human-readable model summary'
+                }
             }
             
             with open(export_path / "export_info.json", 'w') as f:
                 json.dump(export_info, f, indent=2)
             
-            # Create comprehensive README
+            # Create README
             readme_content = f"""# Exported Model: {model_id}
 
-This export contains a trained subword-level transformer model with BPE tokenization.
+This export contains a complete model checkpoint with all necessary files.
 
-## Export Contents
+## Contents
 
-"""
-            
-            if "original" in exported_formats:
-                readme_content += """### Original Format (`original/`)
-- Compatible with the original training framework
-- Contains: model.pt, tokenizer.pkl, vocab.json, merges.txt, metadata.json
-- Use with: Your custom inference scripts
+- `model/` - Complete model checkpoint directory
+  - `model.pt` - PyTorch model state dict
+  - `tokenizer/` - Tokenizer files
+  - `model_summary.txt` - Human-readable summary
+  - Additional training files (optimizer, scheduler if available)
 
-"""
-            
-            if "lm_studio" in exported_formats:
-                readme_content += """### LM Studio Format (`lm_studio/`)
-- Ready to use with LM Studio
-- Contains: HuggingFace compatible files with BPE tokenizer
-- Use with: LM Studio, Ollama, or other HF-compatible tools
+- `metadata.json` - Complete model metadata
+- `export_info.json` - Export information
+- `README.md` - This file
 
-#### LM Studio Usage:
-1. Open LM Studio
-2. Load model from the `lm_studio/` folder
-3. Use prompt format: `<user> Your message <bot>`
+## Loading the Model
 
-"""
-            
-            readme_content += f"""## Model Details
-- **Export Date**: {export_info['exported_at']}
-- **Model ID**: {model_id}
-- **Formats**: {', '.join(exported_formats)}
-- **Tokenizer**: BPE (Byte Pair Encoding)
+```python
+from model_manager import ModelManager
 
-## Subword Tokenization
-This model uses BPE tokenization which provides:
-- Better handling of out-of-vocabulary words
-- More efficient representation of morphologically rich languages
-- Reduced vocabulary size while maintaining semantic understanding
+# Create model manager
+manager = ModelManager()
 
-## License
-Custom License - See original training repository for details.
+# Method 1: Copy to models directory and load
+# (Copy the 'model' folder to your models/checkpoints/ directory)
+model, tokenizer, metadata = manager.load_model('{model_id}')
+
+# Method 2: Load directly from export
+# (Requires manual setup - see documentation)
+```
+
+## Export Information
+
+- **Exported At**: {export_info['exported_at']}
+- **Export Version**: {export_info['export_version']}
+- **Original Model ID**: {model_id}
+
+## Notes
+
+This is a complete model export containing all files necessary for loading and using the model.
+The model was trained using the subword transformer architecture with BPE tokenization.
 """
             
             with open(export_path / "README.md", "w") as f:
                 f.write(readme_content)
             
-            logger.info(f"✅ Model exported to: {export_path}")
-            logger.info(f"   Formats: {', '.join(exported_formats)}")
+            logger.info(f"✅ Model exported successfully to: {export_path}")
             return True
             
         except Exception as e:
             logger.error(f"❌ Failed to export model {model_id}: {e}")
             return False
     
-    def convert_existing_to_lm_studio(self, model_id: str) -> bool:
-        """Convert an existing model to LM Studio format."""
+    def cleanup_old_models(self, keep_best: int = 5) -> int:
+        """Clean up old models, keeping only the best N models."""
         try:
-            if not HF_AVAILABLE:
-                logger.error("Cannot convert - HuggingFace dependencies not available")
-                return False
+            logger.info(f"🧹 Cleaning up old models (keeping best {keep_best})...")
             
-            # Check if already exists
-            lm_studio_dir = self.models_dir / "lm_studio" / model_id
-            if lm_studio_dir.exists():
-                logger.info(f"LM Studio version already exists for {model_id}")
-                return True
+            models = self.list_models()
+            if len(models) <= keep_best:
+                logger.info(f"Only {len(models)} models found, no cleanup needed")
+                return 0
             
-            # Load the model
-            model, tokenizer, metadata = self.load_model(model_id)
+            # Sort by loss and keep only the best
+            models_to_delete = models[keep_best:]
+            deleted_count = 0
             
-            # Save in LM Studio format
-            success = self._save_for_lm_studio(model, tokenizer, metadata, model_id)
+            for model in models_to_delete:
+                try:
+                    if self.delete_model(model['id']):
+                        deleted_count += 1
+                        logger.info(f"   Deleted: {model['name']} (loss: {model['best_loss']:.4f})")
+                except Exception as e:
+                    logger.warning(f"   Failed to delete {model['id']}: {e}")
+                    continue
             
-            if success:
-                logger.info(f"✅ Converted {model_id} to LM Studio format")
-            
-            return success
+            logger.info(f"✅ Cleanup complete: removed {deleted_count} models, kept best {keep_best}")
+            return deleted_count
             
         except Exception as e:
-            logger.error(f"❌ Failed to convert {model_id} to LM Studio format: {e}")
-            return False
-    
-    def get_lm_studio_models(self) -> List[Dict[str, Any]]:
-        """Get list of models available in LM Studio format."""
-        lm_studio_models = []
-        
-        try:
-            lm_studio_dir = self.models_dir / "lm_studio"
-            if not lm_studio_dir.exists():
-                return lm_studio_models
-            
-            for model_dir in lm_studio_dir.iterdir():
-                if model_dir.is_dir() and model_dir.name != "latest_best":
-                    try:
-                        # Load model card if available
-                        model_card_path = model_dir / "model_card.json"
-                        if model_card_path.exists():
-                            with open(model_card_path, 'r') as f:
-                                model_card = json.load(f)
-                            
-                            lm_studio_models.append({
-                                'id': model_dir.name,
-                                'name': model_card.get('model_name', 'Unknown'),
-                                'path': str(model_dir),
-                                'parameters': model_card.get('parameters', 'Unknown'),
-                                'context_length': model_card.get('context_length', 'Unknown'),
-                                'architecture': model_card.get('architecture', 'Unknown'),
-                                'tokenizer_type': model_card.get('tokenizer_type', 'BPE'),
-                                'performance': model_card.get('performance', {}),
-                                'ready_for_lm_studio': True
-                            })
-                    except Exception as e:
-                        logger.warning(f"Could not load LM Studio model info for {model_dir.name}: {e}")
-                        continue
-            
-            # Sort by performance (loss)
-            lm_studio_models.sort(key=lambda x: x.get('performance', {}).get('loss', float('inf')))
-            
-        except Exception as e:
-            logger.error(f"Error listing LM Studio models: {e}")
-        
-        return lm_studio_models
+            logger.error(f"❌ Cleanup failed: {e}")
+            return 0
     
     def print_model_summary(self):
         """Print a comprehensive summary of all models."""
@@ -1065,10 +938,8 @@ Custom License - See original training repository for details.
         print("="*80)
         
         models = self.list_models()
-        lm_studio_models = self.get_lm_studio_models()
         
         print(f"📊 Total Models: {len(models)}")
-        print(f"🚀 LM Studio Ready: {len(lm_studio_models)}")
         print(f"💾 Storage Location: {self.models_dir}")
         
         if models:
@@ -1078,19 +949,120 @@ Custom License - See original training repository for details.
             print(f"   Name: {best['name']} {best['version']}")
             print(f"   Loss: {best['best_loss']:.4f} (PPL: {best['best_perplexity']:.2f})")
             print(f"   Parameters: {best['parameters']:,}")
-            print(f"   Tokenizer: {best['tokenizer_type'].upper()}")
-            print(f"   LM Studio Ready: {'✅' if best['lm_studio_ready'] else '❌'}")
+            print(f"   Size: {best['size_mb']:.1f} MB")
+            print(f"   Type: {best['model_type']} ({best['tokenizer_type']})")
+            print(f"   Training: {best['epochs']} epochs, {best['training_hours']:.1f}h")
             
             print(f"\n📋 ALL MODELS:")
             for i, model in enumerate(models, 1):
-                status = "🚀" if model['lm_studio_ready'] else "⚠️"
-                tokenizer_info = f"({model['tokenizer_type'].upper()})"
-                print(f"   {i}. {status} {model['name']} {tokenizer_info} - Loss: {model['best_loss']:.4f} - {model['parameters']:,} params")
-        
-        if HF_AVAILABLE:
-            print(f"\n✅ LM Studio compatibility: ENABLED")
+                status = "🏆" if i == 1 else "📄"
+                type_info = f"({model['tokenizer_type']})"
+                print(f"   {i:2d}. {status} {model['name']} {type_info}")
+                print(f"       Loss: {model['best_loss']:.4f} | {model['parameters']:,} params | {model['size_mb']:.1f}MB")
         else:
-            print(f"\n❌ LM Studio compatibility: DISABLED")
-            print("   Install: pip install transformers safetensors")
+            print("\n⚠️  No models found")
         
         print("="*80)
+    
+    def repair_model(self, model_id: str) -> bool:
+        """Attempt to repair a corrupted model."""
+        try:
+            logger.info(f"🔧 Attempting to repair model: {model_id}")
+            
+            validation = self.validate_model(model_id)
+            if validation['valid']:
+                logger.info("✅ Model appears to be valid, no repair needed")
+                return True
+            
+            logger.info(f"Issues found: {validation['issues']}")
+            
+            model_dir = self.models_dir / "checkpoints" / model_id
+            metadata_path = self.models_dir / "metadata" / f"{model_id}.json"
+            
+            repairs_made = []
+            
+            # Attempt to regenerate missing metadata
+            if not metadata_path.exists() and model_dir.exists():
+                model_path = model_dir / "model.pt"
+                if model_path.exists():
+                    try:
+                        # Load model checkpoint to extract info
+                        checkpoint = torch.load(model_path, map_location='cpu')
+                        
+                        # Create minimal metadata
+                        from datetime import datetime
+                        minimal_metadata = {
+                            'model_name': f'Repaired_Model_{model_id}',
+                            'version': 'v1.0_repaired',
+                            'created_at': datetime.now().isoformat(),
+                            'last_modified': datetime.now().isoformat(),
+                            'model_config': checkpoint.get('model_config', {}),
+                            'training_config': {
+                                'learning_rate': 3e-4,
+                                'batch_size': 32,
+                                'max_epochs': 50
+                            },
+                            'dataset_info': {'source': 'Unknown (repaired)'},
+                            'performance_metrics': {},
+                            'model_size_mb': model_path.stat().st_size / 1024**2,
+                            'total_parameters': 0,
+                            'trainable_parameters': 0,
+                            'training_time_hours': 0.0,
+                            'epochs_trained': 0,
+                            'best_loss': float('inf'),
+                            'best_perplexity': float('inf'),
+                            'hardware_used': 'Unknown',
+                            'pytorch_version': torch.__version__,
+                            'cuda_version': None,
+                            'model_hash': 'repaired',
+                            'tokenizer_hash': 'repaired',
+                            'notes': f'Repaired model from checkpoint. Original metadata was missing.',
+                            'tags': ['repaired']
+                        }
+                        
+                        with open(metadata_path, 'w') as f:
+                            json.dump(minimal_metadata, f, indent=2, default=str)
+                        
+                        repairs_made.append("regenerated metadata")
+                        logger.info("   ✅ Regenerated minimal metadata")
+                        
+                    except Exception as e:
+                        logger.error(f"   ❌ Failed to regenerate metadata: {e}")
+            
+            # Create summary if missing
+            summary_path = model_dir / "model_summary.txt"
+            if not summary_path.exists() and metadata_path.exists():
+                try:
+                    summary_content = f"""Model Summary: {model_id} (REPAIRED)
+{'='*50}
+
+⚠️  WARNING: This model was repaired and may have incomplete information.
+
+Model ID: {model_id}
+Status: Repaired
+Repairs Made: {', '.join(repairs_made) if repairs_made else 'None'}
+
+Files Present:
+{chr(10).join(f"- {f.name}" for f in model_dir.iterdir())}
+
+⚠️  Please verify this model works correctly before using in production.
+"""
+                    with open(summary_path, 'w') as f:
+                        f.write(summary_content)
+                    
+                    repairs_made.append("created summary")
+                    logger.info("   ✅ Created model summary")
+                    
+                except Exception as e:
+                    logger.error(f"   ❌ Failed to create summary: {e}")
+            
+            if repairs_made:
+                logger.info(f"✅ Model repair completed. Repairs made: {', '.join(repairs_made)}")
+                return True
+            else:
+                logger.error("❌ No repairs could be made")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Model repair failed: {e}")
+            return False
