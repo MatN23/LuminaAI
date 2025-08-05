@@ -792,8 +792,58 @@ def validate_training_setup():
     
     return True
 
+def save_model_with_retries(model_manager, model, tokenizer, metadata, optimizer, scheduler, max_retries=3):
+    """Save model with multiple retry attempts and detailed error reporting."""
+    
+    for attempt in range(max_retries):
+        try:
+            logger.info(f"💾 Attempting to save model (attempt {attempt + 1}/{max_retries})...")
+            
+            # Force garbage collection before save
+            with memory_cleanup():
+                pass
+            
+            # Try saving with force_cpu_save=True for stability
+            model_id = model_manager.save_model(
+                model=model, 
+                tokenizer=tokenizer, 
+                metadata=metadata, 
+                optimizer=optimizer, 
+                scheduler=scheduler,
+                force_cpu_save=True
+            )
+            
+            logger.info(f"✅ Model saved successfully: {model_id}")
+            
+            # Validate the saved model
+            validation = model_manager.validate_model(model_id)
+            if validation['valid']:
+                logger.info(f"✅ Model validation passed")
+                return model_id
+            else:
+                logger.warning(f"⚠️ Model validation issues: {validation['issues']}")
+                if attempt < max_retries - 1:
+                    logger.info("Retrying save due to validation issues...")
+                    continue
+                else:
+                    logger.warning("Model saved but with validation warnings")
+                    return model_id
+            
+        except Exception as save_error:
+            logger.error(f"❌ Save attempt {attempt + 1} failed: {save_error}")
+            if attempt < max_retries - 1:
+                logger.info(f"Retrying in 2 seconds...")
+                time.sleep(2)
+                continue
+            else:
+                logger.error(f"❌ All save attempts failed. Final error: {save_error}")
+                logger.error(f"Save error traceback: {traceback.format_exc()}")
+                return None
+    
+    return None
+
 def main():
-    """Main training function with fixed model saving."""
+    """Main training function with guaranteed model saving."""
     
     logger.info("🚀 Starting Subword-Level OASST1 Transformer Training")
     logger.info("=" * 70)
@@ -932,10 +982,12 @@ def main():
         logger.info(f"🎯 Training setup: {total_steps:,} steps, {warmup_steps:,} warmup")
         logger.info(f"Memory before training: {get_memory_usage()}")
         
-        # Training loop
+        # Training loop with GUARANTEED model saving
         logger.info("🚀 Starting subword-optimized training...")
         training_start = time.time()
         best_loss = float('inf')
+        models_saved = 0
+        save_interval = 5  # Save every 5 epochs regardless of improvement
         
         for epoch in range(1, training_config.max_epochs + 1):
             epoch_start = time.time()
@@ -960,25 +1012,46 @@ def main():
                 logger.info(f"   Loss: {avg_loss:.4f} | Perplexity: {perplexity:.2f}")
                 logger.info(f"   Time: {epoch_time:.1f}s | {get_memory_usage()}")
                 
+                # Update best loss
+                is_best = avg_loss < best_loss
+                if is_best:
+                    best_loss = avg_loss
+                    logger.info(f"🏆 New best loss: {best_loss:.4f}")
+                
                 # Sample generation every few epochs
                 if epoch % 3 == 0:
                     with memory_cleanup():
                         sample = generate_sample_text(model, tokenizer, "<user> Hello", 15)
                         logger.info(f"   Sample: <user> Hello → {sample}")
                 
-                # FIXED MODEL SAVING - Only save if loss improved
-                if avg_loss < best_loss:
-                    best_loss = avg_loss
-                    
+                # GUARANTEED MODEL SAVING - save if best OR every save_interval epochs OR last epoch
+                should_save = (
+                    is_best or 
+                    epoch % save_interval == 0 or 
+                    epoch == training_config.max_epochs or
+                    epoch == 1  # Always save first epoch as baseline
+                )
+                
+                if should_save:
                     with memory_cleanup():
-                        # Create comprehensive metadata with proper dataclass initialization
+                        # Create comprehensive metadata
+                        save_reason = []
+                        if is_best:
+                            save_reason.append("best_loss")
+                        if epoch % save_interval == 0:
+                            save_reason.append("regular_interval")
+                        if epoch == training_config.max_epochs:
+                            save_reason.append("final_epoch")
+                        if epoch == 1:
+                            save_reason.append("initial_checkpoint")
+                        
                         metadata = ModelMetadata(
                             model_name="OASST1_SubwordTransformer",
-                            version=f"v1.0_epoch_{epoch}",
+                            version=f"v1.0_epoch_{epoch}{'_BEST' if is_best else ''}",
                             created_at=datetime.now().isoformat(),
                             last_modified=datetime.now().isoformat(),
-                            model_config=model_config,  # This is already a ModelConfig object
-                            training_config=training_config,  # This is already a TrainingConfig object
+                            model_config=model_config,
+                            training_config=training_config,
                             dataset_info={
                                 "name": "OpenAssistant OASST1 (Subword-Optimized)",
                                 "source": "oasst1_train.jsonl",
@@ -992,12 +1065,14 @@ def main():
                                 "dataset_version": "OASST1",
                             },
                             performance_metrics={
-                                "loss": float(avg_loss),  # Ensure it's a float
+                                "loss": float(avg_loss),
                                 "perplexity": float(perplexity),
                                 "batch_time_ms": float(avg_batch_time * 1000),
                                 "epoch": int(epoch),
                                 "learning_rate": float(scheduler.optimizer.param_groups[0]['lr']),
-                                "gradient_norm": 0.0,  # You can track this if needed
+                                "gradient_norm": 0.0,
+                                "is_best": is_best,
+                                "save_reason": ",".join(save_reason),
                             },
                             model_size_mb=float(model_size_mb),
                             total_parameters=int(total_params),
@@ -1009,42 +1084,29 @@ def main():
                             hardware_used=f"{device.type.upper()}" + (f" ({torch.cuda.get_device_name()})" if device.type == 'cuda' else ""),
                             pytorch_version=torch.__version__,
                             cuda_version=torch.version.cuda if device.type == 'cuda' else None,
-                            model_hash="",  # Will be calculated by save_model
-                            tokenizer_hash="",  # Will be calculated by save_model
+                            model_hash="",
+                            tokenizer_hash="",
                             notes=f"Subword-level OASST1 transformer with BPE tokenization. "
-                                  f"Trained on {len(texts):,} samples with vocabulary size of {model_config.vocab_size:,} "
-                                  f"tokens using {len(tokenizer.merges):,} BPE merges. "
-                                  f"Best performance achieved at epoch {epoch} with loss {best_loss:.4f} "
-                                  f"and perplexity {calculate_perplexity(best_loss):.2f}. "
-                                  f"Model uses {model_config.hidden_size}-dimensional embeddings with "
-                                  f"{model_config.num_layers} transformer layers and {model_config.num_heads} attention heads. "
-                                  f"Training performed on {device.type.upper()} with conservative memory settings.",
-                            tags=["oasst1", "subword", "bpe", "transformer", "conversational", "best", f"epoch_{epoch}"]
+                                  f"Epoch {epoch}/{training_config.max_epochs}. "
+                                  f"Save reason: {', '.join(save_reason)}. "
+                                  f"Current loss: {avg_loss:.4f}, Best loss: {best_loss:.4f}. "
+                                  f"Training on {len(texts):,} samples with {model_config.vocab_size:,} vocab using {len(tokenizer.merges):,} BPE merges. "
+                                  f"Model: {model_config.hidden_size}D x {model_config.num_layers}L x {model_config.num_heads}H. "
+                                  f"Hardware: {device.type.upper()}.",
+                            tags=["oasst1", "subword", "bpe", "transformer", "conversational", f"epoch_{epoch}"] + 
+                                 (["best"] if is_best else []) + save_reason
                         )
                         
-                        try:
-                            # Use the FIXED save_model method
-                            model_id = model_manager.save_model(
-                                model=model, 
-                                tokenizer=tokenizer, 
-                                metadata=metadata, 
-                                optimizer=optimizer, 
-                                scheduler=scheduler,
-                                force_cpu_save=True  # Move to CPU for stable saving
-                            )
-                            logger.info(f"💾 Best model saved successfully: {model_id}")
-                            
-                            # Validate the saved model
-                            validation = model_manager.validate_model(model_id)
-                            if validation['valid']:
-                                logger.info(f"✅ Model validation passed")
-                            else:
-                                logger.warning(f"⚠️ Model validation issues: {validation['issues']}")
-                            
-                        except Exception as save_error:
-                            logger.error(f"❌ Failed to save model: {save_error}")
-                            logger.error(f"Save error traceback: {traceback.format_exc()}")
-                            # Continue training even if save fails
+                        # Use the retry mechanism for robust saving
+                        model_id = save_model_with_retries(
+                            model_manager, model, tokenizer, metadata, optimizer, scheduler
+                        )
+                        
+                        if model_id:
+                            models_saved += 1
+                            logger.info(f"💾 Model saved successfully: {model_id} (#{models_saved})")
+                        else:
+                            logger.error(f"❌ Failed to save model for epoch {epoch}")
                 
                 logger.info("=" * 50)
                 
@@ -1070,10 +1132,56 @@ def main():
         logger.info("✅ Subword-optimized training completed successfully!")
         logger.info(f"🎯 Best loss achieved: {best_loss:.4f}")
         logger.info(f"🎯 Best perplexity: {calculate_perplexity(best_loss):.2f}")
+        logger.info(f"💾 Total models saved: {models_saved}")
         logger.info(f"⏱️  Total training time: {total_time/3600:.2f} hours")
         logger.info(f"🔤 Final vocabulary: {model_config.vocab_size:,} tokens with {len(tokenizer.merges):,} BPE merges")
         logger.info(f"🚀 Average processing speed: {len(dataset) * model_config.seq_length * training_config.max_epochs / total_time:.0f} tokens/sec")
         logger.info(f"💾 Final memory state: {get_memory_usage()}")
+        
+        # FINAL GUARANTEED SAVE - save one more time as final model if no models were saved
+        if models_saved == 0:
+            logger.warning("⚠️ No models were saved during training! Performing emergency final save...")
+            
+            final_metadata = ModelMetadata(
+                model_name="OASST1_SubwordTransformer_FINAL",
+                version="v1.0_EMERGENCY_SAVE",
+                created_at=datetime.now().isoformat(),
+                last_modified=datetime.now().isoformat(),
+                model_config=model_config,
+                training_config=training_config,
+                dataset_info={
+                    "name": "OpenAssistant OASST1 (Emergency Save)",
+                    "source": "oasst1_train.jsonl",
+                    "num_samples": len(texts),
+                    "vocab_size": model_config.vocab_size,
+                    "preprocessing": "BPE subword tokenization",
+                },
+                performance_metrics={
+                    "final_loss": float(avg_loss) if 'avg_loss' in locals() else float('inf'),
+                    "training_completed": True,
+                },
+                model_size_mb=float(model_size_mb),
+                total_parameters=int(total_params),
+                trainable_parameters=int(trainable_params),
+                training_time_hours=float(total_time / 3600),
+                epochs_trained=int(training_config.max_epochs),
+                best_loss=float(best_loss),
+                best_perplexity=float(calculate_perplexity(best_loss)),
+                hardware_used=f"{device.type.upper()}",
+                pytorch_version=torch.__version__,
+                notes="Emergency save after training completion to ensure model is preserved.",
+                tags=["oasst1", "subword", "emergency_save", "final"]
+            )
+            
+            emergency_model_id = save_model_with_retries(
+                model_manager, model, tokenizer, final_metadata, optimizer, scheduler
+            )
+            
+            if emergency_model_id:
+                models_saved += 1
+                logger.info(f"✅ Emergency final save successful: {emergency_model_id}")
+            else:
+                logger.error(f"❌ Even emergency save failed!")
         
         # Print final model summary
         logger.info("\n" + "=" * 70)
@@ -1081,10 +1189,37 @@ def main():
         model_manager.print_model_summary()
         logger.info("=" * 70)
         
-        return 0
+        if models_saved > 0:
+            logger.info(f"✅ Training completed with {models_saved} models saved successfully!")
+            return 0
+        else:
+            logger.error(f"❌ Training completed but NO MODELS WERE SAVED!")
+            return 1
         
     except KeyboardInterrupt:
         logger.info("❌ Training interrupted by user")
+        # Try to save current state before exiting
+        logger.info("Attempting to save current model state before exit...")
+        if 'model' in locals() and 'tokenizer' in locals():
+            try:
+                interrupt_metadata = ModelMetadata(
+                    model_name="OASST1_SubwordTransformer_INTERRUPTED",
+                    version="v1.0_INTERRUPTED",
+                    created_at=datetime.now().isoformat(),
+                    last_modified=datetime.now().isoformat(),
+                    model_config=model_config if 'model_config' in locals() else {},
+                    notes="Model saved after training interruption",
+                    tags=["interrupted", "partial"]
+                )
+                interrupt_id = save_model_with_retries(
+                    model_manager, model, tokenizer, interrupt_metadata, 
+                    optimizer if 'optimizer' in locals() else None, 
+                    scheduler if 'scheduler' in locals() else None
+                )
+                if interrupt_id:
+                    logger.info(f"✅ Interrupted model saved: {interrupt_id}")
+            except:
+                logger.error("Failed to save interrupted model")
         return 1
     except Exception as e:
         logger.error(f"❌ Training failed with error: {e}")

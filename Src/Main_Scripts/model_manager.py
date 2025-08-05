@@ -1,113 +1,129 @@
-# Fixed Model Manager - Corrected Saving System
 # Copyright (c) 2025 Matias Nielsen. All rights reserved.
+# Licensed under the Custom License below.
 
 import os
 import json
+import time
 import hashlib
-import pickle
-import shutil
 import logging
+import traceback
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Tuple, Union
-from dataclasses import dataclass, asdict
+from typing import Dict, List, Optional, Tuple, Any, Union
+from dataclasses import dataclass, asdict, field
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import warnings
-
-# Suppress warnings
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-warnings.filterwarnings('ignore')
-
-# HuggingFace imports with fallback
-try:
-    import safetensors.torch as st
-    from transformers import PreTrainedModel, PreTrainedTokenizer, AutoConfig, PretrainedConfig
-    from transformers.modeling_outputs import CausalLMOutputWithPast
-    HF_AVAILABLE = True
-except ImportError:
-    HF_AVAILABLE = False
-    PreTrainedModel = object
-    PreTrainedTokenizer = object
-    PretrainedConfig = object
-    logging.warning("HuggingFace transformers/safetensors not available. LM Studio compatibility disabled.")
+from contextlib import contextmanager
 
 logger = logging.getLogger(__name__)
 
 @dataclass
 class ModelConfig:
-    """Configuration for the transformer model."""
+    """Configuration for model architecture."""
     vocab_size: int = 32000
-    hidden_size: int = 1024
+    hidden_size: int = 768
     num_layers: int = 12
-    num_heads: int = 16
-    seq_length: int = 1024
+    num_heads: int = 12
+    seq_length: int = 512
     dropout: float = 0.1
     model_type: str = "SubwordTransformer"
     tokenizer_type: str = "subword"
+    intermediate_size: Optional[int] = None
+    activation: str = "gelu"
+    layer_norm_eps: float = 1e-5
+    tie_word_embeddings: bool = True
+    
+    def __post_init__(self):
+        if self.intermediate_size is None:
+            self.intermediate_size = 4 * self.hidden_size
 
 @dataclass
 class TrainingConfig:
     """Configuration for training parameters."""
-    learning_rate: float = 3e-4
+    learning_rate: float = 1e-4
     weight_decay: float = 0.01
-    batch_size: int = 32
-    gradient_accumulation_steps: int = 8
+    batch_size: int = 16
+    gradient_accumulation_steps: int = 4
     max_epochs: int = 50
     warmup_ratio: float = 0.1
     save_every: int = 1000
     eval_every: int = 500
     max_grad_norm: float = 1.0
-    label_smoothing: float = 0.1
+    label_smoothing: float = 0.0
     beta1: float = 0.9
-    beta2: float = 0.95
+    beta2: float = 0.999
+    eps: float = 1e-8
+    scheduler_type: str = "cosine"
+    min_lr_ratio: float = 0.1
 
 @dataclass
 class ModelMetadata:
-    """Comprehensive metadata for trained models."""
-    # Basic info
+    """Comprehensive metadata for saved models with JSON serialization support."""
     model_name: str
     version: str
     created_at: str
     last_modified: str
-    
-    # Configuration
-    model_config: ModelConfig
-    training_config: TrainingConfig
-    
-    # Dataset information
-    dataset_info: Dict[str, Any]
-    
-    # Performance metrics
-    performance_metrics: Dict[str, float]
-    
-    # Model details
-    model_size_mb: float
-    total_parameters: int
-    trainable_parameters: int
-    training_time_hours: float
-    epochs_trained: int
-    best_loss: float
-    best_perplexity: float
-    
-    # Technical details
-    hardware_used: str
-    pytorch_version: str
-    cuda_version: Optional[str]
-    model_hash: str
-    tokenizer_hash: str
-    
-    # Additional info
+    model_config: Dict[str, Any] = field(default_factory=dict)
+    training_config: Dict[str, Any] = field(default_factory=dict)
+    dataset_info: Dict[str, Any] = field(default_factory=dict)
+    performance_metrics: Dict[str, Any] = field(default_factory=dict)
+    model_size_mb: float = 0.0
+    total_parameters: int = 0
+    trainable_parameters: int = 0
+    training_time_hours: float = 0.0
+    epochs_trained: int = 0
+    best_loss: float = float('inf')
+    best_perplexity: float = float('inf')
+    hardware_used: str = ""
+    pytorch_version: str = ""
+    cuda_version: Optional[str] = None
+    model_hash: str = ""
+    tokenizer_hash: str = ""
     notes: str = ""
-    tags: List[str] = None
+    tags: List[str] = field(default_factory=list)
     
     def __post_init__(self):
-        if self.tags is None:
-            self.tags = []
+        """Convert dataclass objects to dictionaries for JSON serialization."""
+        # Convert ModelConfig to dict if it's a dataclass
+        if hasattr(self.model_config, '__dataclass_fields__'):
+            self.model_config = asdict(self.model_config)
+        
+        # Convert TrainingConfig to dict if it's a dataclass
+        if hasattr(self.training_config, '__dataclass_fields__'):
+            self.training_config = asdict(self.training_config)
+        
+        # Ensure all numeric values are JSON serializable
+        if isinstance(self.best_loss, torch.Tensor):
+            self.best_loss = float(self.best_loss.item())
+        elif not isinstance(self.best_loss, (int, float)):
+            self.best_loss = float(self.best_loss)
+        
+        if isinstance(self.best_perplexity, torch.Tensor):
+            self.best_perplexity = float(self.best_perplexity.item())
+        elif not isinstance(self.best_perplexity, (int, float)):
+            self.best_perplexity = float(self.best_perplexity)
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary with JSON-safe values."""
+        data = asdict(self)
+        
+        # Ensure all values are JSON serializable
+        def make_json_safe(obj):
+            if isinstance(obj, torch.Tensor):
+                return float(obj.item()) if obj.numel() == 1 else obj.tolist()
+            elif isinstance(obj, (int, float, str, bool, type(None))):
+                return obj
+            elif isinstance(obj, dict):
+                return {k: make_json_safe(v) for k, v in obj.items()}
+            elif isinstance(obj, (list, tuple)):
+                return [make_json_safe(item) for item in obj]
+            else:
+                return str(obj)
+        
+        return make_json_safe(data)
 
 class ModelManager:
-    """Fixed model management system with proper saving/loading."""
+    """Enhanced model management system with robust saving and loading."""
     
     def __init__(self, models_dir: str = "models"):
         self.models_dir = Path(models_dir)
@@ -117,952 +133,727 @@ class ModelManager:
         (self.models_dir / "checkpoints").mkdir(exist_ok=True)
         (self.models_dir / "metadata").mkdir(exist_ok=True)
         (self.models_dir / "tokenizers").mkdir(exist_ok=True)
-        if HF_AVAILABLE:
-            (self.models_dir / "lm_studio").mkdir(exist_ok=True)
         
         logger.info(f"ModelManager initialized with directory: {self.models_dir}")
-        if HF_AVAILABLE:
-            logger.info("✅ LM Studio compatibility enabled")
-        else:
-            logger.warning("⚠️ LM Studio compatibility disabled")
     
-    def _calculate_hash(self, obj: Any) -> str:
-        """Calculate SHA256 hash of an object."""
+    @contextmanager
+    def safe_cuda_context(self):
+        """Context manager for safe CUDA operations."""
         try:
-            if hasattr(obj, 'state_dict'):
-                # For PyTorch models
-                state_bytes = pickle.dumps({k: v.cpu() for k, v in obj.state_dict().items()})
-            elif hasattr(obj, 'vocab') and hasattr(obj, 'merges'):
-                # For tokenizers
-                state_bytes = pickle.dumps({
-                    'vocab': obj.vocab,
-                    'merges': obj.merges,
-                    'vocab_size': getattr(obj, 'vocab_size', lambda: len(obj.vocab))()
-                })
-            else:
-                state_bytes = pickle.dumps(obj)
-            return hashlib.sha256(state_bytes).hexdigest()[:16]
-        except Exception as e:
-            logger.warning(f"Could not calculate hash: {e}")
-            return datetime.now().strftime("%Y%m%d_%H%M%S")
+            yield
+        finally:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
     
-    def _get_model_size(self, model_path: Path) -> float:
-        """Calculate model file size in MB."""
-        try:
-            if model_path.exists():
-                return model_path.stat().st_size / (1024 * 1024)
-            return 0.0
-        except Exception:
-            return 0.0
-    
-    def _generate_model_id(self, metadata: ModelMetadata) -> str:
+    def _generate_model_id(self, model_name: str) -> str:
         """Generate unique model ID."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        name_clean = metadata.model_name.replace(" ", "_").lower()
-        name_clean = "".join(c for c in name_clean if c.isalnum() or c == "_")
-        version_clean = metadata.version.replace(".", "_").replace(" ", "_").lower()
-        version_clean = "".join(c for c in version_clean if c.isalnum() or c == "_")
-        return f"{name_clean}_{version_clean}_{timestamp}"
+        clean_name = "".join(c for c in model_name if c.isalnum() or c in "_-").lower()
+        return f"{clean_name}_{timestamp}"
     
-    def _save_tokenizer_safely(self, tokenizer, tokenizer_dir: Path) -> bool:
-        """Save tokenizer with comprehensive error handling."""
+    def _calculate_hash(self, file_path: Path) -> str:
+        """Calculate file hash for integrity checking."""
         try:
-            tokenizer_dir.mkdir(exist_ok=True)
-            
-            # Method 1: Save as pickle (most reliable)
-            tokenizer_pkl_path = tokenizer_dir / "tokenizer.pkl"
-            with open(tokenizer_pkl_path, 'wb') as f:
-                pickle.dump(tokenizer, f, protocol=pickle.HIGHEST_PROTOCOL)
-            logger.info(f"✅ Tokenizer saved as pickle: {tokenizer_pkl_path}")
-            
-            # Method 2: Save vocabulary and merges separately
-            if hasattr(tokenizer, 'vocab') and hasattr(tokenizer, 'merges'):
-                vocab_path = tokenizer_dir / "vocab.json"
-                merges_path = tokenizer_dir / "merges.txt"
-                
-                # Save vocabulary
-                with open(vocab_path, 'w', encoding='utf-8') as f:
-                    json.dump(tokenizer.vocab, f, indent=2, ensure_ascii=False)
-                
-                # Save merges
-                with open(merges_path, 'w', encoding='utf-8') as f:
-                    for merge in tokenizer.merges:
-                        if isinstance(merge, (list, tuple)) and len(merge) == 2:
-                            f.write(f"{merge[0]} {merge[1]}\n")
-                
-                logger.info(f"✅ Tokenizer vocab saved: {vocab_path}")
-                logger.info(f"✅ Tokenizer merges saved: {merges_path}")
-            
-            # Method 3: Save tokenizer metadata
-            tokenizer_info = {
-                'type': type(tokenizer).__name__,
-                'vocab_size': getattr(tokenizer, 'vocab_size', lambda: len(getattr(tokenizer, 'vocab', {})))(),
-                'special_tokens': {
-                    'pad_token': getattr(tokenizer, 'vocab', {}).get('<pad>', 0),
-                    'unk_token': getattr(tokenizer, 'vocab', {}).get('<unk>', 1),
-                    'bos_token': getattr(tokenizer, 'vocab', {}).get('<s>', 2),
-                    'eos_token': getattr(tokenizer, 'vocab', {}).get('</s>', 3),
-                },
-                'num_merges': len(getattr(tokenizer, 'merges', [])),
-                'saved_at': datetime.now().isoformat()
-            }
-            
-            tokenizer_info_path = tokenizer_dir / "tokenizer_info.json"
-            with open(tokenizer_info_path, 'w', encoding='utf-8') as f:
-                json.dump(tokenizer_info, f, indent=2)
-            
-            logger.info(f"✅ Tokenizer info saved: {tokenizer_info_path}")
-            return True
-            
+            hash_sha256 = hashlib.sha256()
+            with open(file_path, "rb") as f:
+                for chunk in iter(lambda: f.read(4096), b""):
+                    hash_sha256.update(chunk)
+            return hash_sha256.hexdigest()[:16]  # First 16 chars
         except Exception as e:
-            logger.error(f"❌ Failed to save tokenizer: {e}")
-            return False
+            logger.warning(f"Could not calculate hash for {file_path}: {e}")
+            return ""
     
-    def _load_tokenizer_safely(self, tokenizer_dir: Path):
-        """Load tokenizer with multiple fallback methods."""
-        if not tokenizer_dir.exists():
-            raise FileNotFoundError(f"Tokenizer directory not found: {tokenizer_dir}")
-        
-        # Method 1: Try loading pickle first
-        tokenizer_pkl_path = tokenizer_dir / "tokenizer.pkl"
-        if tokenizer_pkl_path.exists():
-            try:
-                with open(tokenizer_pkl_path, 'rb') as f:
-                    tokenizer = pickle.load(f)
-                logger.info(f"✅ Tokenizer loaded from pickle: {tokenizer_pkl_path}")
-                return tokenizer
-            except Exception as e:
-                logger.warning(f"Failed to load tokenizer pickle: {e}")
-        
-        # Method 2: Reconstruct from vocab and merges
-        vocab_path = tokenizer_dir / "vocab.json"
-        merges_path = tokenizer_dir / "merges.txt"
-        
-        if vocab_path.exists() and merges_path.exists():
-            try:
-                # Import here to avoid circular imports
-                from subword_transformer import SubwordTokenizer
-                
-                # Load vocabulary
-                with open(vocab_path, 'r', encoding='utf-8') as f:
-                    vocab = json.load(f)
-                
-                # Load merges
-                merges = []
-                with open(merges_path, 'r', encoding='utf-8') as f:
-                    for line in f:
-                        line = line.strip()
-                        if line and ' ' in line:
-                            parts = line.split(' ', 1)
-                            if len(parts) == 2:
-                                merges.append((parts[0], parts[1]))
-                
-                # Create tokenizer
-                tokenizer = SubwordTokenizer(vocab=vocab, merges=merges)
-                logger.info(f"✅ Tokenizer reconstructed from vocab/merges")
-                return tokenizer
-                
-            except Exception as e:
-                logger.error(f"Failed to reconstruct tokenizer: {e}")
-        
-        # Method 3: Check if there's a tokenizer info file for debugging
-        tokenizer_info_path = tokenizer_dir / "tokenizer_info.json"
-        if tokenizer_info_path.exists():
-            try:
-                with open(tokenizer_info_path, 'r', encoding='utf-8') as f:
-                    info = json.load(f)
-                logger.info(f"Tokenizer info available: {info}")
-            except:
-                pass
-        
-        raise FileNotFoundError(f"Could not load tokenizer from {tokenizer_dir}")
-    
-    def save_model(self, model: nn.Module, tokenizer, metadata: ModelMetadata,
+    def save_model(self, model: nn.Module, tokenizer, metadata: ModelMetadata, 
                    optimizer=None, scheduler=None, force_cpu_save: bool = True) -> str:
-        """Save model with comprehensive error handling and validation."""
+        """
+        Save model with comprehensive error handling and proper serialization.
+        
+        Args:
+            model: The PyTorch model to save
+            tokenizer: The tokenizer (SubwordTokenizer)
+            metadata: Model metadata
+            optimizer: Optional optimizer state
+            scheduler: Optional scheduler state
+            force_cpu_save: Whether to move model to CPU before saving
+        
+        Returns:
+            str: The generated model ID
+        """
         try:
-            logger.info("💾 Starting model save process...")
+            # Generate unique model ID
+            model_id = self._generate_model_id(metadata.model_name)
             
-            # Generate model ID
-            model_id = self._generate_model_id(metadata)
-            logger.info(f"Generated model ID: {model_id}")
+            logger.info(f"💾 Saving model: {model_id}")
+            logger.info(f"   Model name: {metadata.model_name}")
+            logger.info(f"   Version: {metadata.version}")
             
             # Create model directory
-            model_dir = self.models_dir / "checkpoints" / model_id
-            model_dir.mkdir(parents=True, exist_ok=True)
+            model_dir = self.models_dir / model_id
+            model_dir.mkdir(exist_ok=True)
             
-            # Move model to CPU for saving if requested (more stable)
-            original_device = next(model.parameters()).device
-            if force_cpu_save and original_device.type != 'cpu':
-                logger.info("Moving model to CPU for saving...")
-                model = model.cpu()
-            
-            # Save model state dict
+            # File paths
             model_path = model_dir / "model.pt"
-            model_save_data = {
-                'model_state_dict': model.state_dict(),
-                'model_config': asdict(metadata.model_config) if hasattr(metadata.model_config, '__dict__') else metadata.model_config,
-                'model_id': model_id,
-                'model_type': metadata.model_config.model_type,
-                'vocab_size': metadata.model_config.vocab_size,
-                'pytorch_version': torch.__version__,
-                'saved_at': datetime.now().isoformat()
-            }
+            tokenizer_vocab_path = model_dir / "vocab.json"
+            tokenizer_merges_path = model_dir / "merges.txt"
+            metadata_path = model_dir / "metadata.json"
             
-            torch.save(model_save_data, model_path)
-            logger.info(f"✅ Model state saved: {model_path}")
+            # Save model checkpoint
+            logger.info("   Saving model checkpoint...")
+            with self.safe_cuda_context():
+                # Prepare model for saving
+                if force_cpu_save:
+                    # Move model to CPU for stable saving
+                    original_device = next(model.parameters()).device
+                    model_cpu = model.cpu()
+                    
+                    checkpoint = {
+                        'model_state_dict': model_cpu.state_dict(),
+                        'model_config': metadata.model_config,
+                        'model_type': metadata.model_config.get('model_type', 'SubwordTransformer'),
+                        'vocab_size': metadata.model_config.get('vocab_size', 32000),
+                        'created_at': metadata.created_at,
+                        'version': metadata.version
+                    }
+                    
+                    # Add optimizer and scheduler if provided
+                    if optimizer is not None:
+                        checkpoint['optimizer_state_dict'] = optimizer.state_dict()
+                    
+                    if scheduler is not None:
+                        if hasattr(scheduler, 'state_dict'):
+                            checkpoint['scheduler_state_dict'] = scheduler.state_dict()
+                        else:
+                            # Handle custom scheduler
+                            checkpoint['scheduler_state_dict'] = {
+                                'current_step': getattr(scheduler, 'current_step', 0),
+                                'warmup_steps': getattr(scheduler, 'warmup_steps', 0),
+                                'total_steps': getattr(scheduler, 'total_steps', 0),
+                            }
+                    
+                    # Save checkpoint
+                    torch.save(checkpoint, model_path)
+                    
+                    # Move model back to original device
+                    model.to(original_device)
+                    
+                else:
+                    # Save without moving to CPU
+                    checkpoint = {
+                        'model_state_dict': model.state_dict(),
+                        'model_config': metadata.model_config,
+                        'model_type': metadata.model_config.get('model_type', 'SubwordTransformer'),
+                        'vocab_size': metadata.model_config.get('vocab_size', 32000),
+                        'created_at': metadata.created_at,
+                        'version': metadata.version
+                    }
+                    
+                    if optimizer is not None:
+                        checkpoint['optimizer_state_dict'] = optimizer.state_dict()
+                    
+                    if scheduler is not None:
+                        if hasattr(scheduler, 'state_dict'):
+                            checkpoint['scheduler_state_dict'] = scheduler.state_dict()
+                        else:
+                            checkpoint['scheduler_state_dict'] = {
+                                'current_step': getattr(scheduler, 'current_step', 0),
+                                'warmup_steps': getattr(scheduler, 'warmup_steps', 0),
+                                'total_steps': getattr(scheduler, 'total_steps', 0),
+                            }
+                    
+                    torch.save(checkpoint, model_path)
             
-            # Move model back to original device
-            if force_cpu_save and original_device.type != 'cpu':
-                model = model.to(original_device)
+            logger.info(f"   ✅ Model checkpoint saved: {model_path}")
             
             # Save tokenizer
-            tokenizer_dir = model_dir / "tokenizer"
-            if not self._save_tokenizer_safely(tokenizer, tokenizer_dir):
-                logger.error("Failed to save tokenizer - model save incomplete")
-                # Don't fail completely, but warn
-            
-            # Save optimizer state if provided
-            if optimizer is not None:
+            logger.info("   Saving tokenizer...")
+            try:
+                if hasattr(tokenizer, 'save_vocab'):
+                    tokenizer.save_vocab(str(tokenizer_vocab_path), str(tokenizer_merges_path))
+                else:
+                    # Manual tokenizer saving
+                    with open(tokenizer_vocab_path, 'w', encoding='utf-8') as f:
+                        json.dump(tokenizer.vocab, f, indent=2, ensure_ascii=False)
+                    
+                    with open(tokenizer_merges_path, 'w', encoding='utf-8') as f:
+                        for pair in tokenizer.merges:
+                            f.write(f"{pair[0]} {pair[1]}\n")
+                
+                logger.info(f"   ✅ Tokenizer saved: vocab={tokenizer_vocab_path}, merges={tokenizer_merges_path}")
+                
+            except Exception as tokenizer_error:
+                logger.error(f"   ❌ Failed to save tokenizer: {tokenizer_error}")
+                # Try alternative saving method
                 try:
-                    optimizer_path = model_dir / "optimizer.pt"
-                    optimizer_state = optimizer.state_dict()
-                    torch.save(optimizer_state, optimizer_path)
-                    logger.info(f"✅ Optimizer state saved: {optimizer_path}")
-                except Exception as e:
-                    logger.warning(f"Failed to save optimizer: {e}")
+                    tokenizer_data = {
+                        'vocab': tokenizer.vocab,
+                        'merges': tokenizer.merges,
+                        'vocab_size': tokenizer.vocab_size(),
+                        'tokenizer_type': 'SubwordTokenizer'
+                    }
+                    with open(model_dir / "tokenizer.json", 'w', encoding='utf-8') as f:
+                        json.dump(tokenizer_data, f, indent=2, ensure_ascii=False)
+                    logger.info("   ✅ Tokenizer saved as single JSON file")
+                except Exception as alt_error:
+                    logger.error(f"   ❌ Alternative tokenizer save also failed: {alt_error}")
+                    raise
             
-            # Save scheduler state if provided
-            if scheduler is not None:
-                try:
-                    scheduler_path = model_dir / "scheduler.pt"
-                    if hasattr(scheduler, 'state_dict'):
-                        scheduler_state = scheduler.state_dict()
+            # Calculate file hashes
+            logger.info("   Calculating file hashes...")
+            metadata.model_hash = self._calculate_hash(model_path)
+            if tokenizer_vocab_path.exists():
+                metadata.tokenizer_hash = self._calculate_hash(tokenizer_vocab_path)
+            
+            # Save metadata with proper JSON serialization
+            logger.info("   Saving metadata...")
+            try:
+                # Ensure metadata is properly serializable
+                metadata.last_modified = datetime.now().isoformat()
+                
+                # Convert to dict and ensure JSON compatibility
+                metadata_dict = metadata.to_dict()
+                
+                # Additional safety checks
+                def ensure_json_serializable(obj):
+                    """Recursively ensure all values are JSON serializable."""
+                    if isinstance(obj, dict):
+                        return {k: ensure_json_serializable(v) for k, v in obj.items()}
+                    elif isinstance(obj, (list, tuple)):
+                        return [ensure_json_serializable(item) for item in obj]
+                    elif isinstance(obj, (int, float, str, bool, type(None))):
+                        return obj
+                    elif hasattr(obj, 'item'):  # torch.Tensor
+                        return float(obj.item())
+                    elif hasattr(obj, '__dict__'):  # Custom objects
+                        return str(obj)
                     else:
-                        # Custom scheduler - save what we can
-                        scheduler_state = {
-                            'current_step': getattr(scheduler, 'current_step', 0),
-                            'warmup_steps': getattr(scheduler, 'warmup_steps', 0),
-                            'total_steps': getattr(scheduler, 'total_steps', 0)
-                        }
-                    torch.save(scheduler_state, scheduler_path)
-                    logger.info(f"✅ Scheduler state saved: {scheduler_path}")
-                except Exception as e:
-                    logger.warning(f"Failed to save scheduler: {e}")
+                        return str(obj)
+                
+                safe_metadata = ensure_json_serializable(metadata_dict)
+                
+                # Write metadata
+                with open(metadata_path, 'w', encoding='utf-8') as f:
+                    json.dump(safe_metadata, f, indent=2, ensure_ascii=False, default=str)
+                
+                logger.info(f"   ✅ Metadata saved: {metadata_path}")
+                
+            except Exception as metadata_error:
+                logger.error(f"   ❌ Failed to save metadata: {metadata_error}")
+                logger.error(f"   Metadata error traceback: {traceback.format_exc()}")
+                
+                # Try saving minimal metadata
+                try:
+                    minimal_metadata = {
+                        'model_name': metadata.model_name,
+                        'version': metadata.version,
+                        'created_at': metadata.created_at,
+                        'last_modified': datetime.now().isoformat(),
+                        'model_config': metadata.model_config,
+                        'best_loss': float(metadata.best_loss),
+                        'total_parameters': int(metadata.total_parameters),
+                        'model_hash': metadata.model_hash,
+                        'tokenizer_hash': metadata.tokenizer_hash,
+                        'notes': str(metadata.notes)
+                    }
+                    
+                    with open(metadata_path, 'w', encoding='utf-8') as f:
+                        json.dump(minimal_metadata, f, indent=2, ensure_ascii=False)
+                    
+                    logger.info("   ✅ Minimal metadata saved successfully")
+                    
+                except Exception as minimal_error:
+                    logger.error(f"   ❌ Even minimal metadata save failed: {minimal_error}")
+                    raise
             
-            # Calculate and update metadata
-            metadata.model_hash = self._calculate_hash(model)
-            metadata.tokenizer_hash = self._calculate_hash(tokenizer)
-            metadata.model_size_mb = self._get_model_size(model_path)
-            metadata.last_modified = datetime.now().isoformat()
+            # Create model registry entry
+            logger.info("   Updating model registry...")
+            self._update_model_registry(model_id, metadata)
             
-            # Save comprehensive metadata
-            metadata_path = self.models_dir / "metadata" / f"{model_id}.json"
-            metadata_dict = asdict(metadata)
+            # Final validation
+            if not self._validate_saved_model(model_id):
+                logger.warning(f"   ⚠️ Model validation failed for {model_id}")
             
-            # Convert non-serializable objects
-            if isinstance(metadata_dict.get('model_config'), object):
-                metadata_dict['model_config'] = asdict(metadata.model_config)
-            if isinstance(metadata_dict.get('training_config'), object):
-                metadata_dict['training_config'] = asdict(metadata.training_config)
-            
-            with open(metadata_path, 'w', encoding='utf-8') as f:
-                json.dump(metadata_dict, f, indent=2, ensure_ascii=False, default=str)
-            
-            logger.info(f"✅ Metadata saved: {metadata_path}")
-            
-            # Create model summary
-            summary_path = model_dir / "model_summary.txt"
-            summary_content = f"""Model Summary: {model_id}
-{'='*50}
-
-Basic Information:
-- Name: {metadata.model_name}
-- Version: {metadata.version}
-- Type: {metadata.model_config.model_type}
-- Created: {metadata.created_at}
-- Model ID: {model_id}
-
-Architecture:
-- Vocabulary Size: {metadata.model_config.vocab_size:,}
-- Hidden Size: {metadata.model_config.hidden_size}
-- Layers: {metadata.model_config.num_layers}
-- Attention Heads: {metadata.model_config.num_heads}
-- Sequence Length: {metadata.model_config.seq_length}
-- Dropout: {metadata.model_config.dropout}
-
-Model Statistics:
-- Total Parameters: {metadata.total_parameters:,}
-- Trainable Parameters: {metadata.trainable_parameters:,}
-- Model Size: {metadata.model_size_mb:.2f} MB
-- Best Loss: {metadata.best_loss:.4f}
-- Best Perplexity: {metadata.best_perplexity:.2f}
-
-Training Information:
-- Epochs Trained: {metadata.epochs_trained}
-- Training Time: {metadata.training_time_hours:.2f} hours
-- Hardware: {metadata.hardware_used}
-- PyTorch Version: {metadata.pytorch_version}
-
-Dataset:
-- Source: {metadata.dataset_info.get('source', 'Unknown')}
-- Samples: {metadata.dataset_info.get('num_samples', 'Unknown')}
-
-Files:
-- Model: model.pt
-- Tokenizer: tokenizer/
-- Metadata: ../metadata/{model_id}.json
-- Optimizer: {'optimizer.pt (saved)' if optimizer else 'optimizer.pt (not saved)'}
-- Scheduler: {'scheduler.pt (saved)' if scheduler else 'scheduler.pt (not saved)'}
-
-Notes:
-{metadata.notes}
-
-Tags: {', '.join(metadata.tags)}
-"""
-            
-            with open(summary_path, 'w', encoding='utf-8') as f:
-                f.write(summary_content)
-            
-            logger.info(f"✅ Model summary saved: {summary_path}")
-            
-            # Handle "best" model linking
-            if "best" in metadata.tags:
-                self._update_best_model_link(model_id)
-            
-            # Success message
-            logger.info("=" * 50)
-            logger.info(f"✅ Model saved successfully!")
-            logger.info(f"   Model ID: {model_id}")
+            logger.info(f"✅ Model saved successfully: {model_id}")
             logger.info(f"   Location: {model_dir}")
-            logger.info(f"   Size: {metadata.model_size_mb:.2f} MB")
-            logger.info(f"   Parameters: {metadata.total_parameters:,}")
-            logger.info(f"   Loss: {metadata.best_loss:.4f}")
-            logger.info(f"   Perplexity: {metadata.best_perplexity:.2f}")
-            logger.info("=" * 50)
+            logger.info(f"   Files: model.pt, vocab.json, merges.txt, metadata.json")
             
             return model_id
             
         except Exception as e:
             logger.error(f"❌ Failed to save model: {e}")
-            import traceback
-            logger.error(f"Traceback: {traceback.format_exc()}")
-            
-            # Cleanup on failure
-            if 'model_dir' in locals() and model_dir.exists():
-                try:
-                    shutil.rmtree(model_dir)
-                    logger.info("Cleaned up incomplete model directory")
-                except:
-                    pass
-            
-            raise
+            logger.error(f"Save error traceback: {traceback.format_exc()}")
+            raise RuntimeError(f"Model saving failed: {e}")
     
-    def _update_best_model_link(self, model_id: str):
-        """Update symlink/reference to best model."""
+    def _update_model_registry(self, model_id: str, metadata: ModelMetadata):
+        """Update the global model registry."""
+        registry_path = self.models_dir / "registry.json"
+        
         try:
-            latest_link = self.models_dir / "latest_best"
-            
-            # Remove existing link
-            if latest_link.exists():
-                if latest_link.is_symlink():
-                    latest_link.unlink()
-                else:
-                    latest_link.unlink()
-            
-            # Create new link
-            try:
-                # Try symlink first
-                latest_link.symlink_to(f"checkpoints/{model_id}")
-                logger.info(f"✅ Best model symlink updated: {latest_link}")
-            except OSError:
-                # Fallback to text file
-                with open(latest_link, 'w') as f:
-                    f.write(model_id)
-                logger.info(f"✅ Best model reference updated: {latest_link}")
-                
-        except Exception as e:
-            logger.warning(f"Failed to update best model link: {e}")
-    
-    def load_model(self, model_id: str, device: Optional[torch.device] = None):
-        """Load model with comprehensive error handling."""
-        try:
-            logger.info(f"🔄 Loading model: {model_id}")
-            
-            # Handle special model IDs
-            if model_id in ['latest', 'best', 'latest_best']:
-                model_id = self._resolve_special_model_id(model_id)
-            
-            # Check if model exists
-            model_dir = self.models_dir / "checkpoints" / model_id
-            if not model_dir.exists():
-                available_models = [d.name for d in (self.models_dir / "checkpoints").iterdir() if d.is_dir()]
-                raise FileNotFoundError(f"Model '{model_id}' not found. Available models: {available_models}")
-            
-            # Load metadata
-            metadata_path = self.models_dir / "metadata" / f"{model_id}.json"
-            if not metadata_path.exists():
-                raise FileNotFoundError(f"Metadata not found: {metadata_path}")
-            
-            with open(metadata_path, 'r', encoding='utf-8') as f:
-                metadata_dict = json.load(f)
-            
-            # Reconstruct metadata object
-            model_config = ModelConfig(**metadata_dict['model_config'])
-            training_config = TrainingConfig(**metadata_dict['training_config'])
-            
-            metadata_dict['model_config'] = model_config
-            metadata_dict['training_config'] = training_config
-            metadata = ModelMetadata(**metadata_dict)
-            
-            logger.info(f"✅ Metadata loaded: {metadata.model_name} {metadata.version}")
-            
-            # Load tokenizer
-            tokenizer_dir = model_dir / "tokenizer"
-            tokenizer = self._load_tokenizer_safely(tokenizer_dir)
-            
-            logger.info(f"✅ Tokenizer loaded: vocab_size={tokenizer.vocab_size()}")
-            
-            # Load model
-            model_path = model_dir / "model.pt"
-            if not model_path.exists():
-                raise FileNotFoundError(f"Model file not found: {model_path}")
-            
-            # Import model class
-            if metadata.model_config.model_type == "SubwordTransformer":
-                from subword_transformer import SubwordTransformer
-                model = SubwordTransformer(model_config)
+            # Load existing registry
+            if registry_path.exists():
+                with open(registry_path, 'r', encoding='utf-8') as f:
+                    registry = json.load(f)
             else:
-                raise ValueError(f"Unknown model type: {metadata.model_config.model_type}")
+                registry = {"models": {}, "created_at": datetime.now().isoformat()}
             
-            # Load checkpoint
-            checkpoint_device = 'cpu' if device is None else device
-            checkpoint = torch.load(model_path, map_location=checkpoint_device)
+            # Add model entry
+            registry["models"][model_id] = {
+                "model_name": metadata.model_name,
+                "version": metadata.version,
+                "created_at": metadata.created_at,
+                "last_modified": metadata.last_modified,
+                "best_loss": float(metadata.best_loss),
+                "total_parameters": int(metadata.total_parameters),
+                "model_size_mb": float(metadata.model_size_mb),
+                "epochs_trained": int(metadata.epochs_trained),
+                "tags": list(metadata.tags),
+                "model_hash": metadata.model_hash,
+                "tokenizer_hash": metadata.tokenizer_hash
+            }
             
-            # Load state dict
-            if 'model_state_dict' in checkpoint:
-                state_dict = checkpoint['model_state_dict']
-            else:
-                state_dict = checkpoint
+            registry["last_updated"] = datetime.now().isoformat()
+            registry["total_models"] = len(registry["models"])
             
-            # Load with error handling
-            try:
-                missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=True)
-                if missing_keys:
-                    logger.warning(f"Missing keys in checkpoint: {missing_keys}")
-                if unexpected_keys:
-                    logger.warning(f"Unexpected keys in checkpoint: {unexpected_keys}")
-            except Exception as e:
-                logger.error(f"Failed to load state dict: {e}")
-                raise
+            # Save registry
+            with open(registry_path, 'w', encoding='utf-8') as f:
+                json.dump(registry, f, indent=2, ensure_ascii=False)
             
-            # Move to device if specified
-            if device is not None:
-                model = model.to(device)
-            
-            logger.info("=" * 50)
-            logger.info(f"✅ Model loaded successfully!")
-            logger.info(f"   Model ID: {model_id}")
-            logger.info(f"   Name: {metadata.model_name} {metadata.version}")
-            logger.info(f"   Parameters: {metadata.total_parameters:,}")
-            logger.info(f"   Vocab Size: {model_config.vocab_size:,}")
-            logger.info(f"   Best Loss: {metadata.best_loss:.4f}")
-            logger.info(f"   Device: {next(model.parameters()).device}")
-            logger.info("=" * 50)
-            
-            return model, tokenizer, metadata
+            logger.info(f"   ✅ Registry updated: {len(registry['models'])} total models")
             
         except Exception as e:
-            logger.error(f"❌ Failed to load model '{model_id}': {e}")
-            raise
+            logger.error(f"   ❌ Failed to update registry: {e}")
     
-    def _resolve_special_model_id(self, special_id: str) -> str:
-        """Resolve special model IDs like 'latest', 'best'."""
-        latest_link = self.models_dir / "latest_best"
-        
-        if latest_link.exists():
+    def _validate_saved_model(self, model_id: str) -> bool:
+        """Validate that the model was saved correctly."""
+        try:
+            model_dir = self.models_dir / model_id
+            
+            required_files = ["model.pt", "metadata.json"]
+            optional_files = ["vocab.json", "merges.txt", "tokenizer.json"]
+            
+            # Check required files
+            for file_name in required_files:
+                file_path = model_dir / file_name
+                if not file_path.exists():
+                    logger.error(f"Missing required file: {file_path}")
+                    return False
+                if file_path.stat().st_size == 0:
+                    logger.error(f"Empty required file: {file_path}")
+                    return False
+            
+            # Check at least one tokenizer file exists
+            tokenizer_exists = any((model_dir / file_name).exists() for file_name in optional_files)
+            if not tokenizer_exists:
+                logger.warning(f"No tokenizer files found for {model_id}")
+            
+            # Try to load metadata
             try:
-                if latest_link.is_symlink():
-                    # Resolve symlink
-                    target = latest_link.readlink()
-                    return target.name if target.name != "checkpoints" else target.parent.name
-                else:
-                    # Read from text file
-                    with open(latest_link, 'r') as f:
-                        return f.read().strip()
+                with open(model_dir / "metadata.json", 'r', encoding='utf-8') as f:
+                    metadata = json.load(f)
+                if not isinstance(metadata, dict):
+                    logger.error(f"Invalid metadata format for {model_id}")
+                    return False
             except Exception as e:
-                logger.warning(f"Failed to resolve {special_id}: {e}")
-        
-        # Fallback: find best model by loss
-        models = self.list_models()
-        if not models:
-            raise FileNotFoundError("No models available")
-        
-        best_model = min(models, key=lambda x: x['best_loss'])
-        return best_model['id']
+                logger.error(f"Could not load metadata for {model_id}: {e}")
+                return False
+            
+            logger.info(f"   ✅ Model validation passed for {model_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Model validation error for {model_id}: {e}")
+            return False
     
     def list_models(self) -> List[Dict[str, Any]]:
-        """List all available models."""
+        """List all available models with comprehensive information."""
         models = []
         
         try:
-            metadata_dir = self.models_dir / "metadata"
-            if not metadata_dir.exists():
-                return models
-            
-            for metadata_file in metadata_dir.glob("*.json"):
-                try:
-                    with open(metadata_file, 'r', encoding='utf-8') as f:
-                        metadata_dict = json.load(f)
-                    
-                    model_id = metadata_file.stem
-                    
+            # Try to load from registry first
+            registry_path = self.models_dir / "registry.json"
+            if registry_path.exists():
+                with open(registry_path, 'r', encoding='utf-8') as f:
+                    registry = json.load(f)
+                
+                for model_id, info in registry["models"].items():
                     model_info = {
-                        'id': model_id,
-                        'name': metadata_dict.get('model_name', 'Unknown'),
-                        'version': metadata_dict.get('version', 'Unknown'),
-                        'created_at': metadata_dict.get('created_at', 'Unknown'),
-                        'best_loss': metadata_dict.get('best_loss', float('inf')),
-                        'best_perplexity': metadata_dict.get('best_perplexity', float('inf')),
-                        'size_mb': metadata_dict.get('model_size_mb', 0.0),
-                        'parameters': metadata_dict.get('total_parameters', 0),
-                        'epochs': metadata_dict.get('epochs_trained', 0),
-                        'training_hours': metadata_dict.get('training_time_hours', 0.0),
-                        'tags': metadata_dict.get('tags', []),
-                        'hardware': metadata_dict.get('hardware_used', 'Unknown'),
-                        'notes': metadata_dict.get('notes', ''),
-                        'tokenizer_type': metadata_dict.get('model_config', {}).get('tokenizer_type', 'unknown'),
-                        'model_type': metadata_dict.get('model_config', {}).get('model_type', 'Unknown')
+                        "id": model_id,
+                        "model_name": info.get("model_name", "Unknown"),
+                        "version": info.get("version", "Unknown"),
+                        "created_at": info.get("created_at", "Unknown"),
+                        "best_loss": info.get("best_loss", float('inf')),
+                        "total_parameters": info.get("total_parameters", 0),
+                        "model_size_mb": info.get("model_size_mb", 0.0),
+                        "epochs_trained": info.get("epochs_trained", 0),
+                        "tags": info.get("tags", []),
+                        "validated": self._validate_saved_model(model_id)
                     }
-                    
                     models.append(model_info)
-                    
-                except Exception as e:
-                    logger.warning(f"Could not load metadata for {metadata_file}: {e}")
-                    continue
             
-            # Sort by best loss
-            models.sort(key=lambda x: x['best_loss'])
+            else:
+                # Fallback: scan directories
+                for model_dir in self.models_dir.iterdir():
+                    if model_dir.is_dir() and not model_dir.name.startswith('.'):
+                        try:
+                            metadata_path = model_dir / "metadata.json"
+                            if metadata_path.exists():
+                                with open(metadata_path, 'r', encoding='utf-8') as f:
+                                    metadata = json.load(f)
+                                
+                                model_info = {
+                                    "id": model_dir.name,
+                                    "model_name": metadata.get("model_name", "Unknown"),
+                                    "version": metadata.get("version", "Unknown"),
+                                    "created_at": metadata.get("created_at", "Unknown"),
+                                    "best_loss": metadata.get("best_loss", float('inf')),
+                                    "total_parameters": metadata.get("total_parameters", 0),
+                                    "model_size_mb": metadata.get("model_size_mb", 0.0),
+                                    "epochs_trained": metadata.get("epochs_trained", 0),
+                                    "tags": metadata.get("tags", []),
+                                    "validated": self._validate_saved_model(model_dir.name)
+                                }
+                                models.append(model_info)
+                        except Exception as e:
+                            logger.warning(f"Could not load model info for {model_dir.name}: {e}")
+            
+            # Sort by creation date (newest first)
+            models.sort(key=lambda x: x.get("created_at", ""), reverse=True)
             
         except Exception as e:
             logger.error(f"Error listing models: {e}")
         
         return models
     
-    def validate_model(self, model_id: str) -> Dict[str, Any]:
-        """Validate a saved model and return status."""
+    def load_model(self, model_id: str) -> Tuple[nn.Module, Any, ModelMetadata]:
+        """Load a saved model with error handling."""
         try:
-            model_dir = self.models_dir / "checkpoints" / model_id
-            metadata_path = self.models_dir / "metadata" / f"{model_id}.json"
-            
-            validation_result = {
-                'model_id': model_id,
-                'valid': True,
-                'issues': [],
-                'files': {}
-            }
-            
-            # Check model directory
+            model_dir = self.models_dir / model_id
             if not model_dir.exists():
-                validation_result['valid'] = False
-                validation_result['issues'].append("Model directory missing")
-                return validation_result
+                raise FileNotFoundError(f"Model directory not found: {model_dir}")
             
-            # Check metadata
-            if metadata_path.exists():
-                validation_result['files']['metadata'] = "✅ Present"
-            else:
-                validation_result['valid'] = False
-                validation_result['files']['metadata'] = "❌ Missing"
-                validation_result['issues'].append("Metadata file missing")
+            logger.info(f"Loading model: {model_id}")
             
-            # Check model file
+            # Load metadata
+            metadata_path = model_dir / "metadata.json"
+            with open(metadata_path, 'r', encoding='utf-8') as f:
+                metadata_dict = json.load(f)
+            
+            # Reconstruct metadata object
+            metadata = ModelMetadata(**metadata_dict)
+            
+            # Load tokenizer
+            tokenizer = self._load_tokenizer(model_dir)
+            
+            # Load model
             model_path = model_dir / "model.pt"
-            if model_path.exists():
-                validation_result['files']['model'] = f"✅ Present ({model_path.stat().st_size / 1024**2:.1f} MB)"
+            checkpoint = torch.load(model_path, map_location='cpu')
+            
+            # Create model instance
+            from subword_transformer import SubwordTransformer
+            
+            # Convert dict back to ModelConfig if needed
+            if isinstance(metadata.model_config, dict):
+                model_config = ModelConfig(**metadata.model_config)
             else:
-                validation_result['valid'] = False
-                validation_result['files']['model'] = "❌ Missing"
-                validation_result['issues'].append("Model file missing")
+                model_config = metadata.model_config
             
-            # Check tokenizer
-            tokenizer_dir = model_dir / "tokenizer"
-            if tokenizer_dir.exists():
-                tokenizer_files = list(tokenizer_dir.iterdir())
-                validation_result['files']['tokenizer'] = f"✅ Present ({len(tokenizer_files)} files)"
-            else:
-                validation_result['valid'] = False
-                validation_result['files']['tokenizer'] = "❌ Missing"
-                validation_result['issues'].append("Tokenizer directory missing")
+            model = SubwordTransformer(model_config)
+            model.load_state_dict(checkpoint['model_state_dict'])
             
-            # Check optional files
-            optional_files = ['optimizer.pt', 'scheduler.pt', 'model_summary.txt']
-            for optional_file in optional_files:
-                file_path = model_dir / optional_file
-                if file_path.exists():
-                    validation_result['files'][optional_file] = "✅ Present"
-                else:
-                    validation_result['files'][optional_file] = "⚠️ Missing (optional)"
+            logger.info(f"✅ Model loaded successfully: {model_id}")
             
-            return validation_result
+            return model, tokenizer, metadata
             
         except Exception as e:
-            return {
-                'model_id': model_id,
-                'valid': False,
-                'issues': [f"Validation error: {e}"],
-                'files': {}
-            }
+            logger.error(f"Failed to load model {model_id}: {e}")
+            raise
+    
+    def _load_tokenizer(self, model_dir: Path):
+        """Load tokenizer from model directory."""
+        try:
+            from subword_transformer import SubwordTokenizer
+            
+            vocab_path = model_dir / "vocab.json"
+            merges_path = model_dir / "merges.txt"
+            tokenizer_path = model_dir / "tokenizer.json"
+            
+            if vocab_path.exists() and merges_path.exists():
+                # Load standard format
+                tokenizer = SubwordTokenizer()
+                tokenizer.load_vocab(str(vocab_path), str(merges_path))
+                return tokenizer
+            
+            elif tokenizer_path.exists():
+                # Load single file format
+                with open(tokenizer_path, 'r', encoding='utf-8') as f:
+                    tokenizer_data = json.load(f)
+                
+                tokenizer = SubwordTokenizer(
+                    vocab=tokenizer_data['vocab'],
+                    merges=tokenizer_data['merges']
+                )
+                return tokenizer
+            
+            else:
+                raise FileNotFoundError("No tokenizer files found")
+                
+        except Exception as e:
+            logger.error(f"Failed to load tokenizer: {e}")
+            raise
     
     def delete_model(self, model_id: str) -> bool:
-        """Delete a model and all associated files."""
+        """Delete a model and all its files."""
         try:
-            logger.info(f"🗑️ Deleting model: {model_id}")
-            
-            model_dir = self.models_dir / "checkpoints" / model_id
-            metadata_path = self.models_dir / "metadata" / f"{model_id}.json"
-            
-            deleted_items = []
-            
-            # Remove model directory
-            if model_dir.exists():
-                shutil.rmtree(model_dir)
-                deleted_items.append("model directory")
-                logger.info(f"   Removed model directory: {model_dir}")
-            
-            # Remove metadata
-            if metadata_path.exists():
-                metadata_path.unlink()
-                deleted_items.append("metadata")
-                logger.info(f"   Removed metadata: {metadata_path}")
-            
-            # Update latest links if this was the latest model
-            self._cleanup_best_model_links(model_id)
-            
-            if deleted_items:
-                logger.info(f"✅ Model '{model_id}' deleted successfully (removed: {', '.join(deleted_items)})")
-                return True
-            else:
-                logger.warning(f"⚠️ No files found for model '{model_id}'")
+            model_dir = self.models_dir / model_id
+            if not model_dir.exists():
+                logger.warning(f"Model directory not found: {model_dir}")
                 return False
-                
-        except Exception as e:
-            logger.error(f"❌ Failed to delete model '{model_id}': {e}")
-            return False
-    
-    def _cleanup_best_model_links(self, deleted_model_id: str):
-        """Clean up best model links if the deleted model was the best."""
-        try:
-            latest_link = self.models_dir / "latest_best"
             
-            if latest_link.exists():
-                # Check if the deleted model was the current best
-                current_best_id = None
-                try:
-                    if latest_link.is_symlink():
-                        target = latest_link.readlink()
-                        current_best_id = target.name if target.name != "checkpoints" else target.parent.name
-                    else:
-                        with open(latest_link, 'r') as f:
-                            current_best_id = f.read().strip()
-                except:
-                    pass
+            # Remove directory and all files
+            import shutil
+            shutil.rmtree(model_dir)
+            
+            # Update registry
+            registry_path = self.models_dir / "registry.json"
+            if registry_path.exists():
+                with open(registry_path, 'r', encoding='utf-8') as f:
+                    registry = json.load(f)
                 
-                if current_best_id == deleted_model_id:
-                    # Remove the old link
-                    latest_link.unlink()
-                    logger.info("   Removed outdated best model link")
+                if model_id in registry["models"]:
+                    del registry["models"][model_id]
+                    registry["total_models"] = len(registry["models"])
+                    registry["last_updated"] = datetime.now().isoformat()
                     
-                    # Find new best model
-                    remaining_models = self.list_models()
-                    if remaining_models:
-                        new_best = min(remaining_models, key=lambda x: x['best_loss'])
-                        self._update_best_model_link(new_best['id'])
-                        logger.info(f"   Updated best model link to: {new_best['id']}")
-        except Exception as e:
-            logger.warning(f"Failed to cleanup best model links: {e}")
-    
-    def get_model_info(self, model_id: str) -> Optional[Dict[str, Any]]:
-        """Get detailed information about a specific model."""
-        try:
-            metadata_path = self.models_dir / "metadata" / f"{model_id}.json"
-            if not metadata_path.exists():
-                return None
+                    with open(registry_path, 'w', encoding='utf-8') as f:
+                        json.dump(registry, f, indent=2, ensure_ascii=False)
             
-            with open(metadata_path, 'r', encoding='utf-8') as f:
-                model_info = json.load(f)
-            
-            # Add validation info
-            validation = self.validate_model(model_id)
-            model_info['validation'] = validation
-            
-            # Add file paths
-            model_dir = self.models_dir / "checkpoints" / model_id
-            model_info['paths'] = {
-                'model_dir': str(model_dir),
-                'metadata': str(metadata_path),
-                'model_file': str(model_dir / "model.pt"),
-                'tokenizer_dir': str(model_dir / "tokenizer"),
-                'summary': str(model_dir / "model_summary.txt")
-            }
-            
-            return model_info
-                
-        except Exception as e:
-            logger.error(f"Error getting model info for {model_id}: {e}")
-            return None
-    
-    def export_model(self, model_id: str, export_path: str) -> bool:
-        """Export model for sharing or deployment."""
-        try:
-            logger.info(f"📦 Exporting model: {model_id}")
-            
-            model_dir = self.models_dir / "checkpoints" / model_id
-            metadata_path = self.models_dir / "metadata" / f"{model_id}.json"
-            
-            if not model_dir.exists() or not metadata_path.exists():
-                raise FileNotFoundError(f"Model {model_id} not found")
-            
-            export_path = Path(export_path)
-            export_path.mkdir(parents=True, exist_ok=True)
-            
-            # Copy model files
-            shutil.copytree(model_dir, export_path / "model", dirs_exist_ok=True)
-            shutil.copy2(metadata_path, export_path / "metadata.json")
-            
-            # Create export info
-            export_info = {
-                'model_id': model_id,
-                'exported_at': datetime.now().isoformat(),
-                'export_version': '1.0',
-                'contents': {
-                    'model': 'Complete model checkpoint',
-                    'metadata': 'Model metadata and configuration',
-                    'tokenizer': 'Tokenizer files and vocabulary',
-                    'summary': 'Human-readable model summary'
-                }
-            }
-            
-            with open(export_path / "export_info.json", 'w') as f:
-                json.dump(export_info, f, indent=2)
-            
-            # Create README
-            readme_content = f"""# Exported Model: {model_id}
-
-This export contains a complete model checkpoint with all necessary files.
-
-## Contents
-
-- `model/` - Complete model checkpoint directory
-  - `model.pt` - PyTorch model state dict
-  - `tokenizer/` - Tokenizer files
-  - `model_summary.txt` - Human-readable summary
-  - Additional training files (optimizer, scheduler if available)
-
-- `metadata.json` - Complete model metadata
-- `export_info.json` - Export information
-- `README.md` - This file
-
-## Loading the Model
-
-```python
-from model_manager import ModelManager
-
-# Create model manager
-manager = ModelManager()
-
-# Method 1: Copy to models directory and load
-# (Copy the 'model' folder to your models/checkpoints/ directory)
-model, tokenizer, metadata = manager.load_model('{model_id}')
-
-# Method 2: Load directly from export
-# (Requires manual setup - see documentation)
-```
-
-## Export Information
-
-- **Exported At**: {export_info['exported_at']}
-- **Export Version**: {export_info['export_version']}
-- **Original Model ID**: {model_id}
-
-## Notes
-
-This is a complete model export containing all files necessary for loading and using the model.
-The model was trained using the subword transformer architecture with BPE tokenization.
-"""
-            
-            with open(export_path / "README.md", "w") as f:
-                f.write(readme_content)
-            
-            logger.info(f"✅ Model exported successfully to: {export_path}")
+            logger.info(f"✅ Model deleted: {model_id}")
             return True
             
         except Exception as e:
-            logger.error(f"❌ Failed to export model {model_id}: {e}")
+            logger.error(f"Failed to delete model {model_id}: {e}")
             return False
     
-    def cleanup_old_models(self, keep_best: int = 5) -> int:
-        """Clean up old models, keeping only the best N models."""
+    def validate_model(self, model_id: str) -> Dict[str, Any]:
+        """Comprehensive model validation."""
+        validation_result = {
+            "valid": False,
+            "issues": [],
+            "files_found": [],
+            "files_missing": [],
+            "model_loadable": False,
+            "tokenizer_loadable": False,
+            "metadata_valid": False
+        }
+        
         try:
-            logger.info(f"🧹 Cleaning up old models (keeping best {keep_best})...")
+            model_dir = self.models_dir / model_id
+            if not model_dir.exists():
+                validation_result["issues"].append(f"Model directory not found: {model_dir}")
+                return validation_result
             
-            models = self.list_models()
-            if len(models) <= keep_best:
-                logger.info(f"Only {len(models)} models found, no cleanup needed")
-                return 0
+            # Check files
+            required_files = ["model.pt", "metadata.json"]
+            optional_files = ["vocab.json", "merges.txt", "tokenizer.json"]
             
-            # Sort by loss and keep only the best
-            models_to_delete = models[keep_best:]
-            deleted_count = 0
+            for file_name in required_files + optional_files:
+                file_path = model_dir / file_name
+                if file_path.exists():
+                    validation_result["files_found"].append(file_name)
+                elif file_name in required_files:
+                    validation_result["files_missing"].append(file_name)
+                    validation_result["issues"].append(f"Missing required file: {file_name}")
             
-            for model in models_to_delete:
-                try:
-                    if self.delete_model(model['id']):
-                        deleted_count += 1
-                        logger.info(f"   Deleted: {model['name']} (loss: {model['best_loss']:.4f})")
-                except Exception as e:
-                    logger.warning(f"   Failed to delete {model['id']}: {e}")
-                    continue
+            # Validate metadata
+            try:
+                metadata_path = model_dir / "metadata.json"
+                with open(metadata_path, 'r', encoding='utf-8') as f:
+                    metadata = json.load(f)
+                validation_result["metadata_valid"] = isinstance(metadata, dict)
+            except Exception as e:
+                validation_result["issues"].append(f"Metadata validation failed: {e}")
             
-            logger.info(f"✅ Cleanup complete: removed {deleted_count} models, kept best {keep_best}")
-            return deleted_count
+            # Try loading tokenizer
+            try:
+                tokenizer = self._load_tokenizer(model_dir)
+                validation_result["tokenizer_loadable"] = True
+            except Exception as e:
+                validation_result["issues"].append(f"Tokenizer loading failed: {e}")
+            
+            # Try loading model (basic check)
+            try:
+                model_path = model_dir / "model.pt"
+                checkpoint = torch.load(model_path, map_location='cpu')
+                if 'model_state_dict' in checkpoint:
+                    validation_result["model_loadable"] = True
+                else:
+                    validation_result["issues"].append("No model_state_dict in checkpoint")
+            except Exception as e:
+                validation_result["issues"].append(f"Model checkpoint loading failed: {e}")
+            
+            # Overall validation
+            validation_result["valid"] = (
+                len(validation_result["files_missing"]) == 0 and
+                validation_result["metadata_valid"] and
+                validation_result["tokenizer_loadable"] and
+                validation_result["model_loadable"]
+            )
             
         except Exception as e:
-            logger.error(f"❌ Cleanup failed: {e}")
-            return 0
+            validation_result["issues"].append(f"Validation error: {e}")
+        
+        return validation_result
     
     def print_model_summary(self):
         """Print a comprehensive summary of all models."""
-        print("\n" + "="*80)
-        print("🤖 MODEL MANAGER SUMMARY")
-        print("="*80)
-        
         models = self.list_models()
         
-        print(f"📊 Total Models: {len(models)}")
-        print(f"💾 Storage Location: {self.models_dir}")
+        print("=" * 80)
+        print("🤖  MODEL MANAGER SUMMARY")
+        print("=" * 80)
+        print(f"📊  Total Models: {len(models)}")
+        print(f"💾  Storage Location: {self.models_dir}")
         
-        if models:
-            print(f"\n🏆 BEST MODEL (by loss):")
-            best = models[0]
-            print(f"   ID: {best['id']}")
-            print(f"   Name: {best['name']} {best['version']}")
-            print(f"   Loss: {best['best_loss']:.4f} (PPL: {best['best_perplexity']:.2f})")
-            print(f"   Parameters: {best['parameters']:,}")
-            print(f"   Size: {best['size_mb']:.1f} MB")
-            print(f"   Type: {best['model_type']} ({best['tokenizer_type']})")
-            print(f"   Training: {best['epochs']} epochs, {best['training_hours']:.1f}h")
-            
-            print(f"\n📋 ALL MODELS:")
-            for i, model in enumerate(models, 1):
-                status = "🏆" if i == 1 else "📄"
-                type_info = f"({model['tokenizer_type']})"
-                print(f"   {i:2d}. {status} {model['name']} {type_info}")
-                print(f"       Loss: {model['best_loss']:.4f} | {model['parameters']:,} params | {model['size_mb']:.1f}MB")
+        if not models:
+            print("⚠️  No models found")
         else:
-            print("\n⚠️  No models found")
+            print(f"🏆  Best Model (by loss): {min(models, key=lambda x: x.get('best_loss', float('inf')))['model_name']}")
+            print(f"📈  Total Parameters: {sum(m.get('total_parameters', 0) for m in models):,}")
+            print(f"💽  Total Storage: {sum(m.get('model_size_mb', 0) for m in models):.1f} MB")
+            print()
+            
+            # List models
+            print("📁  AVAILABLE MODELS:")
+            print("-" * 80)
+            for i, model in enumerate(models[:10], 1):  # Show top 10
+                status = "✅" if model.get('validated', False) else "⚠️"
+                print(f"{i:2d}. {status} {model['model_name']} ({model['id']})")
+                print(f"     📊 Loss: {model.get('best_loss', 'N/A'):.4f} | "
+                      f"📐 Params: {model.get('total_parameters', 0):,} | "
+                      f"🏋️ Size: {model.get('model_size_mb', 0):.1f}MB")
+                print(f"     📅 Created: {model.get('created_at', 'Unknown')[:19]}")
+                if model.get('tags'):
+                    print(f"     🏷️  Tags: {', '.join(model['tags'][:5])}")
+                print()
+            
+            if len(models) > 10:
+                print(f"... and {len(models) - 10} more models")
         
-        print("="*80)
+        print("=" * 80)
     
-    def repair_model(self, model_id: str) -> bool:
-        """Attempt to repair a corrupted model."""
+    def get_storage_info(self) -> Dict[str, Any]:
+        """Get detailed storage information."""
+        storage_info = {
+            "total_models": 0,
+            "total_size_mb": 0.0,
+            "total_parameters": 0,
+            "storage_path": str(self.models_dir),
+            "disk_usage": {},
+            "file_breakdown": {}
+        }
+        
         try:
-            logger.info(f"🔧 Attempting to repair model: {model_id}")
+            models = self.list_models()
+            storage_info["total_models"] = len(models)
             
-            validation = self.validate_model(model_id)
-            if validation['valid']:
-                logger.info("✅ Model appears to be valid, no repair needed")
-                return True
+            for model in models:
+                storage_info["total_size_mb"] += model.get("model_size_mb", 0.0)
+                storage_info["total_parameters"] += model.get("total_parameters", 0)
             
-            logger.info(f"Issues found: {validation['issues']}")
-            
-            model_dir = self.models_dir / "checkpoints" / model_id
-            metadata_path = self.models_dir / "metadata" / f"{model_id}.json"
-            
-            repairs_made = []
-            
-            # Attempt to regenerate missing metadata
-            if not metadata_path.exists() and model_dir.exists():
-                model_path = model_dir / "model.pt"
-                if model_path.exists():
-                    try:
-                        # Load model checkpoint to extract info
-                        checkpoint = torch.load(model_path, map_location='cpu')
-                        
-                        # Create minimal metadata
-                        from datetime import datetime
-                        minimal_metadata = {
-                            'model_name': f'Repaired_Model_{model_id}',
-                            'version': 'v1.0_repaired',
-                            'created_at': datetime.now().isoformat(),
-                            'last_modified': datetime.now().isoformat(),
-                            'model_config': checkpoint.get('model_config', {}),
-                            'training_config': {
-                                'learning_rate': 3e-4,
-                                'batch_size': 32,
-                                'max_epochs': 50
-                            },
-                            'dataset_info': {'source': 'Unknown (repaired)'},
-                            'performance_metrics': {},
-                            'model_size_mb': model_path.stat().st_size / 1024**2,
-                            'total_parameters': 0,
-                            'trainable_parameters': 0,
-                            'training_time_hours': 0.0,
-                            'epochs_trained': 0,
-                            'best_loss': float('inf'),
-                            'best_perplexity': float('inf'),
-                            'hardware_used': 'Unknown',
-                            'pytorch_version': torch.__version__,
-                            'cuda_version': None,
-                            'model_hash': 'repaired',
-                            'tokenizer_hash': 'repaired',
-                            'notes': f'Repaired model from checkpoint. Original metadata was missing.',
-                            'tags': ['repaired']
-                        }
-                        
-                        with open(metadata_path, 'w') as f:
-                            json.dump(minimal_metadata, f, indent=2, default=str)
-                        
-                        repairs_made.append("regenerated metadata")
-                        logger.info("   ✅ Regenerated minimal metadata")
-                        
-                    except Exception as e:
-                        logger.error(f"   ❌ Failed to regenerate metadata: {e}")
-            
-            # Create summary if missing
-            summary_path = model_dir / "model_summary.txt"
-            if not summary_path.exists() and metadata_path.exists():
-                try:
-                    summary_content = f"""Model Summary: {model_id} (REPAIRED)
-{'='*50}
-
-⚠️  WARNING: This model was repaired and may have incomplete information.
-
-Model ID: {model_id}
-Status: Repaired
-Repairs Made: {', '.join(repairs_made) if repairs_made else 'None'}
-
-Files Present:
-{chr(10).join(f"- {f.name}" for f in model_dir.iterdir())}
-
-⚠️  Please verify this model works correctly before using in production.
-"""
-                    with open(summary_path, 'w') as f:
-                        f.write(summary_content)
-                    
-                    repairs_made.append("created summary")
-                    logger.info("   ✅ Created model summary")
-                    
-                except Exception as e:
-                    logger.error(f"   ❌ Failed to create summary: {e}")
-            
-            if repairs_made:
-                logger.info(f"✅ Model repair completed. Repairs made: {', '.join(repairs_made)}")
-                return True
-            else:
-                logger.error("❌ No repairs could be made")
-                return False
+            # Get disk usage
+            if self.models_dir.exists():
+                total_size = 0
+                file_counts = {"model.pt": 0, "metadata.json": 0, "vocab.json": 0, "merges.txt": 0}
                 
+                for model_dir in self.models_dir.iterdir():
+                    if model_dir.is_dir():
+                        for file_path in model_dir.rglob("*"):
+                            if file_path.is_file():
+                                size = file_path.stat().st_size
+                                total_size += size
+                                
+                                if file_path.name in file_counts:
+                                    file_counts[file_path.name] += 1
+                
+                storage_info["disk_usage"] = {
+                    "total_bytes": total_size,
+                    "total_mb": total_size / (1024 * 1024),
+                    "total_gb": total_size / (1024 * 1024 * 1024)
+                }
+                storage_info["file_breakdown"] = file_counts
+        
         except Exception as e:
-            logger.error(f"❌ Model repair failed: {e}")
-            return False
+            logger.error(f"Error getting storage info: {e}")
+        
+        return storage_info
+    
+    def cleanup_invalid_models(self) -> int:
+        """Remove invalid or corrupted models."""
+        removed_count = 0
+        
+        try:
+            models = self.list_models()
+            
+            for model in models:
+                validation = self.validate_model(model["id"])
+                
+                if not validation["valid"]:
+                    logger.info(f"Removing invalid model: {model['id']}")
+                    logger.info(f"Issues: {validation['issues']}")
+                    
+                    if self.delete_model(model["id"]):
+                        removed_count += 1
+        
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
+        
+        logger.info(f"Cleanup completed: {removed_count} models removed")
+        return removed_count
+    
+    def export_model_info(self, output_file: str = "model_export.json"):
+        """Export comprehensive model information to JSON."""
+        try:
+            export_data = {
+                "export_timestamp": datetime.now().isoformat(),
+                "manager_info": {
+                    "models_directory": str(self.models_dir),
+                    "pytorch_version": torch.__version__
+                },
+                "storage_info": self.get_storage_info(),
+                "models": []
+            }
+            
+            models = self.list_models()
+            for model in models:
+                model_info = model.copy()
+                
+                # Add validation info
+                validation = self.validate_model(model["id"])
+                model_info["validation"] = validation
+                
+                # Add detailed file info
+                model_dir = self.models_dir / model["id"]
+                if model_dir.exists():
+                    file_info = {}
+                    for file_path in model_dir.iterdir():
+                        if file_path.is_file():
+                            file_info[file_path.name] = {
+                                "size_bytes": file_path.stat().st_size,
+                                "size_mb": file_path.stat().st_size / (1024 * 1024),
+                                "modified": datetime.fromtimestamp(file_path.stat().st_mtime).isoformat()
+                            }
+                    model_info["files"] = file_info
+                
+                export_data["models"].append(model_info)
+            
+            # Write export file
+            output_path = Path(output_file)
+            with open(output_path, 'w', encoding='utf-8') as f:
+                json.dump(export_data, f, indent=2, ensure_ascii=False, default=str)
+            
+            logger.info(f"✅ Model information exported to: {output_path}")
+            return str(output_path)
+        
+        except Exception as e:
+            logger.error(f"Failed to export model info: {e}")
+            raise
