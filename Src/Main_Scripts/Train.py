@@ -301,7 +301,7 @@ def setup_device():
         device = torch.device("mps")
         logger.info("Using device: MPS (Apple Silicon)")
         # Very conservative for MPS - it has memory issues
-        torch.mps.set_per_process_memory_fraction(0.4)
+        torch.mps.set_per_process_memory_fraction(0.7)
         torch.mps.empty_cache()
     elif torch.cuda.is_available():
         device = torch.device("cuda")
