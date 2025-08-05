@@ -903,7 +903,14 @@ def main():
         # Initialize model
         logger.info("🧠 Initializing subword transformer model...")
         with memory_cleanup():
-            model = SubwordTransformer(model_config).to(device)
+            model = SubwordTransformer(model_config)
+    
+            # Add multi-GPU support
+            if torch.cuda.device_count() > 1:
+                print(f"Using {torch.cuda.device_count()} GPUs")
+                model = torch.nn.DataParallel(model)
+    
+            model = model.to(device)
         
         total_params, trainable_params = count_parameters(model)
         model_size_mb = total_params * 4 / 1024**2
