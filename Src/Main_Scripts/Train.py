@@ -572,13 +572,47 @@ def calculate_perplexity(loss: float) -> float:
     """Calculate perplexity with overflow protection."""
     return math.exp(min(loss, 20))
 
+def calculate_token_accuracy(logits: torch.Tensor, targets: torch.Tensor, ignore_index: int = 0) -> Tuple[float, int]:
+    """
+    Calculate token-level accuracy for language modeling.
+    
+    Args:
+        logits: Model predictions [batch_size, seq_len, vocab_size]
+        targets: Ground truth tokens [batch_size, seq_len]
+        ignore_index: Token ID to ignore (usually padding token)
+    
+    Returns:
+        Tuple of (accuracy, total_valid_tokens)
+    """
+    with torch.no_grad():
+        # Get predictions
+        predictions = torch.argmax(logits, dim=-1)  # [batch_size, seq_len]
+        
+        # Create mask for valid tokens (not padding)
+        valid_mask = (targets != ignore_index)
+        
+        # Calculate correct predictions
+        correct = (predictions == targets) & valid_mask
+        
+        # Count totals
+        total_correct = correct.sum().item()
+        total_valid = valid_mask.sum().item()
+        
+        if total_valid == 0:
+            return 0.0, 0
+        
+        accuracy = total_correct / total_valid
+        return accuracy, total_valid
+
 def train_epoch(model, dataloader, criterion, optimizer, scheduler, epoch: int, 
                 gradient_accumulation_steps: int = 1, max_grad_norm: float = 1.0,
-                log_interval: int = 25) -> Tuple[float, float, float]:
-    """Ultra memory-optimized training loop."""
+                log_interval: int = 25, ignore_index: int = 0) -> Tuple[float, float, float]:
+    """Ultra memory-optimized training loop with accuracy calculation."""
     model.train()
     total_loss = 0.0
     total_tokens = 0
+    total_correct_tokens = 0
+    total_valid_tokens = 0
     accumulation_steps = 0
     batch_times = []
     
@@ -602,6 +636,11 @@ def train_epoch(model, dataloader, criterion, optimizer, scheduler, epoch: int,
                 # No autocast for MPS/CPU - it can cause issues
                 logits = model(inputs)
                 loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
+            
+            # Calculate accuracy before scaling loss
+            batch_accuracy, batch_valid_tokens = calculate_token_accuracy(logits, targets, ignore_index)
+            total_correct_tokens += batch_accuracy * batch_valid_tokens
+            total_valid_tokens += batch_valid_tokens
             
             loss = loss / gradient_accumulation_steps
             loss.backward()
@@ -635,14 +674,15 @@ def train_epoch(model, dataloader, criterion, optimizer, scheduler, epoch: int,
                 with memory_cleanup():
                     pass
             
-            # Logging
+            # Logging with accuracy
             if batch_idx % log_interval == 0 and batch_idx > 0:
                 current_loss = total_loss / total_tokens
+                current_accuracy = total_correct_tokens / total_valid_tokens if total_valid_tokens > 0 else 0.0
                 avg_batch_time = sum(batch_times[-log_interval:]) / len(batch_times[-log_interval:])
                 tokens_per_sec = targets.numel() / avg_batch_time if batch_times else 0
                 
                 logger.info(f"Epoch {epoch} | Batch {batch_idx}/{len(dataloader)} | "
-                           f"Loss: {current_loss:.4f} | LR: {current_lr:.2e} | "
+                           f"Loss: {current_loss:.4f} | Acc: {current_accuracy:.3f} | LR: {current_lr:.2e} | "
                            f"Speed: {tokens_per_sec:.0f} tok/s | {get_memory_usage()}")
         
         except RuntimeError as e:
@@ -660,9 +700,46 @@ def train_epoch(model, dataloader, criterion, optimizer, scheduler, epoch: int,
                 raise e
     
     avg_loss = total_loss / total_tokens if total_tokens > 0 else float('inf')
+    avg_accuracy = total_correct_tokens / total_valid_tokens if total_valid_tokens > 0 else 0.0
     avg_batch_time = sum(batch_times) / len(batch_times) if batch_times else 0.0
     
-    return avg_loss, 0.0, avg_batch_time
+    return avg_loss, avg_accuracy, avg_batch_time
+
+def calculate_top_k_accuracy(logits: torch.Tensor, targets: torch.Tensor, k: int = 5, ignore_index: int = 0) -> float:
+    """
+    Calculate top-k accuracy for more detailed evaluation.
+    
+    Args:
+        logits: Model predictions [batch_size, seq_len, vocab_size]
+        targets: Ground truth tokens [batch_size, seq_len] 
+        k: Top-k value
+        ignore_index: Token ID to ignore
+    
+    Returns:
+        Top-k accuracy
+    """
+    with torch.no_grad():
+        # Get top-k predictions
+        _, top_k_preds = torch.topk(logits, k, dim=-1)  # [batch_size, seq_len, k]
+        
+        # Expand targets to match top-k predictions
+        targets_expanded = targets.unsqueeze(-1).expand(-1, -1, k)  # [batch_size, seq_len, k]
+        
+        # Check if target is in top-k predictions
+        correct = (top_k_preds == targets_expanded).any(dim=-1)  # [batch_size, seq_len]
+        
+        # Create mask for valid tokens
+        valid_mask = (targets != ignore_index)
+        
+        # Calculate accuracy
+        correct_valid = correct & valid_mask
+        total_correct = correct_valid.sum().item()
+        total_valid = valid_mask.sum().item()
+        
+        if total_valid == 0:
+            return 0.0
+        
+        return total_correct / total_valid
 
 def generate_sample_text(model, tokenizer, prompt: str = "<user> Hello", 
                         max_length: int = 20, temperature: float = 0.8) -> str:
@@ -842,11 +919,118 @@ def save_model_with_retries(model_manager, model, tokenizer, metadata, optimizer
     
     return None
 
-def main():
-    """Main training function with guaranteed model saving."""
+def evaluate_model_detailed(model, dataloader, criterion, tokenizer, max_batches: int = 50):
+    """
+    Perform detailed evaluation of the model with multiple metrics.
     
-    logger.info("🚀 Starting Subword-Level OASST1 Transformer Training")
-    logger.info("=" * 70)
+    Args:
+        model: The model to evaluate
+        dataloader: DataLoader for evaluation data
+        criterion: Loss criterion
+        tokenizer: Tokenizer for text generation
+        max_batches: Maximum number of batches to evaluate (for speed)
+    
+    Returns:
+        Dict with detailed evaluation metrics
+    """
+    model.eval()
+    
+    eval_metrics = {
+        'total_loss': 0.0,
+        'total_tokens': 0,
+        'total_correct_tokens': 0,
+        'total_valid_tokens': 0,
+        'top5_correct_tokens': 0,
+        'batch_count': 0,
+        'sample_generations': []
+    }
+    
+    ignore_index = tokenizer.vocab.get("<pad>", 0)
+    
+    try:
+        with torch.no_grad():
+            for batch_idx, (inputs, targets) in enumerate(dataloader):
+                if batch_idx >= max_batches:
+                    break
+                
+                # Move to device
+                inputs = inputs.to(device, non_blocking=True)
+                targets = targets.to(device, non_blocking=True)
+                
+                # Forward pass
+                if device.type == 'cuda':
+                    with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=True):
+                        logits = model(inputs)
+                        loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
+                else:
+                    logits = model(inputs)
+                    loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
+                
+                # Calculate metrics
+                batch_loss = loss.item()
+                batch_accuracy, batch_valid_tokens = calculate_token_accuracy(logits, targets, ignore_index)
+                top5_accuracy = calculate_top_k_accuracy(logits, targets, k=5, ignore_index=ignore_index)
+                
+                # Accumulate metrics
+                eval_metrics['total_loss'] += batch_loss * inputs.size(0)
+                eval_metrics['total_tokens'] += targets.numel()
+                eval_metrics['total_correct_tokens'] += batch_accuracy * batch_valid_tokens
+                eval_metrics['total_valid_tokens'] += batch_valid_tokens
+                eval_metrics['top5_correct_tokens'] += top5_accuracy * batch_valid_tokens
+                eval_metrics['batch_count'] += 1
+                
+                # Generate sample text from first few batches
+                if batch_idx < 3:
+                    try:
+                        # Use first sequence in batch as prompt
+                        prompt_ids = inputs[0][:min(10, inputs.size(1))].tolist()
+                        prompt_text = tokenizer.decode(prompt_ids)
+                        sample_text = generate_sample_text(model, tokenizer, prompt_text[:20], max_length=15)
+                        eval_metrics['sample_generations'].append({
+                            'prompt': prompt_text,
+                            'generated': sample_text
+                        })
+                    except:
+                        pass
+                
+                # Clean up
+                del inputs, targets, logits, loss
+                
+                # Memory cleanup every few batches
+                if batch_idx % 10 == 0:
+                    with memory_cleanup():
+                        pass
+    
+    except Exception as e:
+        logger.error(f"Error during evaluation: {e}")
+    
+    finally:
+        model.train()
+        with memory_cleanup():
+            pass
+    
+    # Calculate final metrics
+    if eval_metrics['total_tokens'] > 0:
+        eval_metrics['avg_loss'] = eval_metrics['total_loss'] / eval_metrics['total_tokens']
+        eval_metrics['perplexity'] = calculate_perplexity(eval_metrics['avg_loss'])
+    else:
+        eval_metrics['avg_loss'] = float('inf')
+        eval_metrics['perplexity'] = float('inf')
+    
+    if eval_metrics['total_valid_tokens'] > 0:
+        eval_metrics['accuracy'] = eval_metrics['total_correct_tokens'] / eval_metrics['total_valid_tokens']
+        eval_metrics['top5_accuracy'] = eval_metrics['top5_correct_tokens'] / eval_metrics['total_valid_tokens']
+    else:
+        eval_metrics['accuracy'] = 0.0
+        eval_metrics['top5_accuracy'] = 0.0
+    
+    return eval_metrics
+
+def main():
+    """Main training function with guaranteed model saving and detailed accuracy tracking."""
+    
+    logger.info("🚀 Starting Subword-Level OASST1 Transformer Training with Accuracy Tracking")
+    logger.info("=" * 80)
     logger.info(f"Initial memory: {get_memory_usage()}")
     
     # Handle imports - if they failed initially, run debug and try again
@@ -877,7 +1061,7 @@ def main():
     # Get conservative configuration for subword tokenization
     model_config, training_config, max_samples = get_subword_conservative_config()
     
-    logger.info(f"Using subword-optimized config:")
+    logger.info(f"Using subword-optimized config with accuracy tracking:")
     logger.info(f"  Model size: {model_config.hidden_size}x{model_config.num_layers}")
     logger.info(f"  Vocab size: {model_config.vocab_size} (subword)")
     logger.info(f"  Batch size: {training_config.batch_size}")
@@ -948,7 +1132,21 @@ def main():
             persistent_workers=False
         )
         
+        # Create evaluation dataloader (smaller subset)
+        eval_dataset_size = min(1000, len(dataset) // 10)
+        eval_indices = torch.randperm(len(dataset))[:eval_dataset_size]
+        eval_dataset = torch.utils.data.Subset(dataset, eval_indices)
+        eval_dataloader = DataLoader(
+            eval_dataset,
+            batch_size=training_config.batch_size,
+            shuffle=False,
+            num_workers=0,
+            pin_memory=False,
+            drop_last=False
+        )
+        
         logger.info(f"📊 Dataset ready: {len(dataset):,} sequences, {len(dataloader):,} batches/epoch")
+        logger.info(f"📊 Eval dataset: {len(eval_dataset):,} sequences, {len(eval_dataloader):,} batches")
         
         # Initialize model
         logger.info("🧠 Initializing subword transformer model...")
@@ -982,12 +1180,25 @@ def main():
         logger.info(f"🎯 Training setup: {total_steps:,} steps, {warmup_steps:,} warmup")
         logger.info(f"Memory before training: {get_memory_usage()}")
         
-        # Training loop with GUARANTEED model saving
-        logger.info("🚀 Starting subword-optimized training...")
+        # Training loop with GUARANTEED model saving and accuracy tracking
+        logger.info("🚀 Starting subword-optimized training with accuracy tracking...")
         training_start = time.time()
         best_loss = float('inf')
+        best_accuracy = 0.0
         models_saved = 0
         save_interval = 5  # Save every 5 epochs regardless of improvement
+        eval_interval = 3  # Evaluate every 3 epochs
+        
+        # Track training history
+        training_history = {
+            'epochs': [],
+            'train_loss': [],
+            'train_accuracy': [],
+            'eval_loss': [],
+            'eval_accuracy': [],
+            'eval_top5_accuracy': [],
+            'perplexity': []
+        }
         
         for epoch in range(1, training_config.max_epochs + 1):
             epoch_start = time.time()
@@ -996,27 +1207,67 @@ def main():
                 logger.info(f"Starting epoch {epoch}, memory: {get_memory_usage()}")
                 
                 # Train epoch
-                avg_loss, accuracy, avg_batch_time = train_epoch(
+                avg_loss, avg_accuracy, avg_batch_time = train_epoch(
                     model, dataloader, criterion, optimizer, scheduler, epoch,
                     training_config.gradient_accumulation_steps,
-                    training_config.max_grad_norm
+                    training_config.max_grad_norm,
+                    ignore_index=tokenizer.vocab.get("<pad>", 0)
                 )
                 
                 # Calculate metrics
                 perplexity = calculate_perplexity(avg_loss)
                 epoch_time = time.time() - epoch_start
                 
+                # Update training history
+                training_history['epochs'].append(epoch)
+                training_history['train_loss'].append(avg_loss)
+                training_history['train_accuracy'].append(avg_accuracy)
+                training_history['perplexity'].append(perplexity)
+                
+                # Evaluation
+                eval_metrics = None
+                if epoch % eval_interval == 0 or epoch == 1 or epoch == training_config.max_epochs:
+                    logger.info("📊 Running detailed evaluation...")
+                    eval_start = time.time()
+                    eval_metrics = evaluate_model_detailed(model, eval_dataloader, criterion, tokenizer)
+                    eval_time = time.time() - eval_start
+                    
+                    # Update evaluation history
+                    training_history['eval_loss'].append(eval_metrics['avg_loss'])
+                    training_history['eval_accuracy'].append(eval_metrics['accuracy'])
+                    training_history['eval_top5_accuracy'].append(eval_metrics['top5_accuracy'])
+                    
+                    logger.info(f"📊 Evaluation completed in {eval_time:.1f}s:")
+                    logger.info(f"   Eval Loss: {eval_metrics['avg_loss']:.4f}")
+                    logger.info(f"   Eval Accuracy: {eval_metrics['accuracy']:.3f}")
+                    logger.info(f"   Eval Top-5 Accuracy: {eval_metrics['top5_accuracy']:.3f}")
+                    logger.info(f"   Eval Perplexity: {eval_metrics['perplexity']:.2f}")
+                    
+                    if eval_metrics['sample_generations']:
+                        logger.info("   Sample generations:")
+                        for i, gen in enumerate(eval_metrics['sample_generations'][:2]):
+                            logger.info(f"     {i+1}. '{gen['prompt'][:30]}...' → '{gen['generated']}'")
+                
                 # Logging
-                logger.info("=" * 50)
+                logger.info("=" * 60)
                 logger.info(f"📊 Epoch {epoch}/{training_config.max_epochs} Summary:")
-                logger.info(f"   Loss: {avg_loss:.4f} | Perplexity: {perplexity:.2f}")
+                logger.info(f"   Train Loss: {avg_loss:.4f} | Train Accuracy: {avg_accuracy:.3f}")
+                logger.info(f"   Perplexity: {perplexity:.2f}")
+                if eval_metrics:
+                    logger.info(f"   Eval Loss: {eval_metrics['avg_loss']:.4f} | Eval Accuracy: {eval_metrics['accuracy']:.3f}")
                 logger.info(f"   Time: {epoch_time:.1f}s | {get_memory_usage()}")
                 
-                # Update best loss
-                is_best = avg_loss < best_loss
-                if is_best:
+                # Update best metrics
+                is_best_loss = avg_loss < best_loss
+                is_best_accuracy = avg_accuracy > best_accuracy
+                
+                if is_best_loss:
                     best_loss = avg_loss
-                    logger.info(f"🏆 New best loss: {best_loss:.4f}")
+                    logger.info(f"🏆 New best train loss: {best_loss:.4f}")
+                
+                if is_best_accuracy:
+                    best_accuracy = avg_accuracy
+                    logger.info(f"🏆 New best train accuracy: {best_accuracy:.3f}")
                 
                 # Sample generation every few epochs
                 if epoch % 3 == 0:
@@ -1026,7 +1277,8 @@ def main():
                 
                 # GUARANTEED MODEL SAVING - save if best OR every save_interval epochs OR last epoch
                 should_save = (
-                    is_best or 
+                    is_best_loss or 
+                    is_best_accuracy or
                     epoch % save_interval == 0 or 
                     epoch == training_config.max_epochs or
                     epoch == 1  # Always save first epoch as baseline
@@ -1036,8 +1288,10 @@ def main():
                     with memory_cleanup():
                         # Create comprehensive metadata
                         save_reason = []
-                        if is_best:
+                        if is_best_loss:
                             save_reason.append("best_loss")
+                        if is_best_accuracy:
+                            save_reason.append("best_accuracy")
                         if epoch % save_interval == 0:
                             save_reason.append("regular_interval")
                         if epoch == training_config.max_epochs:
@@ -1045,15 +1299,39 @@ def main():
                         if epoch == 1:
                             save_reason.append("initial_checkpoint")
                         
+                        performance_metrics = {
+                            "train_loss": float(avg_loss),
+                            "train_accuracy": float(avg_accuracy),
+                            "train_perplexity": float(perplexity),
+                            "batch_time_ms": float(avg_batch_time * 1000),
+                            "epoch": int(epoch),
+                            "learning_rate": float(scheduler.optimizer.param_groups[0]['lr']),
+                            "gradient_norm": 0.0,
+                            "is_best_loss": is_best_loss,
+                            "is_best_accuracy": is_best_accuracy,
+                            "save_reason": ",".join(save_reason),
+                            "training_time_hours": float((time.time() - training_start) / 3600),
+                        }
+                        
+                        # Add evaluation metrics if available
+                        if eval_metrics:
+                            performance_metrics.update({
+                                "eval_loss": float(eval_metrics['avg_loss']),
+                                "eval_accuracy": float(eval_metrics['accuracy']),
+                                "eval_top5_accuracy": float(eval_metrics['top5_accuracy']),
+                                "eval_perplexity": float(eval_metrics['perplexity']),
+                                "eval_batches": int(eval_metrics['batch_count']),
+                            })
+                        
                         metadata = ModelMetadata(
                             model_name="OASST1_SubwordTransformer",
-                            version=f"v1.0_epoch_{epoch}{'_BEST' if is_best else ''}",
+                            version=f"v1.0_epoch_{epoch}{'_BEST' if (is_best_loss or is_best_accuracy) else ''}",
                             created_at=datetime.now().isoformat(),
                             last_modified=datetime.now().isoformat(),
                             model_config=model_config,
                             training_config=training_config,
                             dataset_info={
-                                "name": "OpenAssistant OASST1 (Subword-Optimized)",
+                                "name": "OpenAssistant OASST1 (Subword-Optimized with Accuracy)",
                                 "source": "oasst1_train.jsonl",
                                 "num_samples": len(texts),
                                 "vocab_size": model_config.vocab_size,
@@ -1063,17 +1341,10 @@ def main():
                                 "tokenizer_type": "BPE (Byte Pair Encoding)",
                                 "language": "English",
                                 "dataset_version": "OASST1",
+                                "train_sequences": len(dataset),
+                                "eval_sequences": len(eval_dataset),
                             },
-                            performance_metrics={
-                                "loss": float(avg_loss),
-                                "perplexity": float(perplexity),
-                                "batch_time_ms": float(avg_batch_time * 1000),
-                                "epoch": int(epoch),
-                                "learning_rate": float(scheduler.optimizer.param_groups[0]['lr']),
-                                "gradient_norm": 0.0,
-                                "is_best": is_best,
-                                "save_reason": ",".join(save_reason),
-                            },
+                            performance_metrics=performance_metrics,
                             model_size_mb=float(model_size_mb),
                             total_parameters=int(total_params),
                             trainable_parameters=int(trainable_params),
@@ -1086,15 +1357,18 @@ def main():
                             cuda_version=torch.version.cuda if device.type == 'cuda' else None,
                             model_hash="",
                             tokenizer_hash="",
-                            notes=f"Subword-level OASST1 transformer with BPE tokenization. "
+                            notes=f"Subword-level OASST1 transformer with BPE tokenization and accuracy tracking. "
                                   f"Epoch {epoch}/{training_config.max_epochs}. "
                                   f"Save reason: {', '.join(save_reason)}. "
-                                  f"Current loss: {avg_loss:.4f}, Best loss: {best_loss:.4f}. "
+                                  f"Train: loss={avg_loss:.4f}, acc={avg_accuracy:.3f}. "
+                                  f"Best: loss={best_loss:.4f}, acc={best_accuracy:.3f}. "
                                   f"Training on {len(texts):,} samples with {model_config.vocab_size:,} vocab using {len(tokenizer.merges):,} BPE merges. "
                                   f"Model: {model_config.hidden_size}D x {model_config.num_layers}L x {model_config.num_heads}H. "
                                   f"Hardware: {device.type.upper()}.",
-                            tags=["oasst1", "subword", "bpe", "transformer", "conversational", f"epoch_{epoch}"] + 
-                                 (["best"] if is_best else []) + save_reason
+                            tags=["oasst1", "subword", "bpe", "transformer", "conversational", "accuracy", f"epoch_{epoch}"] + 
+                                 (["best_loss"] if is_best_loss else []) +
+                                 (["best_accuracy"] if is_best_accuracy else []) +
+                                 save_reason
                         )
                         
                         # Use the retry mechanism for robust saving
@@ -1108,7 +1382,7 @@ def main():
                         else:
                             logger.error(f"❌ Failed to save model for epoch {epoch}")
                 
-                logger.info("=" * 50)
+                logger.info("=" * 60)
                 
                 # Cleanup after each epoch
                 with memory_cleanup():
@@ -1128,15 +1402,25 @@ def main():
         
         # Training completion
         total_time = time.time() - training_start
-        logger.info("=" * 70)
-        logger.info("✅ Subword-optimized training completed successfully!")
-        logger.info(f"🎯 Best loss achieved: {best_loss:.4f}")
+        logger.info("=" * 80)
+        logger.info("✅ Subword-optimized training with accuracy tracking completed successfully!")
+        logger.info(f"🎯 Best train loss achieved: {best_loss:.4f}")
+        logger.info(f"🎯 Best train accuracy achieved: {best_accuracy:.3f}")
         logger.info(f"🎯 Best perplexity: {calculate_perplexity(best_loss):.2f}")
         logger.info(f"💾 Total models saved: {models_saved}")
         logger.info(f"⏱️  Total training time: {total_time/3600:.2f} hours")
         logger.info(f"🔤 Final vocabulary: {model_config.vocab_size:,} tokens with {len(tokenizer.merges):,} BPE merges")
         logger.info(f"🚀 Average processing speed: {len(dataset) * model_config.seq_length * training_config.max_epochs / total_time:.0f} tokens/sec")
         logger.info(f"💾 Final memory state: {get_memory_usage()}")
+        
+        # Print training history summary
+        logger.info("\n📈 Training History Summary:")
+        logger.info(f"   Final train loss: {training_history['train_loss'][-1]:.4f}")
+        logger.info(f"   Final train accuracy: {training_history['train_accuracy'][-1]:.3f}")
+        if training_history['eval_loss']:
+            logger.info(f"   Final eval loss: {training_history['eval_loss'][-1]:.4f}")
+            logger.info(f"   Final eval accuracy: {training_history['eval_accuracy'][-1]:.3f}")
+            logger.info(f"   Final eval top-5 accuracy: {training_history['eval_top5_accuracy'][-1]:.3f}")
         
         # FINAL GUARANTEED SAVE - save one more time as final model if no models were saved
         if models_saved == 0:
@@ -1154,11 +1438,14 @@ def main():
                     "source": "oasst1_train.jsonl",
                     "num_samples": len(texts),
                     "vocab_size": model_config.vocab_size,
-                    "preprocessing": "BPE subword tokenization",
+                    "preprocessing": "BPE subword tokenization with accuracy tracking",
                 },
                 performance_metrics={
-                    "final_loss": float(avg_loss) if 'avg_loss' in locals() else float('inf'),
+                    "final_train_loss": float(avg_loss) if 'avg_loss' in locals() else float('inf'),
+                    "final_train_accuracy": float(avg_accuracy) if 'avg_accuracy' in locals() else 0.0,
                     "training_completed": True,
+                    "best_train_loss": float(best_loss),
+                    "best_train_accuracy": float(best_accuracy),
                 },
                 model_size_mb=float(model_size_mb),
                 total_parameters=int(total_params),
@@ -1169,8 +1456,8 @@ def main():
                 best_perplexity=float(calculate_perplexity(best_loss)),
                 hardware_used=f"{device.type.upper()}",
                 pytorch_version=torch.__version__,
-                notes="Emergency save after training completion to ensure model is preserved.",
-                tags=["oasst1", "subword", "emergency_save", "final"]
+                notes="Emergency save after training completion to ensure model with accuracy tracking is preserved.",
+                tags=["oasst1", "subword", "emergency_save", "final", "accuracy"]
             )
             
             emergency_model_id = save_model_with_retries(
@@ -1183,14 +1470,38 @@ def main():
             else:
                 logger.error(f"❌ Even emergency save failed!")
         
+        # Save training history to a JSON file
+        try:
+            history_file = Path("training_history.json")
+            with open(history_file, 'w') as f:
+                json.dump(training_history, f, indent=2)
+            logger.info(f"📊 Training history saved to: {history_file}")
+        except Exception as e:
+            logger.error(f"Failed to save training history: {e}")
+        
         # Print final model summary
-        logger.info("\n" + "=" * 70)
-        logger.info("📊 FINAL MODEL SUMMARY")
+        logger.info("\n" + "=" * 80)
+        logger.info("📊 FINAL MODEL SUMMARY WITH ACCURACY METRICS")
         model_manager.print_model_summary()
-        logger.info("=" * 70)
+        logger.info("=" * 80)
+        
+        # Print detailed accuracy summary
+        logger.info("🎯 ACCURACY SUMMARY:")
+        logger.info(f"   Best Training Loss: {best_loss:.4f}")
+        logger.info(f"   Best Training Accuracy: {best_accuracy:.3f} ({best_accuracy*100:.1f}%)")
+        logger.info(f"   Final Training Loss: {training_history['train_loss'][-1]:.4f}")
+        logger.info(f"   Final Training Accuracy: {training_history['train_accuracy'][-1]:.3f} ({training_history['train_accuracy'][-1]*100:.1f}%)")
+        
+        if training_history['eval_loss']:
+            logger.info(f"   Final Eval Loss: {training_history['eval_loss'][-1]:.4f}")
+            logger.info(f"   Final Eval Accuracy: {training_history['eval_accuracy'][-1]:.3f} ({training_history['eval_accuracy'][-1]*100:.1f}%)")
+            logger.info(f"   Final Eval Top-5 Accuracy: {training_history['eval_top5_accuracy'][-1]:.3f} ({training_history['eval_top5_accuracy'][-1]*100:.1f}%)")
+        
+        logger.info("=" * 80)
         
         if models_saved > 0:
             logger.info(f"✅ Training completed with {models_saved} models saved successfully!")
+            logger.info(f"📊 All models include comprehensive accuracy metrics and evaluation data")
             return 0
         else:
             logger.error(f"❌ Training completed but NO MODELS WERE SAVED!")
@@ -1208,8 +1519,15 @@ def main():
                     created_at=datetime.now().isoformat(),
                     last_modified=datetime.now().isoformat(),
                     model_config=model_config if 'model_config' in locals() else {},
-                    notes="Model saved after training interruption",
-                    tags=["interrupted", "partial"]
+                    performance_metrics={
+                        "interrupted_at_epoch": epoch if 'epoch' in locals() else 0,
+                        "last_train_loss": float(avg_loss) if 'avg_loss' in locals() else float('inf'),
+                        "last_train_accuracy": float(avg_accuracy) if 'avg_accuracy' in locals() else 0.0,
+                        "best_train_loss": float(best_loss) if 'best_loss' in locals() else float('inf'),
+                        "best_train_accuracy": float(best_accuracy) if 'best_accuracy' in locals() else 0.0,
+                    },
+                    notes="Model saved after training interruption - includes accuracy tracking up to interruption point",
+                    tags=["interrupted", "partial", "accuracy"]
                 )
                 interrupt_id = save_model_with_retries(
                     model_manager, model, tokenizer, interrupt_metadata, 
