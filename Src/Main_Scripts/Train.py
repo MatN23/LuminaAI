@@ -751,11 +751,11 @@ def get_subword_conservative_config():
         max_samples = 1500
     
     training_config = TrainingConfig(
-        learning_rate=5e-4,      # Slightly higher LR for subword
+        learning_rate=1e-6,     
         weight_decay=0.01,
         batch_size=batch_size,
-        gradient_accumulation_steps=16,  # Larger accumulation for effective batch size
-        max_epochs=100,          # More epochs for convergence
+        gradient_accumulation_steps=16,
+        max_epochs=200,          
         warmup_ratio=0.1,
         save_every=1000,
         eval_every=500,
