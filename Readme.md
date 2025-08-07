@@ -139,22 +139,6 @@ Your PyTorch model should include:
 - `config`: Model configuration parameters
 - Corresponding `tokenizer.pkl` file
 
-## 🏗️ Project Structure
-
-```
-lumina-ai-desktop/
-├── main.js                 # Electron main process
-├── lumina_desktop.py      # Python backend server
-├── package.json           # Node.js dependencies
-├── requirements.txt       # Python dependencies
-├── renderer/              # Frontend files
-│   └── index.html        # Main UI
-├── assets/               # Icons and images
-├── models/              # Model storage
-├── logs/               # Application logs
-└── dist/              # Built applications
-```
-
 ## 🔧 Development
 
 ### Running in Development Mode
