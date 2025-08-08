@@ -38,7 +38,7 @@ def setup_logging():
 logger = setup_logging()
 
 def check_environment():
-    """Check environment and dependencies."""
+    """Comprehensive environment check."""
     logger.info("🔍 Checking environment...")
     
     try:
@@ -63,9 +63,12 @@ def check_environment():
         # Check current directory and files
         cwd = Path.cwd()
         logger.info(f"Current directory: {cwd}")
+        logger.info(f"Directory contents: {list(cwd.iterdir())}")
         
         # Check for required files
         required_files = [
+            "model_manager.py",
+            "subword_transformer.py",
             "oasst1_data/oasst1_train.jsonl"
         ]
         
@@ -84,252 +87,186 @@ def check_environment():
         logger.error(f"Traceback: {traceback.format_exc()}")
         return False
 
-# Try to import required modules with fallbacks
+def test_imports():
+    """Test all required imports."""
+    logger.info("📦 Testing imports...")
+    
+    import_results = {}
+    
+    # Test basic imports
+    basic_imports = {
+        'torch': lambda: __import__('torch'),
+        'torch.nn': lambda: __import__('torch.nn'),
+        'torch.optim': lambda: __import__('torch.optim'),
+    }
+    
+    for name, import_func in basic_imports.items():
+        try:
+            import_func()
+            import_results[name] = "✅ SUCCESS"
+            logger.info(f"  {name}: ✅")
+        except Exception as e:
+            import_results[name] = f"❌ FAILED: {e}"
+            logger.error(f"  {name}: ❌ {e}")
+    
+    # Test custom imports
+    custom_imports = {
+        'model_manager': 'model_manager',
+        'subword_transformer': 'subword_transformer'
+    }
+    
+    for name, module in custom_imports.items():
+        try:
+            if module == 'model_manager':
+                from model_manager import ModelManager, ModelConfig, TrainingConfig, ModelMetadata
+                import_results[name] = "✅ SUCCESS"
+                logger.info(f"  {name}: ✅")
+            elif module == 'subword_transformer':
+                from subword_transformer import SubwordTransformer, SubwordTokenizer
+                import_results[name] = "✅ SUCCESS"
+                logger.info(f"  {name}: ✅")
+        except Exception as e:
+            import_results[name] = f"❌ FAILED: {e}"
+            logger.error(f"  {name}: ❌ {e}")
+            logger.error(f"    Traceback: {traceback.format_exc()}")
+    
+    # Check if all critical imports succeeded
+    critical_failed = [name for name, result in import_results.items() if "FAILED" in result]
+    
+    if critical_failed:
+        logger.error(f"❌ Critical imports failed: {critical_failed}")
+        return False, import_results
+    else:
+        logger.info("✅ All imports successful")
+        return True, import_results
+
+def test_data_loading():
+    """Test data loading functionality."""
+    logger.info("📚 Testing data loading...")
+    
+    data_path = Path("oasst1_data/oasst1_train.jsonl")
+    
+    if not data_path.exists():
+        logger.error(f"❌ Data file not found: {data_path}")
+        return False
+    
+    try:
+        # Try to read first few lines
+        line_count = 0
+        valid_lines = 0
+        
+        with open(data_path, 'r', encoding='utf-8') as f:
+            for i, line in enumerate(f):
+                line_count += 1
+                if i >= 10:  # Just test first 10 lines
+                    break
+                
+                try:
+                    line = line.strip()
+                    if line:
+                        record = json.loads(line)
+                        if record.get("text") and record.get("lang") == "en":
+                            valid_lines += 1
+                except:
+                    continue
+        
+        logger.info(f"  Total lines tested: {line_count}")
+        logger.info(f"  Valid lines: {valid_lines}")
+        
+        if valid_lines > 0:
+            logger.info("✅ Data loading test passed")
+            return True
+        else:
+            logger.error("❌ No valid data found")
+            return False
+            
+    except Exception as e:
+        logger.error(f"❌ Data loading test failed: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return False
+
+def test_tokenizer():
+    """Test subword tokenizer functionality."""
+    logger.info("🔤 Testing subword tokenizer...")
+    
+    try:
+        from subword_transformer import SubwordTokenizer
+        
+        # Create a simple tokenizer
+        tokenizer = SubwordTokenizer()
+        
+        # Test with small vocabulary
+        test_text = "hello world this is a test of subword tokenization"
+        tokenizer.train_from_text(test_text, vocab_size=100, min_freq=1)
+        
+        # Test encoding/decoding
+        test_sentence = "hello test"
+        encoded = tokenizer.encode(test_sentence)
+        decoded = tokenizer.decode(encoded)
+        
+        logger.info(f"  Test sentence: '{test_sentence}'")
+        logger.info(f"  Encoded: {encoded}")
+        logger.info(f"  Decoded: '{decoded}'")
+        logger.info(f"  Vocabulary size: {tokenizer.vocab_size()}")
+        logger.info(f"  Number of merges: {len(tokenizer.merges)}")
+        
+        if encoded and decoded:
+            logger.info("✅ Subword tokenizer test passed")
+            return True
+        else:
+            logger.error("❌ Tokenizer encoding/decoding failed")
+            return False
+            
+    except Exception as e:
+        logger.error(f"❌ Tokenizer test failed: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return False
+
+def run_comprehensive_debug():
+    """Run comprehensive debugging."""
+    logger.info("🚀 Starting comprehensive debug check...")
+    logger.info("=" * 70)
+    
+    # Step 1: Environment check
+    if not check_environment():
+        logger.error("❌ Environment check failed - stopping")
+        return False
+    
+    # Step 2: Import test
+    imports_ok, import_results = test_imports()
+    if not imports_ok:
+        logger.error("❌ Import test failed - stopping")
+        logger.error("Failed imports:")
+        for name, result in import_results.items():
+            if "FAILED" in result:
+                logger.error(f"  {name}: {result}")
+        return False
+    
+    # Step 3: Data loading test
+    if not test_data_loading():
+        logger.error("❌ Data loading test failed - stopping")
+        return False
+    
+    # Step 4: Tokenizer test
+    if not test_tokenizer():
+        logger.error("❌ Tokenizer test failed - stopping")
+        return False
+    
+    logger.info("=" * 70)
+    logger.info("✅ All debug checks passed! Proceeding with training.")
+    logger.info("=" * 70)
+    return True
+
+# Import shared components with error handling
 try:
     from model_manager import ModelManager, ModelConfig, TrainingConfig, ModelMetadata
     from subword_transformer import SubwordTransformer, SubwordTokenizer
     IMPORTS_SUCCESSFUL = True
     logger.info("✅ Successfully imported required modules")
 except ImportError as e:
-    logger.warning(f"⚠️ Could not import custom modules: {e}")
-    logger.info("Creating fallback implementations...")
+    logger.error(f"❌ Import error: {e}")
+    logger.error("Running debug checks to identify the issue...")
     IMPORTS_SUCCESSFUL = False
-    
-    # Fallback implementations
-    @dataclass
-    class ModelConfig:
-        vocab_size: int = 50000
-        hidden_size: int = 768
-        num_layers: int = 12
-        num_heads: int = 12
-        seq_length: int = 512
-        dropout: float = 0.1
-        model_type: str = "transformer"
-        tokenizer_type: str = "subword"
-    
-    @dataclass
-    class TrainingConfig:
-        learning_rate: float = 5e-5
-        weight_decay: float = 0.01
-        batch_size: int = 8
-        gradient_accumulation_steps: int = 4
-        max_epochs: int = 10
-        warmup_ratio: float = 0.1
-        save_every: int = 1000
-        eval_every: int = 500
-        max_grad_norm: float = 1.0
-        label_smoothing: float = 0.0
-        beta1: float = 0.9
-        beta2: float = 0.95
-    
-    @dataclass
-    class ModelMetadata:
-        model_name: str = "transformer"
-        version: str = "v1.0"
-        created_at: str = ""
-        last_modified: str = ""
-        model_config: ModelConfig = None
-        training_config: TrainingConfig = None
-        dataset_info: dict = None
-        performance_metrics: dict = None
-        model_size_mb: float = 0.0
-        total_parameters: int = 0
-        trainable_parameters: int = 0
-        training_time_hours: float = 0.0
-        epochs_trained: int = 0
-        best_loss: float = float('inf')
-        best_perplexity: float = float('inf')
-        hardware_used: str = ""
-        pytorch_version: str = ""
-        cuda_version: str = None
-        notes: str = ""
-        tags: list = None
-    
-    class SimpleTokenizer:
-        """Simple word-level tokenizer as fallback."""
-        
-        def __init__(self):
-            self.vocab = {"<pad>": 0, "<unk>": 1, "<bos>": 2, "<eos>": 3, "<user>": 4, "<assistant>": 5}
-            self.id_to_token = {v: k for k, v in self.vocab.items()}
-            self.target_vocab_size = 10000
-            self.trained = False
-        
-        def train_from_text(self, text, vocab_size=None, min_freq=1):
-            """Train tokenizer on text."""
-            if vocab_size:
-                self.target_vocab_size = vocab_size
-            
-            # Simple word frequency counting
-            word_freq = {}
-            for line in text.split('\n'):
-                words = line.lower().split()
-                for word in words:
-                    word_freq[word] = word_freq.get(word, 0) + 1
-            
-            # Add most frequent words to vocabulary
-            sorted_words = sorted(word_freq.items(), key=lambda x: x[1], reverse=True)
-            current_id = len(self.vocab)
-            
-            for word, freq in sorted_words:
-                if freq >= min_freq and current_id < self.target_vocab_size and word not in self.vocab:
-                    self.vocab[word] = current_id
-                    self.id_to_token[current_id] = word
-                    current_id += 1
-            
-            self.trained = True
-            logger.info(f"Simple tokenizer trained with {len(self.vocab)} tokens")
-        
-        def encode(self, text):
-            """Encode text to token IDs."""
-            if not self.trained:
-                raise ValueError("Tokenizer not trained")
-            
-            words = text.lower().split()
-            token_ids = []
-            for word in words:
-                token_ids.append(self.vocab.get(word, self.vocab["<unk>"]))
-            return token_ids
-        
-        def decode(self, token_ids):
-            """Decode token IDs to text."""
-            tokens = []
-            for token_id in token_ids:
-                if token_id in self.id_to_token:
-                    token = self.id_to_token[token_id]
-                    if token not in ["<pad>", "<bos>", "<eos>"]:
-                        tokens.append(token)
-            return " ".join(tokens)
-        
-        def vocab_size(self):
-            return len(self.vocab)
-    
-    # Alias for compatibility
-    SubwordTokenizer = SimpleTokenizer
-    
-    class SimpleTransformer(nn.Module):
-        """Simple transformer model as fallback."""
-        
-        def __init__(self, config):
-            super().__init__()
-            self.config = config
-            
-            self.embeddings = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=0)
-            self.pos_embeddings = nn.Embedding(config.seq_length, config.hidden_size)
-            
-            encoder_layer = nn.TransformerEncoderLayer(
-                d_model=config.hidden_size,
-                nhead=config.num_heads,
-                dim_feedforward=config.hidden_size * 4,
-                dropout=config.dropout,
-                activation='gelu',
-                batch_first=True,
-                norm_first=True
-            )
-            self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=config.num_layers)
-            
-            self.layer_norm = nn.LayerNorm(config.hidden_size)
-            self.lm_head = nn.Linear(config.hidden_size, config.vocab_size)
-            self.dropout = nn.Dropout(config.dropout)
-            
-            self.apply(self._init_weights)
-        
-        def _init_weights(self, module):
-            if isinstance(module, nn.Linear):
-                torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-                if module.bias is not None:
-                    torch.nn.init.zeros_(module.bias)
-            elif isinstance(module, nn.Embedding):
-                torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-        
-        def forward(self, input_ids, attention_mask=None):
-            batch_size, seq_len = input_ids.shape
-            
-            # Create position IDs
-            position_ids = torch.arange(seq_len, dtype=torch.long, device=input_ids.device)
-            position_ids = position_ids.unsqueeze(0).expand(batch_size, -1)
-            
-            # Embeddings
-            token_embeddings = self.embeddings(input_ids)
-            position_embeddings = self.pos_embeddings(position_ids)
-            embeddings = self.dropout(token_embeddings + position_embeddings)
-            
-            # Create causal mask
-            if attention_mask is None:
-                attention_mask = torch.triu(torch.ones(seq_len, seq_len, device=input_ids.device), diagonal=1).bool()
-            
-            # Transformer
-            hidden_states = self.transformer(embeddings, mask=attention_mask, is_causal=True)
-            hidden_states = self.layer_norm(hidden_states)
-            
-            # Language modeling head
-            logits = self.lm_head(hidden_states)
-            
-            return logits
-    
-    # Alias for compatibility
-    SubwordTransformer = SimpleTransformer
-    
-    class ModelManager:
-        """Simple model manager as fallback."""
-        
-        def __init__(self, save_dir):
-            self.save_dir = Path(save_dir)
-            self.save_dir.mkdir(exist_ok=True)
-        
-        def save_model(self, model, tokenizer, metadata, optimizer=None, scheduler=None, force_cpu_save=False):
-            """Save model to disk."""
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            model_id = f"model_{timestamp}"
-            model_path = self.save_dir / model_id
-            model_path.mkdir(exist_ok=True)
-            
-            # Save model state dict
-            if force_cpu_save:
-                model_state = {k: v.cpu() for k, v in model.state_dict().items()}
-            else:
-                model_state = model.state_dict()
-            
-            torch.save(model_state, model_path / "model.pth")
-            
-            # Save tokenizer
-            tokenizer_data = {
-                'vocab': tokenizer.vocab,
-                'id_to_token': tokenizer.id_to_token,
-                'vocab_size': tokenizer.vocab_size()
-            }
-            with open(model_path / "tokenizer.json", 'w') as f:
-                json.dump(tokenizer_data, f, indent=2)
-            
-            # Save metadata
-            metadata_dict = asdict(metadata) if hasattr(metadata, '__dict__') else metadata.__dict__
-            with open(model_path / "metadata.json", 'w') as f:
-                json.dump(metadata_dict, f, indent=2, default=str)
-            
-            logger.info(f"Model saved to: {model_path}")
-            return model_id
-        
-        def validate_model(self, model_id):
-            """Validate saved model."""
-            model_path = self.save_dir / model_id
-            if not model_path.exists():
-                return {'valid': False, 'issues': ['Model directory does not exist']}
-            
-            issues = []
-            if not (model_path / "model.pth").exists():
-                issues.append("Model weights file missing")
-            if not (model_path / "tokenizer.json").exists():
-                issues.append("Tokenizer file missing")
-            if not (model_path / "metadata.json").exists():
-                issues.append("Metadata file missing")
-            
-            return {'valid': len(issues) == 0, 'issues': issues}
-        
-        def print_model_summary(self):
-            """Print summary of saved models."""
-            models = list(self.save_dir.glob("model_*"))
-            logger.info(f"Found {len(models)} saved models in {self.save_dir}")
-            for model_path in sorted(models):
-                logger.info(f"  - {model_path.name}")
 
 @contextmanager
 def memory_cleanup():
@@ -342,6 +279,7 @@ def memory_cleanup():
             torch.cuda.synchronize()
         elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
             torch.mps.empty_cache()
+            torch.mps.synchronize()
         gc.collect()
 
 def get_memory_usage():
@@ -357,100 +295,99 @@ def get_memory_usage():
         return "CPU mode"
 
 def setup_device():
-    """Setup the best available device with conservative memory settings."""
-    if torch.cuda.is_available():
+    """Setup the best available device with very conservative memory settings."""
+    # Set very conservative memory limits FIRST
+    if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available() and torch.backends.mps.is_built():
+        device = torch.device("mps")
+        logger.info("Using device: MPS (Apple Silicon)")
+        # Very conservative for MPS - it has memory issues
+        torch.mps.set_per_process_memory_fraction(0.7)
+        torch.mps.empty_cache()
+    elif torch.cuda.is_available():
         device = torch.device("cuda")
         logger.info(f"Using device: CUDA ({torch.cuda.get_device_name()})")
         total_memory = torch.cuda.get_device_properties(0).total_memory / 1024**3
         logger.info(f"CUDA Memory: {total_memory:.1f} GB")
-        torch.cuda.set_per_process_memory_fraction(0.8)
+        # Very conservative memory settings
+        torch.cuda.set_per_process_memory_fraction(0.5)  # Only use 50%
         torch.cuda.empty_cache()
-    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available() and torch.backends.mps.is_built():
-        device = torch.device("mps")
-        logger.info("Using device: MPS (Apple Silicon)")
-        torch.mps.empty_cache()
+        # Disable optimizations that use more memory
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cuda.matmul.allow_tf32 = False
+        torch.backends.cudnn.allow_tf32 = False
     else:
         device = torch.device("cpu")
         logger.info("Using device: CPU")
-        torch.set_num_threads(min(4, os.cpu_count() or 1))
+        torch.set_num_threads(min(2, os.cpu_count() // 4 or 1))  # Very conservative
+        torch.set_num_interop_threads(1)
     
     return device
 
 device = setup_device()
 
-class StableDataset(Dataset):
-    """Stable dataset implementation with proper validation."""
+class FixedSubwordDataset(Dataset):
+    """Fixed memory-efficient dataset that pre-tokenizes and stores sequences properly."""
     
-    def __init__(self, texts: List[str], tokenizer, seq_length: int, max_sequences: int = 10000):
+    def __init__(self, texts: List[str], tokenizer: SubwordTokenizer, seq_length: int, 
+                 overlap_ratio: float = 0.5, min_seq_length: int = 16, max_sequences: int = 50000):
         self.tokenizer = tokenizer
         self.seq_length = seq_length
+        self.min_seq_length = min_seq_length
         
-        logger.info(f"Creating stable dataset with seq_length={seq_length}...")
-        
-        vocab_size = tokenizer.vocab_size()
-        pad_token_id = tokenizer.vocab.get("<pad>", 0)
-        
-        logger.info(f"Tokenizer vocab size: {vocab_size}")
-        logger.info(f"Pad token ID: {pad_token_id}")
+        logger.info("Creating fixed subword-level dataset...")
         
         # Pre-tokenize all texts and extract valid sequences
         self.sequences = []
+        valid_texts = 0
         
-        for text_idx, text in enumerate(texts[:max_sequences // 5]):
+        for text_idx, text in enumerate(texts[:max_sequences // 10]):  # Limit input texts
             if not text or not text.strip():
                 continue
-            
-            try:
-                tokens = tokenizer.encode(text.strip())
                 
-                if not tokens or len(tokens) < 10:
-                    continue
-                
-                # Validate token IDs
-                invalid_tokens = [t for t in tokens if t >= vocab_size or t < 0]
-                if invalid_tokens:
-                    # Replace invalid tokens with UNK
-                    unk_id = tokenizer.vocab.get("<unk>", 1)
-                    tokens = [t if 0 <= t < vocab_size else unk_id for t in tokens]
-                
-                # Extract sequences with sliding window
-                step_size = seq_length // 2
-                for start_pos in range(0, len(tokens) - seq_length, step_size):
-                    if start_pos + seq_length + 1 <= len(tokens):
-                        sequence = tokens[start_pos:start_pos + seq_length + 1]
-                        
-                        # Final validation
-                        if len(sequence) == seq_length + 1 and all(0 <= t < vocab_size for t in sequence):
-                            self.sequences.append(sequence)
-                            
-                            if len(self.sequences) >= max_sequences:
-                                break
-                
-                if len(self.sequences) >= max_sequences:
-                    break
-                    
-            except Exception as e:
-                logger.warning(f"Error processing text {text_idx}: {e}")
+            # Tokenize the text
+            tokens = tokenizer.encode(text.strip())
+            if len(tokens) < self.min_seq_length:
                 continue
+            
+            # Extract overlapping sequences from this text
+            step_size = max(1, int(seq_length * overlap_ratio))
+            sequences_from_text = 0
+            max_sequences_per_text = 15  # Limit sequences per text
+            
+            for start_pos in range(0, len(tokens) - seq_length, step_size):
+                if start_pos + seq_length + 1 <= len(tokens):
+                    # Extract the sequence (input + target)
+                    sequence = tokens[start_pos:start_pos + seq_length + 1]
+                    self.sequences.append(sequence)
+                    sequences_from_text += 1
+                    
+                    if sequences_from_text >= max_sequences_per_text:
+                        break
+                    
+                    # Stop if we have enough sequences total
+                    if len(self.sequences) >= max_sequences:
+                        break
+            
+            if sequences_from_text > 0:
+                valid_texts += 1
+            
+            # Progress logging
+            if valid_texts % 100 == 0 and valid_texts > 0:
+                logger.info(f"Processed {valid_texts} texts, created {len(self.sequences):,} sequences")
+            
+            # Stop if we have enough sequences
+            if len(self.sequences) >= max_sequences:
+                break
         
         if not self.sequences:
-            raise ValueError("No valid sequences created!")
+            raise ValueError("No valid sequences created from the input texts!")
         
-        self.pad_token_id = pad_token_id
-        self.vocab_size = vocab_size
+        # Add padding token for consistency
+        self.pad_token_id = tokenizer.vocab.get("<pad>", 0)
         
-        logger.info(f"Created {len(self.sequences):,} sequences")
-        
-        # Final validation
-        invalid_count = 0
-        for i, seq in enumerate(self.sequences):
-            if len(seq) != seq_length + 1 or any(t >= vocab_size or t < 0 for t in seq):
-                invalid_count += 1
-        
-        if invalid_count > 0:
-            raise ValueError(f"Found {invalid_count} invalid sequences!")
-        
-        logger.info(f"All {len(self.sequences):,} sequences validated successfully")
+        logger.info(f"✅ Created {len(self.sequences):,} sequences from {valid_texts} texts")
+        logger.info(f"✅ Sequence length: {seq_length}, Min length: {min_seq_length}")
+        logger.info(f"✅ Memory usage: ~{len(self.sequences) * (seq_length + 1) * 4 / 1024**2:.2f} MB")
     
     def __len__(self):
         return len(self.sequences)
@@ -458,19 +395,29 @@ class StableDataset(Dataset):
     def __getitem__(self, idx):
         sequence = self.sequences[idx]
         
+        # Ensure sequence is the right length
+        if len(sequence) < self.seq_length + 1:
+            # Pad if too short
+            sequence = sequence + [self.pad_token_id] * (self.seq_length + 1 - len(sequence))
+        elif len(sequence) > self.seq_length + 1:
+            # Truncate if too long
+            sequence = sequence[:self.seq_length + 1]
+        
+        # Split into input and target
         input_ids = torch.tensor(sequence[:-1], dtype=torch.long)
         target_ids = torch.tensor(sequence[1:], dtype=torch.long)
         
         return input_ids, target_ids
 
 def load_and_process_data(data_path: str, max_samples: Optional[int] = None) -> List[str]:
-    """Load and process OASST1 dataset."""
+    """Enhanced data loading for OASST2 dataset with aggressive memory management."""
     data_path = Path(data_path)
     if not data_path.exists():
         raise FileNotFoundError(f"Data file not found: {data_path}")
     
-    logger.info(f"Loading OASST1 training data from: {data_path}")
+    logger.info(f"Loading OASST2 training data from: {data_path}")
     
+    # OASST2 specific role tokens
     role_tokens = {
         "prompter": "<user>",
         "assistant": "<assistant>"
@@ -485,7 +432,7 @@ def load_and_process_data(data_path: str, max_samples: Optional[int] = None) -> 
             for line_num, line in enumerate(f, 1):
                 if max_samples and processed_count >= max_samples:
                     break
-                
+                    
                 try:
                     line = line.strip()
                     if not line:
@@ -493,28 +440,46 @@ def load_and_process_data(data_path: str, max_samples: Optional[int] = None) -> 
                     
                     record = json.loads(line)
                     
-                    # Basic filtering
+                    # Skip deleted entries
                     if record.get("deleted", False):
                         skipped_count += 1
                         continue
                     
+                    # Filter for English language
                     if record.get("lang") != "en":
                         skipped_count += 1
                         continue
                     
+                    # Skip entries that failed review
+                    if not record.get("review_result", True):
+                        skipped_count += 1
+                        continue
+                    
+                    # Only use entries from ready conversation trees
+                    if record.get("tree_state") != "ready_for_export":
+                        skipped_count += 1
+                        continue
+                    
+                    # Extract text content
                     text = record.get("text", "").strip()
                     if not text:
                         skipped_count += 1
                         continue
                     
-                    # Filter by word count
+                    # Filter very short texts and very long texts
                     word_count = len(text.split())
-                    if word_count < 3 or word_count > 200:
+                    if word_count < 3:
                         skipped_count += 1
                         continue
                     
-                    # Add role formatting
+                    # Truncate very long texts to save memory
+                    if word_count > 150:  # Slightly longer for subword tokenization
+                        text = ' '.join(text.split()[:150])
+                    
+                    # Get role and add appropriate tokens
                     role = record.get("role", "").lower()
+                    
+                    # Add role-specific formatting
                     if role in role_tokens:
                         formatted_text = f"{role_tokens[role]} {text}"
                     else:
@@ -523,8 +488,10 @@ def load_and_process_data(data_path: str, max_samples: Optional[int] = None) -> 
                     texts.append(formatted_text)
                     processed_count += 1
                     
+                    # Progress logging with aggressive memory cleanup
                     if processed_count % 1000 == 0:
-                        logger.info(f"Processed {processed_count:,} samples...")
+                        logger.info(f"Processed {processed_count:,} samples... {get_memory_usage()}")
+                        gc.collect()  # Frequent cleanup
                     
                 except (json.JSONDecodeError, KeyError, ValueError):
                     skipped_count += 1
@@ -540,34 +507,41 @@ def load_and_process_data(data_path: str, max_samples: Optional[int] = None) -> 
     logger.info(f"Successfully processed: {processed_count:,}")
     logger.info(f"Skipped: {skipped_count:,}")
     logger.info(f"Final dataset size: {len(texts):,} texts")
+    logger.info(f"{get_memory_usage()}")
     
     return texts
 
-class SimpleLRScheduler:
-    """Simple learning rate scheduler."""
+class AdaptiveLRScheduler:
+    """Simplified learning rate scheduler."""
     
-    def __init__(self, optimizer, warmup_steps: int, total_steps: int, min_lr: float = 1e-7):
+    def __init__(self, optimizer, warmup_steps: int, total_steps: int, 
+                 min_lr: float = 1e-6, decay_type: str = "cosine"):
         self.optimizer = optimizer
         self.warmup_steps = warmup_steps
         self.total_steps = total_steps
         self.min_lr = min_lr
         self.base_lr = optimizer.param_groups[0]['lr']
         self.current_step = 0
-    
-    def step(self, loss: Optional[float] = None, grad_norm: Optional[float] = None) -> float:
+        self.decay_type = decay_type
+        
+    def step(self, loss: Optional[float] = None) -> float:
         """Update learning rate."""
         self.current_step += 1
         
+        # Calculate learning rate
         if self.current_step < self.warmup_steps:
             # Linear warmup
             lr = self.base_lr * self.current_step / self.warmup_steps
         else:
-            # Cosine decay
             progress = (self.current_step - self.warmup_steps) / (self.total_steps - self.warmup_steps)
             progress = min(progress, 1.0)
-            lr = self.min_lr + (self.base_lr - self.min_lr) * 0.5 * (1 + math.cos(math.pi * progress))
+            
+            if self.decay_type == "cosine":
+                lr = self.min_lr + (self.base_lr - self.min_lr) * 0.5 * (1 + math.cos(math.pi * progress))
+            else:  # linear
+                lr = self.base_lr * (1 - progress) + self.min_lr * progress
         
-        # Apply to optimizer
+        # Update optimizer
         for param_group in self.optimizer.param_groups:
             param_group['lr'] = lr
         
@@ -579,7 +553,8 @@ class SimpleLRScheduler:
             'warmup_steps': self.warmup_steps,
             'total_steps': self.total_steps,
             'min_lr': self.min_lr,
-            'base_lr': self.base_lr
+            'base_lr': self.base_lr,
+            'decay_type': self.decay_type
         }
     
     def load_state_dict(self, state_dict):
@@ -595,47 +570,15 @@ def count_parameters(model: nn.Module) -> Tuple[int, int]:
 
 def calculate_perplexity(loss: float) -> float:
     """Calculate perplexity with overflow protection."""
-    if math.isinf(loss) or math.isnan(loss) or loss > 20:
-        return float('inf')
     return math.exp(min(loss, 20))
-
-def calculate_token_accuracy(logits: torch.Tensor, targets: torch.Tensor, ignore_index: int = 0) -> Tuple[float, int]:
-    """Calculate token-level accuracy."""
-    with torch.no_grad():
-        if logits.numel() == 0 or targets.numel() == 0:
-            return 0.0, 0
-        
-        if torch.isnan(logits).any() or torch.isinf(logits).any():
-            return 0.0, 0
-        
-        flat_logits = logits.view(-1, logits.size(-1))
-        flat_targets = targets.view(-1)
-        
-        predictions = torch.argmax(flat_logits, dim=-1)
-        valid_mask = (flat_targets != ignore_index)
-        
-        if valid_mask.sum() == 0:
-            return 0.0, 0
-        
-        valid_predictions = predictions[valid_mask]
-        valid_targets = flat_targets[valid_mask]
-        
-        correct = (valid_predictions == valid_targets)
-        total_correct = correct.sum().item()
-        total_valid = valid_targets.numel()
-        
-        accuracy = total_correct / total_valid if total_valid > 0 else 0.0
-        return accuracy, total_valid
 
 def train_epoch(model, dataloader, criterion, optimizer, scheduler, epoch: int, 
                 gradient_accumulation_steps: int = 1, max_grad_norm: float = 1.0,
-                log_interval: int = 50, ignore_index: int = 0) -> Tuple[float, float, float]:
-    """Training loop for one epoch."""
+                log_interval: int = 25) -> Tuple[float, float, float]:
+    """Ultra memory-optimized training loop."""
     model.train()
     total_loss = 0.0
     total_tokens = 0
-    total_correct_tokens = 0
-    total_valid_tokens = 0
     accumulation_steps = 0
     batch_times = []
     
@@ -645,109 +588,85 @@ def train_epoch(model, dataloader, criterion, optimizer, scheduler, epoch: int,
         batch_start = time.time()
         
         try:
+            # Move to device
             inputs = inputs.to(device, non_blocking=True)
             targets = targets.to(device, non_blocking=True)
             
-            # Validate inputs
-            if torch.isnan(inputs).any() or torch.isinf(inputs).any():
-                logger.warning(f"Invalid inputs at batch {batch_idx}, skipping")
-                continue
-            
-            # Forward pass
-            with torch.autocast(device_type=device.type, enabled=(device.type == 'cuda')):
+            # Forward pass - be very careful with mixed precision
+            if device.type == 'cuda':
+                # Use bfloat16 for better stability
+                with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=True):
+                    logits = model(inputs)
+                    loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
+            else:
+                # No autocast for MPS/CPU - it can cause issues
                 logits = model(inputs)
                 loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
             
-            # Check for invalid loss
-            if torch.isnan(loss) or torch.isinf(loss):
-                logger.warning(f"Invalid loss at batch {batch_idx}: {loss.item()}, skipping")
-                optimizer.zero_grad()
-                continue
-            
-            if loss.item() > 15.0:
-                logger.warning(f"Very high loss at batch {batch_idx}: {loss.item()}")
-                # Reduce learning rate
-                for param_group in optimizer.param_groups:
-                    param_group['lr'] *= 0.9
-            
-            # Calculate accuracy
-            batch_accuracy, batch_valid_tokens = calculate_token_accuracy(logits, targets, ignore_index)
-            total_correct_tokens += batch_accuracy * batch_valid_tokens
-            total_valid_tokens += batch_valid_tokens
-            
-            # Scale loss for gradient accumulation
             loss = loss / gradient_accumulation_steps
-            
-            # Backward pass
             loss.backward()
+            
+            # Clear logits immediately
+            del logits
             
             accumulation_steps += 1
             
             if accumulation_steps >= gradient_accumulation_steps:
-                # Gradient clipping
                 if max_grad_norm > 0:
-                    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_grad_norm)
-                else:
-                    grad_norm = 0.0
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=max_grad_norm)
                 
                 optimizer.step()
-                current_lr = scheduler.step()
+                current_lr = scheduler.step(loss.item() * gradient_accumulation_steps)
                 optimizer.zero_grad()
                 accumulation_steps = 0
             
             # Statistics
             batch_loss = loss.item() * gradient_accumulation_steps
-            if not math.isnan(batch_loss) and not math.isinf(batch_loss):
-                total_loss += batch_loss * inputs.size(0)
-                total_tokens += targets.numel()
+            total_loss += batch_loss * inputs.size(0)
+            total_tokens += targets.numel()
+            
+            # Clear tensors
+            del inputs, targets, loss
             
             batch_times.append(time.time() - batch_start)
             
-            # Logging
-            if batch_idx % log_interval == 0 and batch_idx > 0:
-                current_loss = total_loss / max(total_tokens, 1)
-                current_accuracy = total_correct_tokens / max(total_valid_tokens, 1)
-                avg_batch_time = sum(batch_times[-log_interval:]) / len(batch_times[-log_interval:])
-                tokens_per_sec = targets.numel() / avg_batch_time if avg_batch_time > 0 else 0
-                
-                logger.info(f"Epoch {epoch} | Batch {batch_idx}/{len(dataloader)} | "
-                           f"Loss: {current_loss:.4f} | Acc: {current_accuracy:.3f} ({current_accuracy*100:.1f}%) | "
-                           f"LR: {current_lr:.2e} | Speed: {tokens_per_sec:.0f} tok/s")
-            
-            # Memory cleanup
-            if batch_idx % 10 == 0:
+            # Aggressive memory cleanup every few batches
+            if batch_idx % 5 == 0:
                 with memory_cleanup():
                     pass
+            
+            # Logging
+            if batch_idx % log_interval == 0 and batch_idx > 0:
+                current_loss = total_loss / total_tokens
+                avg_batch_time = sum(batch_times[-log_interval:]) / len(batch_times[-log_interval:])
+                tokens_per_sec = targets.numel() / avg_batch_time if batch_times else 0
+                
+                logger.info(f"Epoch {epoch} | Batch {batch_idx}/{len(dataloader)} | "
+                           f"Loss: {current_loss:.4f} | LR: {current_lr:.2e} | "
+                           f"Speed: {tokens_per_sec:.0f} tok/s | {get_memory_usage()}")
         
         except RuntimeError as e:
-            error_str = str(e).lower()
-            if "out of memory" in error_str:
-                logger.error(f"OOM at batch {batch_idx}. Clearing cache and skipping...")
+            if "out of memory" in str(e).lower():
+                logger.error(f"OOM at batch {batch_idx}. Clearing cache and skipping batch...")
+                
+                # Aggressive cleanup
                 optimizer.zero_grad()
                 with memory_cleanup():
                     pass
+                
+                # Skip this batch
                 continue
             else:
-                logger.error(f"Runtime error at batch {batch_idx}: {e}")
                 raise e
     
-    # Calculate final metrics
-    avg_loss = total_loss / max(total_tokens, 1)
-    avg_accuracy = total_correct_tokens / max(total_valid_tokens, 1)
+    avg_loss = total_loss / total_tokens if total_tokens > 0 else float('inf')
     avg_batch_time = sum(batch_times) / len(batch_times) if batch_times else 0.0
     
-    # Validate final metrics
-    if math.isnan(avg_loss) or math.isinf(avg_loss):
-        avg_loss = 100.0
-    
-    if math.isnan(avg_accuracy) or math.isinf(avg_accuracy):
-        avg_accuracy = 0.0
-    
-    return avg_loss, avg_accuracy, avg_batch_time
+    return avg_loss, 0.0, avg_batch_time
 
 def generate_sample_text(model, tokenizer, prompt: str = "<user> Hello", 
                         max_length: int = 20, temperature: float = 0.8) -> str:
-    """Generate sample text for evaluation."""
+    """Ultra lightweight text generation with subword tokenizer."""
     model.eval()
     
     try:
@@ -755,30 +674,20 @@ def generate_sample_text(model, tokenizer, prompt: str = "<user> Hello",
             input_ids = torch.tensor(tokenizer.encode(prompt), dtype=torch.long).unsqueeze(0).to(device)
             generated = input_ids.clone()
             
-            for step in range(max_length):
-                if generated.size(1) >= 100:  # Limit context
+            for _ in range(max_length):
+                if generated.size(1) >= 64:  # Very short context
                     break
                 
-                try:
-                    logits = model(generated)
-                    
-                    if torch.isnan(logits).any() or torch.isinf(logits).any():
-                        break
-                    
-                    next_token_logits = logits[0, -1, :] / temperature
-                    probs = F.softmax(next_token_logits, dim=-1)
-                    
-                    if torch.isnan(probs).any():
-                        break
-                    
-                    next_token = torch.multinomial(probs, 1)
-                    generated = torch.cat([generated, next_token.unsqueeze(0)], dim=1)
-                    
-                    # Stop on end token or padding
-                    if next_token.item() in [tokenizer.vocab.get("</s>", -1), tokenizer.vocab.get("<pad>", 0)]:
-                        break
-                        
-                except Exception:
+                logits = model(generated)
+                next_token_logits = logits[0, -1, :] / temperature
+                
+                probs = F.softmax(next_token_logits, dim=-1)
+                next_token = torch.multinomial(probs, 1)
+                
+                generated = torch.cat([generated, next_token.unsqueeze(0)], dim=1)
+                
+                # Stop on end token
+                if next_token.item() == tokenizer.vocab.get("</s>", -1):
                     break
             
             response_ids = generated[0][input_ids.size(1):].tolist()
@@ -786,65 +695,70 @@ def generate_sample_text(model, tokenizer, prompt: str = "<user> Hello",
             return response.strip()
     
     except Exception as e:
-        logger.warning(f"Error generating sample: {e}")
+        logger.error(f"Error generating sample: {e}")
         return "Error during generation"
     finally:
         model.train()
+        with memory_cleanup():
+            pass
 
-def get_conservative_config():
-    """Get conservative configuration for stable training."""
+def get_subword_conservative_config():
+    """Get conservative configuration optimized for subword tokenization."""
     
     if device.type == 'cuda':
+        # Medium model for CUDA - subword allows smaller vocab
         model_config = ModelConfig(
-            vocab_size=8000,
-            hidden_size=512,
+            vocab_size=16000,      # Smaller vocab due to subword efficiency
+            hidden_size=2048,       # Slightly smaller
+            num_layers=24,
+            num_heads=16,
+            seq_length=1024,        # Shorter context
+            dropout=0.1,
+            model_type="SubwordTransformer",
+            tokenizer_type="subword"
+        )
+        batch_size = 32        # Smaller due to longer sequences from subwords
+        max_samples = 8000
+        
+    elif device.type == 'mps':
+        # Small model for MPS
+        model_config = ModelConfig(
+            vocab_size=8000,       # Very compact vocab
+            hidden_size=256,
             num_layers=6,
             num_heads=8,
             seq_length=256,
             dropout=0.1,
-            model_type="SimpleTransformer",
-            tokenizer_type="simple"
+            model_type="SubwordTransformer",
+            tokenizer_type="subword"
         )
-        batch_size = 16
-        max_samples = 5000
+        batch_size = 8
+        max_samples = 3000
         
-    elif device.type == 'mps':
+    else:  # CPU
+        # Minimal model for CPU
         model_config = ModelConfig(
             vocab_size=4000,
-            hidden_size=256,
+            hidden_size=128,
             num_layers=4,
             num_heads=4,
             seq_length=128,
             dropout=0.1,
-            model_type="SimpleTransformer",
-            tokenizer_type="simple"
-        )
-        batch_size = 8
-        max_samples = 2000
-        
-    else:  # CPU
-        model_config = ModelConfig(
-            vocab_size=2000,
-            hidden_size=128,
-            num_layers=3,
-            num_heads=2,
-            seq_length=64,
-            dropout=0.1,
-            model_type="SimpleTransformer",
-            tokenizer_type="simple"
+            model_type="SubwordTransformer",
+            tokenizer_type="subword"
         )
         batch_size = 4
-        max_samples = 1000
+        max_samples = 1500
     
     training_config = TrainingConfig(
-        learning_rate=1e-4,
+        learning_rate=5e-4,      # Slightly higher LR for subword
         weight_decay=0.01,
         batch_size=batch_size,
-        gradient_accumulation_steps=4,
-        max_epochs=20,
+        gradient_accumulation_steps=16,  # Larger accumulation for effective batch size
+        max_epochs=100,          # More epochs for convergence
         warmup_ratio=0.1,
-        save_every=500,
-        eval_every=250,
+        save_every=1000,
+        eval_every=500,
         max_grad_norm=1.0,
         label_smoothing=0.0,
         beta1=0.9,
@@ -854,8 +768,12 @@ def get_conservative_config():
     return model_config, training_config, max_samples
 
 def validate_training_setup():
-    """Validate that required files exist."""
-    required_files = ["oasst1_data/oasst1_train.jsonl"]
+    """Validate that all required files and dependencies are available."""
+    required_files = [
+        "oasst1_data/oasst1_train.jsonl",
+        "model_manager.py",
+        "subword_transformer.py"
+    ]
     
     missing_files = []
     for file_path in required_files:
@@ -866,161 +784,112 @@ def validate_training_setup():
         logger.error("Missing required files:")
         for file_path in missing_files:
             logger.error(f"  - {file_path}")
+        
+        if "oasst1_data/oasst1_train.jsonl" in missing_files:
+            logger.info("To download the dataset, run: python Dataset_download.py")
+        
         return False
     
     return True
 
-def save_model_safely(model_manager, model, tokenizer, metadata, optimizer=None, scheduler=None):
-    """Save model with error handling."""
-    try:
-        logger.info("💾 Saving model...")
-        
-        with memory_cleanup():
-            pass
-        
-        model_id = model_manager.save_model(
-            model=model, 
-            tokenizer=tokenizer, 
-            metadata=metadata, 
-            optimizer=optimizer, 
-            scheduler=scheduler,
-            force_cpu_save=True
-        )
-        
-        logger.info(f"✅ Model saved successfully: {model_id}")
-        return model_id
-        
-    except Exception as save_error:
-        logger.error(f"❌ Failed to save model: {save_error}")
-        return None
-
-def evaluate_model(model, dataloader, criterion, tokenizer, max_batches: int = 10):
-    """Evaluate model performance."""
-    model.eval()
+def save_model_with_retries(model_manager, model, tokenizer, metadata, optimizer, scheduler, max_retries=3):
+    """Save model with multiple retry attempts and detailed error reporting."""
     
-    total_loss = 0.0
-    total_tokens = 0
-    total_correct_tokens = 0
-    total_valid_tokens = 0
-    batch_count = 0
-    
-    ignore_index = tokenizer.vocab.get("<pad>", 0)
-    
-    try:
-        with torch.no_grad():
-            for batch_idx, (inputs, targets) in enumerate(dataloader):
-                if batch_idx >= max_batches:
-                    break
-                
-                try:
-                    inputs = inputs.to(device, non_blocking=True)
-                    targets = targets.to(device, non_blocking=True)
-                    
-                    if torch.isnan(inputs).any() or torch.isinf(inputs).any():
-                        continue
-                    
-                    with torch.autocast(device_type=device.type, enabled=(device.type == 'cuda')):
-                        logits = model(inputs)
-                        loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
-                    
-                    if torch.isnan(loss) or torch.isinf(loss):
-                        continue
-                    
-                    batch_accuracy, batch_valid_tokens = calculate_token_accuracy(logits, targets, ignore_index)
-                    
-                    total_loss += loss.item() * inputs.size(0)
-                    total_tokens += targets.numel()
-                    total_correct_tokens += batch_accuracy * batch_valid_tokens
-                    total_valid_tokens += batch_valid_tokens
-                    batch_count += 1
-                    
-                except Exception:
+    for attempt in range(max_retries):
+        try:
+            logger.info(f"💾 Attempting to save model (attempt {attempt + 1}/{max_retries})...")
+            
+            # Force garbage collection before save
+            with memory_cleanup():
+                pass
+            
+            # Try saving with force_cpu_save=True for stability
+            model_id = model_manager.save_model(
+                model=model, 
+                tokenizer=tokenizer, 
+                metadata=metadata, 
+                optimizer=optimizer, 
+                scheduler=scheduler,
+                force_cpu_save=True
+            )
+            
+            logger.info(f"✅ Model saved successfully: {model_id}")
+            
+            # Validate the saved model
+            validation = model_manager.validate_model(model_id)
+            if validation['valid']:
+                logger.info(f"✅ Model validation passed")
+                return model_id
+            else:
+                logger.warning(f"⚠️ Model validation issues: {validation['issues']}")
+                if attempt < max_retries - 1:
+                    logger.info("Retrying save due to validation issues...")
                     continue
+                else:
+                    logger.warning("Model saved but with validation warnings")
+                    return model_id
+            
+        except Exception as save_error:
+            logger.error(f"❌ Save attempt {attempt + 1} failed: {save_error}")
+            if attempt < max_retries - 1:
+                logger.info(f"Retrying in 2 seconds...")
+                time.sleep(2)
+                continue
+            else:
+                logger.error(f"❌ All save attempts failed. Final error: {save_error}")
+                logger.error(f"Save error traceback: {traceback.format_exc()}")
+                return None
     
-    except Exception as e:
-        logger.error(f"Error during evaluation: {e}")
-    
-    finally:
-        model.train()
-    
-    # Calculate metrics
-    if total_tokens > 0:
-        avg_loss = total_loss / total_tokens
-        perplexity = calculate_perplexity(avg_loss)
-    else:
-        avg_loss = float('inf')
-        perplexity = float('inf')
-    
-    if total_valid_tokens > 0:
-        accuracy = total_correct_tokens / total_valid_tokens
-    else:
-        accuracy = 0.0
-    
-    return {
-        'avg_loss': avg_loss,
-        'accuracy': accuracy,
-        'perplexity': perplexity,
-        'batch_count': batch_count
-    }
-
-def create_tokenizer_safely(vocab_size):
-    """Create tokenizer with proper error handling."""
-    try:
-        # Try to create with the expected interface first
-        if IMPORTS_SUCCESSFUL:
-            # Check if the imported SubwordTokenizer expects vocab_size parameter
-            try:
-                tokenizer = SubwordTokenizer(vocab_size=vocab_size)
-                return tokenizer
-            except TypeError:
-                # If that fails, try without parameters
-                try:
-                    tokenizer = SubwordTokenizer()
-                    return tokenizer
-                except Exception:
-                    # Fall back to simple tokenizer
-                    logger.warning("SubwordTokenizer creation failed, using SimpleTokenizer fallback")
-                    return SimpleTokenizer()
-        else:
-            # Use fallback implementation
-            return SimpleTokenizer()
-    except Exception as e:
-        logger.warning(f"Tokenizer creation failed: {e}, using SimpleTokenizer fallback")
-        return SimpleTokenizer()
+    return None
 
 def main():
-    """Main training function."""
+    """Main training function with guaranteed model saving."""
     
-    logger.info("🚀 Starting OASST1 Transformer Training")
-    logger.info("=" * 80)
+    logger.info("🚀 Starting Subword-Level OASST1 Transformer Training")
+    logger.info("=" * 70)
     logger.info(f"Initial memory: {get_memory_usage()}")
     
-    # Check environment
-    if not check_environment():
-        logger.error("❌ Environment check failed")
-        return 1
+    # Handle imports - if they failed initially, run debug and try again
+    if not IMPORTS_SUCCESSFUL:
+        logger.error("❌ Imports failed initially - running debug checks")
+        if not run_comprehensive_debug():
+            logger.error("❌ Debug checks failed - cannot proceed")
+            return 1
+        
+        # Try to import again after debug
+        try:
+            global ModelManager, ModelConfig, TrainingConfig, ModelMetadata
+            global SubwordTransformer, SubwordTokenizer
+            
+            from model_manager import ModelManager, ModelConfig, TrainingConfig, ModelMetadata
+            from subword_transformer import SubwordTransformer, SubwordTokenizer
+            logger.info("✅ Successfully imported modules after debug")
+            
+        except ImportError as e:
+            logger.error(f"❌ Still cannot import after debug: {e}")
+            return 1
     
     # Validate setup
     if not validate_training_setup():
         logger.error("❌ Training setup validation failed!")
         return 1
     
-    # Get configuration
-    model_config, training_config, max_samples = get_conservative_config()
+    # Get conservative configuration for subword tokenization
+    model_config, training_config, max_samples = get_subword_conservative_config()
     
-    logger.info(f"Configuration:")
-    logger.info(f"  Model: {model_config.hidden_size}x{model_config.num_layers}")
-    logger.info(f"  Vocab size: {model_config.vocab_size}")
+    logger.info(f"Using subword-optimized config:")
+    logger.info(f"  Model size: {model_config.hidden_size}x{model_config.num_layers}")
+    logger.info(f"  Vocab size: {model_config.vocab_size} (subword)")
     logger.info(f"  Batch size: {training_config.batch_size}")
     logger.info(f"  Max samples: {max_samples}")
-    logger.info(f"  Learning rate: {training_config.learning_rate}")
+    logger.info(f"  Sequence length: {model_config.seq_length}")
     
-    # Initialize model manager
+    # Initialize model manager with the FIXED version
     model_manager = ModelManager("models")
     
     try:
-        # Load data
-        logger.info("📚 Loading OASST1 dataset...")
+        # Load and process OASST1 training data with strict limits
+        logger.info("📚 Loading OASST1 dataset (subword-optimized)...")
         texts = load_and_process_data("oasst1_data/oasst1_train.jsonl", max_samples)
         
         if len(texts) == 0:
@@ -1028,69 +897,61 @@ def main():
         
         logger.info(f"Memory after data loading: {get_memory_usage()}")
         
-        # Create tokenizer
-        logger.info("🔤 Training tokenizer...")
-        tokenizer = create_tokenizer_safely(model_config.vocab_size)
+        # Create and train BPE tokenizer
+        logger.info("🔤 Training BPE subword tokenizer...")
+        tokenizer = SubwordTokenizer()
         
         # Use subset for tokenizer training
-        sample_size = min(1000, len(texts))
+        sample_size = min(3000, len(texts))
         sample_texts = texts[:sample_size]
         all_text = "\n".join(sample_texts)
         
+        # Train BPE with target vocabulary size
         tokenizer.train_from_text(all_text, vocab_size=model_config.vocab_size, min_freq=2)
-        actual_vocab_size = tokenizer.vocab_size()
-        model_config.vocab_size = actual_vocab_size
+        model_config.vocab_size = tokenizer.vocab_size()
         
-        logger.info(f"Tokenizer trained - Vocabulary size: {actual_vocab_size:,}")
+        logger.info(f"✅ BPE tokenizer trained - Vocabulary size: {model_config.vocab_size:,}")
+        logger.info(f"✅ Number of BPE merges: {len(tokenizer.merges):,}")
+        logger.info(f"Memory after tokenizer: {get_memory_usage()}")
         
-        # Test tokenizer
-        test_text = "Hello, this is a test!"
-        test_tokens = tokenizer.encode(test_text)
-        test_decoded = tokenizer.decode(test_tokens)
+        # Test tokenizer with sample
+        test_text = "Hello, this is a test of subword tokenization!"
+        test_tokens = tokenizer.tokenize(test_text)
+        test_encoded = tokenizer.encode(test_text)
+        test_decoded = tokenizer.decode(test_encoded)
         
-        logger.info(f"Tokenizer test:")
-        logger.info(f"  Original: {test_text}")
-        logger.info(f"  Tokens: {test_tokens}")
-        logger.info(f"  Decoded: {test_decoded}")
+        logger.info(f"📝 Tokenizer test:")
+        logger.info(f"   Original: {test_text}")
+        logger.info(f"   Subwords: {test_tokens[:10]}{'...' if len(test_tokens) > 10 else ''}")
+        logger.info(f"   Decoded: {test_decoded}")
         
-        # Create dataset
-        logger.info("📦 Creating dataset...")
-        dataset = StableDataset(
+        # Create fixed dataset with pre-tokenized sequences
+        logger.info("📦 Creating fixed subword training dataset...")
+        dataset = FixedSubwordDataset(
             texts, 
             tokenizer, 
             model_config.seq_length,
-            max_sequences=min(15000, len(texts) * 3)
+            overlap_ratio=0.5,
+            max_sequences=min(50000, len(texts) * 10)  # Reasonable limit
         )
         
         logger.info(f"Memory after dataset creation: {get_memory_usage()}")
         
-        # Create dataloader
+        # Conservative dataloader settings
         dataloader = DataLoader(
             dataset,
             batch_size=training_config.batch_size,
             shuffle=True,
-            num_workers=0,
-            pin_memory=False,
-            drop_last=True
+            num_workers=0,              # Critical: no multiprocessing
+            pin_memory=False,           # Critical: disable pin memory
+            drop_last=True,
+            persistent_workers=False
         )
         
-        # Create evaluation dataloader
-        eval_dataset_size = min(500, len(dataset) // 10)
-        eval_indices = torch.randperm(len(dataset))[:eval_dataset_size]
-        eval_dataset = torch.utils.data.Subset(dataset, eval_indices)
-        eval_dataloader = DataLoader(
-            eval_dataset,
-            batch_size=training_config.batch_size,
-            shuffle=False,
-            num_workers=0,
-            drop_last=False
-        )
-        
-        logger.info(f"Dataset: {len(dataset):,} sequences, {len(dataloader):,} batches/epoch")
-        logger.info(f"Eval dataset: {len(eval_dataset):,} sequences")
+        logger.info(f"📊 Dataset ready: {len(dataset):,} sequences, {len(dataloader):,} batches/epoch")
         
         # Initialize model
-        logger.info("🧠 Initializing transformer model...")
+        logger.info("🧠 Initializing subword transformer model...")
         with memory_cleanup():
             model = SubwordTransformer(model_config)
             model = model.to(device)
@@ -1105,169 +966,160 @@ def main():
             model.parameters(),
             lr=training_config.learning_rate,
             weight_decay=training_config.weight_decay,
-            betas=(training_config.beta1, training_config.beta2)
+            betas=(training_config.beta1, training_config.beta2),
+            eps=1e-8
         )
         
-        pad_token_id = tokenizer.vocab.get("<pad>", 0)
-        criterion = nn.CrossEntropyLoss(ignore_index=pad_token_id)
+        criterion = nn.CrossEntropyLoss(
+            ignore_index=tokenizer.vocab.get("<pad>", 0)
+        )
         
+        # Simple scheduler
         total_steps = len(dataloader) * training_config.max_epochs // training_config.gradient_accumulation_steps
         warmup_steps = int(total_steps * training_config.warmup_ratio)
-        scheduler = SimpleLRScheduler(optimizer, warmup_steps, total_steps)
+        scheduler = AdaptiveLRScheduler(optimizer, warmup_steps, total_steps, decay_type="cosine")
         
-        logger.info(f"Training setup: {total_steps:,} steps, {warmup_steps:,} warmup")
+        logger.info(f"🎯 Training setup: {total_steps:,} steps, {warmup_steps:,} warmup")
         logger.info(f"Memory before training: {get_memory_usage()}")
         
-        # Training loop
-        logger.info("🚀 Starting training...")
+        # Training loop with GUARANTEED model saving
+        logger.info("🚀 Starting subword-optimized training...")
         training_start = time.time()
         best_loss = float('inf')
-        best_accuracy = 0.0
         models_saved = 0
+        save_interval = 10  # Save every 5 epochs regardless of improvement
         
         for epoch in range(1, training_config.max_epochs + 1):
             epoch_start = time.time()
             
             try:
-                logger.info(f"Starting epoch {epoch}/{training_config.max_epochs}")
+                logger.info(f"Starting epoch {epoch}, memory: {get_memory_usage()}")
                 
                 # Train epoch
-                avg_loss, avg_accuracy, avg_batch_time = train_epoch(
+                avg_loss, accuracy, avg_batch_time = train_epoch(
                     model, dataloader, criterion, optimizer, scheduler, epoch,
                     training_config.gradient_accumulation_steps,
-                    training_config.max_grad_norm,
-                    ignore_index=pad_token_id
+                    training_config.max_grad_norm
                 )
                 
-                # Validate results
-                if math.isnan(avg_loss) or math.isinf(avg_loss):
-                    logger.warning(f"Invalid loss in epoch {epoch}: {avg_loss}")
-                    # Try to recover
-                    for param_group in optimizer.param_groups:
-                        param_group['lr'] *= 0.5
-                    continue
-                
+                # Calculate metrics
                 perplexity = calculate_perplexity(avg_loss)
                 epoch_time = time.time() - epoch_start
                 
-                # Evaluation
-                eval_metrics = None
-                if epoch % 3 == 0 or epoch == 1 or epoch == training_config.max_epochs:
-                    logger.info("📊 Running evaluation...")
-                    eval_metrics = evaluate_model(model, eval_dataloader, criterion, tokenizer)
-                    
-                    if not math.isnan(eval_metrics['avg_loss']) and not math.isinf(eval_metrics['avg_loss']):
-                        logger.info(f"Evaluation results:")
-                        logger.info(f"  Loss: {eval_metrics['avg_loss']:.4f}")
-                        logger.info(f"  Accuracy: {eval_metrics['accuracy']:.3f} ({eval_metrics['accuracy']*100:.1f}%)")
-                        logger.info(f"  Perplexity: {eval_metrics['perplexity']:.2f}")
-                
                 # Logging
-                logger.info("=" * 60)
-                logger.info(f"Epoch {epoch}/{training_config.max_epochs} Summary:")
-                logger.info(f"  Train Loss: {avg_loss:.4f} | Train Accuracy: {avg_accuracy:.3f} ({avg_accuracy*100:.1f}%)")
-                logger.info(f"  Perplexity: {perplexity:.2f}")
-                if eval_metrics and not math.isnan(eval_metrics['avg_loss']):
-                    logger.info(f"  Eval Loss: {eval_metrics['avg_loss']:.4f} | Eval Accuracy: {eval_metrics['accuracy']:.3f}")
-                logger.info(f"  Time: {epoch_time:.1f}s | {get_memory_usage()}")
+                logger.info("=" * 50)
+                logger.info(f"📊 Epoch {epoch}/{training_config.max_epochs} Summary:")
+                logger.info(f"   Loss: {avg_loss:.4f} | Perplexity: {perplexity:.2f}")
+                logger.info(f"   Time: {epoch_time:.1f}s | {get_memory_usage()}")
                 
-                # Update best metrics
-                is_best_loss = avg_loss < best_loss and not math.isinf(avg_loss)
-                is_best_accuracy = avg_accuracy > best_accuracy
-                
-                if is_best_loss:
+                # Update best loss
+                is_best = avg_loss < best_loss
+                if is_best:
                     best_loss = avg_loss
                     logger.info(f"🏆 New best loss: {best_loss:.4f}")
                 
-                if is_best_accuracy:
-                    best_accuracy = avg_accuracy
-                    logger.info(f"🏆 New best accuracy: {best_accuracy:.3f}")
+                # Sample generation every few epochs
+                if epoch % 3 == 0:
+                    with memory_cleanup():
+                        sample = generate_sample_text(model, tokenizer, "<user> Hello", 15)
+                        logger.info(f"   Sample: <user> Hello → {sample}")
                 
-                # Sample generation
-                if epoch % 5 == 0:
-                    try:
-                        sample = generate_sample_text(model, tokenizer, "<user> Hello")
-                        logger.info(f"  Sample: <user> Hello → {sample}")
-                    except Exception:
-                        pass
-                
-                # Model saving
+                # GUARANTEED MODEL SAVING - save if best OR every save_interval epochs OR last epoch
                 should_save = (
-                    is_best_loss or 
-                    is_best_accuracy or
-                    epoch % 5 == 0 or 
-                    epoch == training_config.max_epochs
+                    is_best or 
+                    epoch % save_interval == 0 or 
+                    epoch == training_config.max_epochs or
+                    epoch == 1  # Always save first epoch as baseline
                 )
                 
                 if should_save:
-                    performance_metrics = {
-                        "train_loss": float(avg_loss),
-                        "train_accuracy": float(avg_accuracy),
-                        "train_perplexity": float(perplexity),
-                        "epoch": int(epoch),
-                        "learning_rate": float(optimizer.param_groups[0]['lr']),
-                        "is_best_loss": is_best_loss,
-                        "is_best_accuracy": is_best_accuracy,
-                    }
-                    
-                    if eval_metrics and not math.isnan(eval_metrics['avg_loss']):
-                        performance_metrics.update({
-                            "eval_loss": float(eval_metrics['avg_loss']),
-                            "eval_accuracy": float(eval_metrics['accuracy']),
-                            "eval_perplexity": float(eval_metrics['perplexity']),
-                        })
-                    
-                    metadata = ModelMetadata(
-                        model_name="OASST1_Transformer",
-                        version=f"v1.0_epoch_{epoch}",
-                        created_at=datetime.now().isoformat(),
-                        last_modified=datetime.now().isoformat(),
-                        model_config=model_config,
-                        training_config=training_config,
-                        dataset_info={
-                            "name": "OpenAssistant OASST1",
-                            "source": "oasst1_train.jsonl",
-                            "num_samples": len(texts),
-                            "vocab_size": int(actual_vocab_size),
-                            "seq_length": model_config.seq_length,
-                            "train_sequences": len(dataset),
-                            "eval_sequences": len(eval_dataset),
-                        },
-                        performance_metrics=performance_metrics,
-                        model_size_mb=float(model_size_mb),
-                        total_parameters=int(total_params),
-                        trainable_parameters=int(trainable_params),
-                        epochs_trained=int(epoch),
-                        best_loss=float(best_loss),
-                        best_perplexity=float(calculate_perplexity(best_loss)),
-                        hardware_used=f"{device.type.upper()}",
-                        pytorch_version=torch.__version__,
-                        notes=f"OASST1 transformer training epoch {epoch}. "
-                              f"Train: loss={avg_loss:.4f}, acc={avg_accuracy:.3f}. "
-                              f"Best: loss={best_loss:.4f}, acc={best_accuracy:.3f}.",
-                        tags=["oasst1", "transformer", f"epoch_{epoch}"] + 
-                             (["best_loss"] if is_best_loss else []) +
-                             (["best_accuracy"] if is_best_accuracy else [])
-                    )
-                    
-                    model_id = save_model_safely(model_manager, model, tokenizer, metadata, optimizer, scheduler)
-                    if model_id:
-                        models_saved += 1
-                        logger.info(f"💾 Model saved: {model_id} (#{models_saved})")
+                    with memory_cleanup():
+                        # Create comprehensive metadata
+                        save_reason = []
+                        if is_best:
+                            save_reason.append("best_loss")
+                        if epoch % save_interval == 0:
+                            save_reason.append("regular_interval")
+                        if epoch == training_config.max_epochs:
+                            save_reason.append("final_epoch")
+                        if epoch == 1:
+                            save_reason.append("initial_checkpoint")
+                        
+                        metadata = ModelMetadata(
+                            model_name="OASST1_SubwordTransformer",
+                            version=f"v1.0_epoch_{epoch}{'_BEST' if is_best else ''}",
+                            created_at=datetime.now().isoformat(),
+                            last_modified=datetime.now().isoformat(),
+                            model_config=model_config,
+                            training_config=training_config,
+                            dataset_info={
+                                "name": "OpenAssistant OASST1 (Subword-Optimized)",
+                                "source": "oasst1_train.jsonl",
+                                "num_samples": len(texts),
+                                "vocab_size": model_config.vocab_size,
+                                "seq_length": model_config.seq_length,
+                                "preprocessing": "BPE subword tokenization",
+                                "num_merges": len(tokenizer.merges),
+                                "tokenizer_type": "BPE (Byte Pair Encoding)",
+                                "language": "English",
+                                "dataset_version": "OASST1",
+                            },
+                            performance_metrics={
+                                "loss": float(avg_loss),
+                                "perplexity": float(perplexity),
+                                "batch_time_ms": float(avg_batch_time * 1000),
+                                "epoch": int(epoch),
+                                "learning_rate": float(scheduler.optimizer.param_groups[0]['lr']),
+                                "gradient_norm": 0.0,
+                                "is_best": is_best,
+                                "save_reason": ",".join(save_reason),
+                            },
+                            model_size_mb=float(model_size_mb),
+                            total_parameters=int(total_params),
+                            trainable_parameters=int(trainable_params),
+                            training_time_hours=float((time.time() - training_start) / 3600),
+                            epochs_trained=int(epoch),
+                            best_loss=float(best_loss),
+                            best_perplexity=float(calculate_perplexity(best_loss)),
+                            hardware_used=f"{device.type.upper()}" + (f" ({torch.cuda.get_device_name()})" if device.type == 'cuda' else ""),
+                            pytorch_version=torch.__version__,
+                            cuda_version=torch.version.cuda if device.type == 'cuda' else None,
+                            model_hash="",
+                            tokenizer_hash="",
+                            notes=f"Subword-level OASST1 transformer with BPE tokenization. "
+                                  f"Epoch {epoch}/{training_config.max_epochs}. "
+                                  f"Save reason: {', '.join(save_reason)}. "
+                                  f"Current loss: {avg_loss:.4f}, Best loss: {best_loss:.4f}. "
+                                  f"Training on {len(texts):,} samples with {model_config.vocab_size:,} vocab using {len(tokenizer.merges):,} BPE merges. "
+                                  f"Model: {model_config.hidden_size}D x {model_config.num_layers}L x {model_config.num_heads}H. "
+                                  f"Hardware: {device.type.upper()}.",
+                            tags=["oasst1", "subword", "bpe", "transformer", "conversational", f"epoch_{epoch}"] + 
+                                 (["best"] if is_best else []) + save_reason
+                        )
+                        
+                        # Use the retry mechanism for robust saving
+                        model_id = save_model_with_retries(
+                            model_manager, model, tokenizer, metadata, optimizer, scheduler
+                        )
+                        
+                        if model_id:
+                            models_saved += 1
+                            logger.info(f"💾 Model saved successfully: {model_id} (#{models_saved})")
+                        else:
+                            logger.error(f"❌ Failed to save model for epoch {epoch}")
                 
-                logger.info("=" * 60)
+                logger.info("=" * 50)
                 
-                # Memory cleanup
+                # Cleanup after each epoch
                 with memory_cleanup():
                     pass
                 
             except Exception as e:
                 logger.error(f"❌ Error in epoch {epoch}: {e}")
-                logger.error(f"Traceback: {traceback.format_exc()}")
+                logger.info(f"Memory state: {get_memory_usage()}")
                 
-                # Try to recover from OOM
                 if "out of memory" in str(e).lower():
-                    logger.info("Attempting OOM recovery...")
+                    logger.info("Attempting to recover from OOM...")
                     with memory_cleanup():
                         pass
                     continue
@@ -1276,55 +1128,107 @@ def main():
         
         # Training completion
         total_time = time.time() - training_start
-        logger.info("=" * 80)
-        logger.info("✅ Training completed successfully!")
-        logger.info(f"🎯 Best loss: {best_loss:.4f}")
-        logger.info(f"🎯 Best accuracy: {best_accuracy:.3f} ({best_accuracy*100:.1f}%)")
+        logger.info("=" * 70)
+        logger.info("✅ Subword-optimized training completed successfully!")
+        logger.info(f"🎯 Best loss achieved: {best_loss:.4f}")
         logger.info(f"🎯 Best perplexity: {calculate_perplexity(best_loss):.2f}")
-        logger.info(f"💾 Models saved: {models_saved}")
-        logger.info(f"⏱️  Training time: {total_time/3600:.2f} hours")
-        logger.info(f"💾 Final memory: {get_memory_usage()}")
+        logger.info(f"💾 Total models saved: {models_saved}")
+        logger.info(f"⏱️  Total training time: {total_time/3600:.2f} hours")
+        logger.info(f"🔤 Final vocabulary: {model_config.vocab_size:,} tokens with {len(tokenizer.merges):,} BPE merges")
+        logger.info(f"🚀 Average processing speed: {len(dataset) * model_config.seq_length * training_config.max_epochs / total_time:.0f} tokens/sec")
+        logger.info(f"💾 Final memory state: {get_memory_usage()}")
         
-        # Final save if no models saved
+        # FINAL GUARANTEED SAVE - save one more time as final model if no models were saved
         if models_saved == 0:
-            logger.warning("⚠️ No models saved! Performing final save...")
+            logger.warning("⚠️ No models were saved during training! Performing emergency final save...")
             
             final_metadata = ModelMetadata(
-                model_name="OASST1_Transformer_FINAL",
-                version="v1.0_FINAL",
+                model_name="OASST1_SubwordTransformer_FINAL",
+                version="v1.0_EMERGENCY_SAVE",
                 created_at=datetime.now().isoformat(),
+                last_modified=datetime.now().isoformat(),
                 model_config=model_config,
-                performance_metrics={
-                    "final_train_loss": float(avg_loss) if 'avg_loss' in locals() else float('inf'),
-                    "final_train_accuracy": float(avg_accuracy) if 'avg_accuracy' in locals() else 0.0,
-                    "best_train_loss": float(best_loss),
-                    "best_train_accuracy": float(best_accuracy),
+                training_config=training_config,
+                dataset_info={
+                    "name": "OpenAssistant OASST1 (Emergency Save)",
+                    "source": "oasst1_train.jsonl",
+                    "num_samples": len(texts),
+                    "vocab_size": model_config.vocab_size,
+                    "preprocessing": "BPE subword tokenization",
                 },
-                notes="Final save after training completion",
-                tags=["oasst1", "final"]
+                performance_metrics={
+                    "final_loss": float(avg_loss) if 'avg_loss' in locals() else float('inf'),
+                    "training_completed": True,
+                },
+                model_size_mb=float(model_size_mb),
+                total_parameters=int(total_params),
+                trainable_parameters=int(trainable_params),
+                training_time_hours=float(total_time / 3600),
+                epochs_trained=int(training_config.max_epochs),
+                best_loss=float(best_loss),
+                best_perplexity=float(calculate_perplexity(best_loss)),
+                hardware_used=f"{device.type.upper()}",
+                pytorch_version=torch.__version__,
+                notes="Emergency save after training completion to ensure model is preserved.",
+                tags=["oasst1", "subword", "emergency_save", "final"]
             )
             
-            final_id = save_model_safely(model_manager, model, tokenizer, final_metadata)
-            if final_id:
+            emergency_model_id = save_model_with_retries(
+                model_manager, model, tokenizer, final_metadata, optimizer, scheduler
+            )
+            
+            if emergency_model_id:
                 models_saved += 1
-                logger.info(f"✅ Final save successful: {final_id}")
+                logger.info(f"✅ Emergency final save successful: {emergency_model_id}")
+            else:
+                logger.error(f"❌ Even emergency save failed!")
         
-        # Print model summary
-        logger.info("\n" + "=" * 80)
-        logger.info("📊 MODEL SUMMARY")
+        # Print final model summary
+        logger.info("\n" + "=" * 70)
+        logger.info("📊 FINAL MODEL SUMMARY")
         model_manager.print_model_summary()
-        logger.info("=" * 80)
+        logger.info("=" * 70)
         
-        return 0 if models_saved > 0 else 1
+        if models_saved > 0:
+            logger.info(f"✅ Training completed with {models_saved} models saved successfully!")
+            return 0
+        else:
+            logger.error(f"❌ Training completed but NO MODELS WERE SAVED!")
+            return 1
         
     except KeyboardInterrupt:
         logger.info("❌ Training interrupted by user")
+        # Try to save current state before exiting
+        logger.info("Attempting to save current model state before exit...")
+        if 'model' in locals() and 'tokenizer' in locals():
+            try:
+                interrupt_metadata = ModelMetadata(
+                    model_name="OASST1_SubwordTransformer_INTERRUPTED",
+                    version="v1.0_INTERRUPTED",
+                    created_at=datetime.now().isoformat(),
+                    last_modified=datetime.now().isoformat(),
+                    model_config=model_config if 'model_config' in locals() else {},
+                    notes="Model saved after training interruption",
+                    tags=["interrupted", "partial"]
+                )
+                interrupt_id = save_model_with_retries(
+                    model_manager, model, tokenizer, interrupt_metadata, 
+                    optimizer if 'optimizer' in locals() else None, 
+                    scheduler if 'scheduler' in locals() else None
+                )
+                if interrupt_id:
+                    logger.info(f"✅ Interrupted model saved: {interrupt_id}")
+            except:
+                logger.error("Failed to save interrupted model")
         return 1
     except Exception as e:
-        logger.error(f"❌ Training failed: {e}")
+        logger.error(f"❌ Training failed with error: {e}")
+        logger.info(f"Memory state at failure: {get_memory_usage()}")
         logger.error(f"Traceback: {traceback.format_exc()}")
         return 1
     finally:
+        # Final cleanup
+        logger.info("Performing final memory cleanup...")
         with memory_cleanup():
             pass
 
