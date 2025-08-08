@@ -805,7 +805,7 @@ def get_conservative_config():
             model_type="SimpleTransformer",
             tokenizer_type="simple"
         )
-        batch_size = 16
+        batch_size = 32
         max_samples = 8000
         
     elif device.type == 'mps':
