@@ -848,7 +848,7 @@ def get_conservative_config():
         max_grad_norm=1.0,
         label_smoothing=0.0,
         beta1=0.9,
-        beta2=0.95
+        beta2=0.999
     )
     
     return model_config, training_config, max_samples
