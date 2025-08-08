@@ -796,17 +796,17 @@ def get_conservative_config():
     
     if device.type == 'cuda':
         model_config = ModelConfig(
-            vocab_size=8000,
-            hidden_size=512,
-            num_layers=6,
-            num_heads=8,
-            seq_length=256,
+            vocab_size=80000,
+            hidden_size=2048,
+            num_layers=24,
+            num_heads=16,
+            seq_length=1024,
             dropout=0.1,
             model_type="SimpleTransformer",
             tokenizer_type="simple"
         )
         batch_size = 16
-        max_samples = 5000
+        max_samples = 8000
         
     elif device.type == 'mps':
         model_config = ModelConfig(
@@ -837,7 +837,7 @@ def get_conservative_config():
         max_samples = 1000
     
     training_config = TrainingConfig(
-        learning_rate=1e-4,
+        learning_rate=1e-5,
         weight_decay=0.01,
         batch_size=batch_size,
         gradient_accumulation_steps=4,
