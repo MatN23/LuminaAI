@@ -718,7 +718,7 @@ def get_subword_conservative_config():
             tokenizer_type="subword"
         )
         batch_size = 32        # Smaller due to longer sequences from subwords
-        max_samples = 8000
+        max_samples = 80000
         
     elif device.type == 'mps':
         # Small model for MPS
@@ -762,7 +762,7 @@ def get_subword_conservative_config():
         max_grad_norm=1.0,
         label_smoothing=0.0,
         beta1=0.9,
-        beta2=0.95
+        beta2=0.999
     )
     
     return model_config, training_config, max_samples
