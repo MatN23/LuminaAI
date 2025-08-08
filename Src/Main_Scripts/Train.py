@@ -806,7 +806,7 @@ def get_conservative_config():
             tokenizer_type="simple"
         )
         batch_size = 32
-        max_samples = 8000
+        max_samples = 80000
         
     elif device.type == 'mps':
         model_config = ModelConfig(
