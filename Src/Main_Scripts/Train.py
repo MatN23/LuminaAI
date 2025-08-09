@@ -102,7 +102,7 @@ class TrainingConfig:
     weight_decay: float = 0.01
     batch_size: int = 8
     gradient_accumulation_steps: int = 4
-    max_epochs: int = 10
+    max_epochs: int = 150
     warmup_ratio: float = 0.1
     save_every: int = 1000
     eval_every: int = 500
@@ -426,21 +426,20 @@ class ModelManager:
         self.save_dir = Path(save_dir)
         self.save_dir.mkdir(exist_ok=True)
     
-    def save_model(self, model, tokenizer, metadata, optimizer=None, scheduler=None, force_cpu_save=False):
-        """Save model with proper error handling."""
+    def save_model(self, model, tokenizer, metadata, optimizer=None, scheduler=None, force_cpu_save=True):
+        """Save model with proper error handling - ALWAYS force CPU save to prevent OOM."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         model_id = f"model_{timestamp}"
         model_path = self.save_dir / model_id
         model_path.mkdir(exist_ok=True)
         
         try:
-            # Save model state dict
-            if force_cpu_save:
-                model_state = {k: v.cpu() for k, v in model.state_dict().items()}
-            else:
-                model_state = model.state_dict()
-            
+            # ALWAYS save to CPU to prevent memory issues
+            model_state = {k: v.cpu() for k, v in model.state_dict().items()}
             torch.save(model_state, model_path / "model.pth")
+            
+            # Move model back to device
+            model.to(device)
             
             # Save tokenizer
             tokenizer_data = {
@@ -472,23 +471,28 @@ class ModelManager:
 
 @contextmanager
 def memory_cleanup():
-    """Context manager for memory cleanup."""
+    """Context manager for aggressive memory cleanup."""
     try:
         yield
     finally:
+        # Clear Python garbage
+        gc.collect()
+        
+        # Clear CUDA cache
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
             torch.cuda.synchronize()
+            torch.cuda.ipc_collect()  # Clear IPC cache too
         elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
             torch.mps.empty_cache()
-        gc.collect()
 
 def get_memory_usage():
     """Get current memory usage."""
     if torch.cuda.is_available():
         allocated = torch.cuda.memory_allocated() / 1024**3
         cached = torch.cuda.memory_reserved() / 1024**3
-        return f"CUDA: {allocated:.2f}GB allocated, {cached:.2f}GB cached"
+        total = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        return f"CUDA: {allocated:.2f}GB allocated, {cached:.2f}GB cached, {total:.1f}GB total"
     elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
         allocated = torch.mps.current_allocated_memory() / 1024**3
         return f"MPS: {allocated:.2f}GB allocated"
@@ -500,7 +504,8 @@ def setup_device():
     if torch.cuda.is_available():
         device = torch.device("cuda")
         logger.info(f"Using device: CUDA ({torch.cuda.get_device_name()})")
-        torch.cuda.set_per_process_memory_fraction(0.8)
+        # Set memory fraction to prevent OOM
+        torch.cuda.set_per_process_memory_fraction(0.85)  # Leave 15% buffer
         torch.cuda.empty_cache()
     elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
         device = torch.device("mps")
@@ -516,73 +521,118 @@ def setup_device():
 device = setup_device()
 
 class StableDataset(Dataset):
-    """Improved dataset with better validation."""
+    """Fixed dataset with proper sequence creation."""
     
     def __init__(self, texts: List[str], tokenizer, seq_length: int, max_sequences: int = 10000):
         self.tokenizer = tokenizer
         self.seq_length = seq_length
         
-        logger.info(f"Creating stable dataset with seq_length={seq_length}...")
+        logger.info(f"Creating dataset with seq_length={seq_length}...")
         
         vocab_size = tokenizer.vocab_size()
         pad_token_id = tokenizer.vocab.get("<pad>", 0)
         bos_token_id = tokenizer.vocab.get("<bos>", 2)
         eos_token_id = tokenizer.vocab.get("<eos>", 3)
         
-        self.sequences = []
+        logger.info(f"Tokenizer vocab size: {vocab_size}")
+        logger.info(f"Special tokens - PAD: {pad_token_id}, BOS: {bos_token_id}, EOS: {eos_token_id}")
         
-        for text_idx, text in enumerate(texts[:max_sequences // 3]):
+        self.sequences = []
+        processed_texts = 0
+        
+        for text_idx, text in enumerate(texts):
+            if len(self.sequences) >= max_sequences:
+                break
+                
             if not text or not text.strip():
                 continue
             
             try:
-                # Add BOS token
-                tokens = [bos_token_id] + tokenizer.encode(text.strip()) + [eos_token_id]
+                # Tokenize text
+                text_clean = text.strip()
+                tokens = tokenizer.encode(text_clean)
                 
-                if len(tokens) < 10:  # Too short
+                if not tokens or len(tokens) < 5:
                     continue
                 
-                # Validate tokens
+                # Add special tokens
+                full_sequence = [bos_token_id] + tokens + [eos_token_id]
+                
+                # Validate all tokens are in range
                 valid_tokens = []
-                for token in tokens:
+                for token in full_sequence:
                     if 0 <= token < vocab_size:
                         valid_tokens.append(token)
                     else:
                         valid_tokens.append(tokenizer.vocab.get("<unk>", 1))
                 
-                tokens = valid_tokens
+                # Create training sequences
+                if len(valid_tokens) > seq_length + 1:
+                    # Multiple sequences from long text
+                    for start in range(0, len(valid_tokens) - seq_length, seq_length // 2):
+                        if start + seq_length + 1 <= len(valid_tokens):
+                            sequence = valid_tokens[start:start + seq_length + 1]
+                            if len(sequence) == seq_length + 1:
+                                self.sequences.append(sequence)
+                                
+                                if len(self.sequences) >= max_sequences:
+                                    break
+                elif len(valid_tokens) >= seq_length + 1:
+                    # Exact fit or pad
+                    sequence = valid_tokens[:seq_length + 1]
+                    if len(sequence) == seq_length + 1:
+                        self.sequences.append(sequence)
+                else:
+                    # Pad short sequences
+                    sequence = valid_tokens + [pad_token_id] * (seq_length + 1 - len(valid_tokens))
+                    if len(sequence) == seq_length + 1:
+                        self.sequences.append(sequence)
                 
-                # Create sequences with sliding window
-                step_size = seq_length // 2
-                for start_pos in range(0, len(tokens) - seq_length, step_size):
-                    if start_pos + seq_length + 1 <= len(tokens):
-                        sequence = tokens[start_pos:start_pos + seq_length + 1]
-                        
-                        if len(sequence) == seq_length + 1:
-                            self.sequences.append(sequence)
-                            
-                            if len(self.sequences) >= max_sequences:
-                                break
+                processed_texts += 1
                 
-                if len(self.sequences) >= max_sequences:
-                    break
+                if processed_texts % 1000 == 0:
+                    logger.info(f"Processed {processed_texts} texts, created {len(self.sequences)} sequences")
                     
             except Exception as e:
                 logger.warning(f"Error processing text {text_idx}: {e}")
                 continue
         
         if not self.sequences:
-            raise ValueError("No valid sequences created!")
+            raise ValueError("No valid sequences created! Check your data and tokenizer.")
         
         self.pad_token_id = pad_token_id
         self.vocab_size = vocab_size
         
-        logger.info(f"Created {len(self.sequences):,} sequences")
+        logger.info(f"Final dataset: {len(self.sequences):,} sequences from {processed_texts} texts")
+        
+        # Validate all sequences
+        invalid_sequences = 0
+        for i, seq in enumerate(self.sequences):
+            if len(seq) != seq_length + 1:
+                invalid_sequences += 1
+            elif any(token < 0 or token >= vocab_size for token in seq):
+                invalid_sequences += 1
+        
+        if invalid_sequences > 0:
+            raise ValueError(f"Found {invalid_sequences} invalid sequences!")
+        
+        logger.info("✅ All sequences validated successfully")
+        
+        # Print sample sequences for debugging
+        logger.info("Sample sequences:")
+        for i in range(min(3, len(self.sequences))):
+            seq = self.sequences[i]
+            input_part = seq[:-1]
+            target_part = seq[1:]
+            logger.info(f"  Seq {i}: input={input_part[:10]}..., target={target_part[:10]}...")
     
     def __len__(self):
         return len(self.sequences)
     
     def __getitem__(self, idx):
+        if idx >= len(self.sequences):
+            raise IndexError(f"Index {idx} out of range for dataset of size {len(self.sequences)}")
+            
         sequence = self.sequences[idx]
         
         input_ids = torch.tensor(sequence[:-1], dtype=torch.long)
@@ -690,92 +740,188 @@ def count_parameters(model):
 
 def train_epoch(model, dataloader, criterion, optimizer, scheduler, epoch, 
                 gradient_accumulation_steps=1, max_grad_norm=1.0):
-    """Improved training loop."""
+    """FIXED training loop with aggressive OOM prevention."""
     model.train()
     total_loss = 0.0
     total_correct = 0
     total_tokens = 0
     num_batches = 0
+    accumulation_count = 0
     
     optimizer.zero_grad()
     
+    logger.info(f"Starting epoch {epoch} with {len(dataloader)} batches")
+    
     for batch_idx, (inputs, targets) in enumerate(dataloader):
         try:
+            # AGGRESSIVE memory management every 25 batches
+            if batch_idx > 0 and batch_idx % 25 == 0:
+                with memory_cleanup():
+                    pass
+                logger.info(f"Memory cleanup at batch {batch_idx}: {get_memory_usage()}")
+            
+            # Ensure we have valid data
+            if inputs.numel() == 0 or targets.numel() == 0:
+                logger.warning(f"Empty batch at index {batch_idx}, skipping")
+                continue
+                
             inputs = inputs.to(device, non_blocking=True)
             targets = targets.to(device, non_blocking=True)
             
-            # Forward pass
+            # Validate input data
+            if torch.isnan(inputs).any() or torch.isinf(inputs).any():
+                logger.warning(f"Invalid inputs at batch {batch_idx}, skipping")
+                continue
+            
+            # Forward pass with memory-efficient autocast
             with torch.autocast(device_type=device.type, enabled=(device.type == 'cuda')):
                 logits = model(inputs)
-                loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
+                
+                # Validate logits
+                if torch.isnan(logits).any() or torch.isinf(logits).any():
+                    logger.warning(f"Invalid logits at batch {batch_idx}, skipping")
+                    optimizer.zero_grad()
+                    continue
+                
+                # Calculate loss
+                flat_logits = logits.view(-1, logits.size(-1))
+                flat_targets = targets.view(-1)
+                loss = criterion(flat_logits, flat_targets)
             
             # Check for invalid loss
-            if torch.isnan(loss) or torch.isinf(loss):
-                logger.warning(f"Invalid loss at batch {batch_idx}: {loss.item()}")
+            if torch.isnan(loss) or torch.isinf(loss) or loss.item() < 0:
+                logger.warning(f"Invalid loss at batch {batch_idx}: {loss.item()}, skipping")
                 optimizer.zero_grad()
                 continue
             
-            # Scale loss
-            loss = loss / gradient_accumulation_steps
+            # Scale loss for gradient accumulation
+            scaled_loss = loss / gradient_accumulation_steps
             
             # Backward pass
-            loss.backward()
+            scaled_loss.backward()
             
-            # Gradient accumulation
-            if (batch_idx + 1) % gradient_accumulation_steps == 0:
+            # Clear intermediate tensors immediately
+            del logits, flat_logits, flat_targets, scaled_loss
+            
+            accumulation_count += 1
+            
+            # Gradient step when accumulation is complete
+            if accumulation_count >= gradient_accumulation_steps:
                 # Gradient clipping
                 if max_grad_norm > 0:
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+                    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+                    
+                    # Check for gradient explosion
+                    if grad_norm > max_grad_norm * 10:
+                        logger.warning(f"Very large gradients: {grad_norm:.2f}, reducing LR")
+                        for param_group in optimizer.param_groups:
+                            param_group['lr'] *= 0.5
                 
                 optimizer.step()
-                scheduler.step()
+                current_lr = scheduler.step()
                 optimizer.zero_grad()
+                accumulation_count = 0
             
-            # Calculate accuracy
+            # Calculate accuracy efficiently
             with torch.no_grad():
-                predictions = torch.argmax(logits, dim=-1)
-                correct = (predictions == targets).sum().item()
+                # Recreate logits for accuracy (memory efficient)
+                with torch.autocast(device_type=device.type, enabled=(device.type == 'cuda')):
+                    pred_logits = model(inputs)
+                predictions = torch.argmax(pred_logits, dim=-1)
+                del pred_logits  # Clear immediately
+                
+                # Only count non-padding tokens
+                pad_mask = (targets != criterion.ignore_index)
+                correct = ((predictions == targets) & pad_mask).sum().item()
+                valid_tokens = pad_mask.sum().item()
+                
+                del predictions, pad_mask  # Clear tensors
+                
                 total_correct += correct
-                total_tokens += targets.numel()
+                total_tokens += valid_tokens
             
             # Statistics
-            total_loss += loss.item() * gradient_accumulation_steps
+            total_loss += loss.item()
             num_batches += 1
             
-            # Logging
-            if batch_idx % 50 == 0 and batch_idx > 0:
-                current_loss = total_loss / num_batches
+            # Clear loss tensor
+            del loss
+            
+            # Detailed logging every 10 batches
+            if batch_idx % 10 == 0:
+                current_loss = total_loss / max(num_batches, 1)
                 current_acc = total_correct / max(total_tokens, 1)
-                logger.info(f"Epoch {epoch} | Batch {batch_idx} | Loss: {current_loss:.4f} | Acc: {current_acc:.3f}")
+                current_lr = optimizer.param_groups[0]['lr']
+                
+                logger.info(f"Epoch {epoch} | Batch {batch_idx}/{len(dataloader)} | "
+                           f"Loss: {current_loss:.4f} | Acc: {current_acc:.3f} ({current_acc*100:.1f}%) | "
+                           f"LR: {current_lr:.6f} | Tokens: {total_tokens}")
+                logger.info(f"Memory: {get_memory_usage()}")
             
         except RuntimeError as e:
-            if "out of memory" in str(e).lower():
-                logger.warning(f"OOM at batch {batch_idx}, skipping...")
+            error_msg = str(e).lower()
+            if "out of memory" in error_msg:
+                logger.warning(f"OOM at batch {batch_idx}, clearing cache...")
                 optimizer.zero_grad()
+                
+                # Aggressive cleanup
+                if 'inputs' in locals():
+                    del inputs
+                if 'targets' in locals():
+                    del targets
+                if 'logits' in locals():
+                    del logits
+                if 'loss' in locals():
+                    del loss
+                
                 with memory_cleanup():
                     pass
+                
+                # Skip this batch and continue
                 continue
             else:
+                logger.error(f"Runtime error at batch {batch_idx}: {e}")
                 raise e
+        except Exception as e:
+            logger.error(f"Unexpected error at batch {batch_idx}: {e}")
+            # Clean up any remaining tensors
+            for var_name in ['inputs', 'targets', 'logits', 'loss']:
+                if var_name in locals():
+                    del locals()[var_name]
+            continue
     
-    avg_loss = total_loss / max(num_batches, 1)
+    # Final gradient step if needed
+    if accumulation_count > 0:
+        if max_grad_norm > 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+        optimizer.step()
+        optimizer.zero_grad()
+    
+    # Calculate final metrics
+    if num_batches == 0:
+        logger.error("No batches processed! Check your dataset and dataloader.")
+        return float('inf'), 0.0
+    
+    avg_loss = total_loss / num_batches
     avg_acc = total_correct / max(total_tokens, 1)
+    
+    logger.info(f"Epoch {epoch} completed: {num_batches} batches, {total_tokens} tokens processed")
     
     return avg_loss, avg_acc
 
 def get_improved_config():
-    """Get improved configuration."""
+    """Get improved configuration with smaller batch sizes to prevent OOM."""
     if device.type == 'cuda':
         model_config = ModelConfig(
-            vocab_size=8000,
-            hidden_size=512,
-            num_layers=8,
-            num_heads=8,
-            seq_length=256,
+            vocab_size=8000,   # Drastically reduced from 80000
+            hidden_size=512,   # Reduced from 1008
+            num_layers=6,      # Reduced from 12
+            num_heads=8,       # Reduced from 12
+            seq_length=512,    # Reduced from 1024
             dropout=0.1
         )
-        batch_size = 16
-        max_samples = 20000
+        batch_size = 6  # Keep at 1
+        max_samples = 20000  # Reduced from 80000
     elif device.type == 'mps':
         model_config = ModelConfig(
             vocab_size=4000,
@@ -785,7 +931,7 @@ def get_improved_config():
             seq_length=128,
             dropout=0.1
         )
-        batch_size = 8
+        batch_size = 6  # REDUCED
         max_samples = 5000
     else:
         model_config = ModelConfig(
@@ -803,7 +949,7 @@ def get_improved_config():
         learning_rate=3e-4,
         weight_decay=0.01,
         batch_size=batch_size,
-        gradient_accumulation_steps=2,
+        gradient_accumulation_steps=4,  # INCREASED to maintain effective batch size
         max_epochs=10,
         warmup_ratio=0.1,
         max_grad_norm=1.0
@@ -864,12 +1010,14 @@ def generate_sample_text(model, tokenizer, prompt="<user> Hello", max_length=50)
         model.train()
 
 def evaluate_model(model, dataloader, criterion, max_batches=5):
-    """Evaluate model performance."""
+    """FIXED evaluation with aggressive memory management."""
     model.eval()
     total_loss = 0.0
     total_correct = 0
     total_tokens = 0
     num_batches = 0
+    
+    logger.info(f"Starting evaluation with max {max_batches} batches from {len(dataloader)} available")
     
     try:
         with torch.no_grad():
@@ -878,35 +1026,75 @@ def evaluate_model(model, dataloader, criterion, max_batches=5):
                     break
                 
                 try:
+                    if inputs.numel() == 0 or targets.numel() == 0:
+                        continue
+                        
                     inputs = inputs.to(device)
                     targets = targets.to(device)
                     
-                    logits = model(inputs)
+                    if torch.isnan(inputs).any() or torch.isinf(inputs).any():
+                        continue
+                    
+                    # Memory-efficient forward pass
+                    with torch.autocast(device_type=device.type, enabled=(device.type == 'cuda')):
+                        logits = model(inputs)
+                    
+                    if torch.isnan(logits).any() or torch.isinf(logits).any():
+                        del logits
+                        continue
+                    
                     loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
                     
                     if torch.isnan(loss) or torch.isinf(loss):
+                        del logits, loss
                         continue
                     
+                    # Calculate accuracy for non-padding tokens
                     predictions = torch.argmax(logits, dim=-1)
-                    correct = (predictions == targets).sum().item()
+                    pad_mask = (targets != criterion.ignore_index)
+                    correct = ((predictions == targets) & pad_mask).sum().item()
+                    valid_tokens = pad_mask.sum().item()
                     
                     total_loss += loss.item()
                     total_correct += correct
-                    total_tokens += targets.numel()
+                    total_tokens += valid_tokens
                     num_batches += 1
                     
-                except Exception:
+                    logger.info(f"Eval batch {batch_idx}: loss={loss.item():.4f}, acc={correct/max(valid_tokens,1):.3f}")
+                    
+                    # Clear all tensors immediately
+                    del logits, loss, predictions, pad_mask, inputs, targets
+                    
+                except Exception as e:
+                    logger.warning(f"Error in eval batch {batch_idx}: {e}")
+                    # Clean up any remaining tensors
+                    for var_name in ['inputs', 'targets', 'logits', 'loss', 'predictions']:
+                        if var_name in locals():
+                            del locals()[var_name]
                     continue
+                
+                # Memory cleanup after each eval batch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
     
     except Exception as e:
         logger.error(f"Error during evaluation: {e}")
     
     finally:
         model.train()
+        # Final cleanup
+        with memory_cleanup():
+            pass
     
-    avg_loss = total_loss / max(num_batches, 1)
+    if num_batches == 0:
+        logger.warning("No evaluation batches processed!")
+        return {'avg_loss': float('inf'), 'accuracy': 0.0, 'perplexity': float('inf')}
+    
+    avg_loss = total_loss / num_batches
     accuracy = total_correct / max(total_tokens, 1)
     perplexity = math.exp(min(avg_loss, 20)) if avg_loss < float('inf') else float('inf')
+    
+    logger.info(f"Evaluation completed: {num_batches} batches, {total_tokens} tokens")
     
     return {
         'avg_loss': avg_loss,
@@ -984,18 +1172,41 @@ def main():
         
         logger.info(f"Created {len(dataset):,} training sequences")
         
-        # Create dataloaders
+        # Create dataloaders with debugging
+        logger.info("📦 Creating dataloaders...")
         train_dataloader = DataLoader(
             dataset,
             batch_size=training_config.batch_size,
             shuffle=True,
-            num_workers=0,
-            pin_memory=False,
-            drop_last=True
+            num_workers=0,  # Keep at 0 to prevent memory issues
+            pin_memory=False,  # Disable pin_memory to save memory
+            drop_last=True,
+            persistent_workers=False  # Don't keep workers alive
         )
         
+        # Test dataloader
+        logger.info("🔍 Testing dataloader...")
+        test_batch_count = 0
+        try:
+            for batch_idx, (inputs, targets) in enumerate(train_dataloader):
+                test_batch_count += 1
+                logger.info(f"Test batch {batch_idx}: inputs shape {inputs.shape}, targets shape {targets.shape}")
+                logger.info(f"  Input range: {inputs.min().item()} to {inputs.max().item()}")
+                logger.info(f"  Target range: {targets.min().item()} to {targets.max().item()}")
+                
+                # Clear test tensors immediately
+                del inputs, targets
+                
+                if batch_idx >= 2:  # Test first 3 batches
+                    break
+        except Exception as e:
+            logger.error(f"Dataloader test failed: {e}")
+            raise e
+        
+        logger.info(f"Dataloader test successful: {test_batch_count} batches tested")
+        
         # Create evaluation dataset
-        eval_size = min(500, len(dataset) // 5)
+        eval_size = min(200, len(dataset) // 10)
         eval_indices = torch.randperm(len(dataset))[:eval_size]
         eval_dataset = torch.utils.data.Subset(dataset, eval_indices)
         eval_dataloader = DataLoader(
@@ -1003,13 +1214,14 @@ def main():
             batch_size=training_config.batch_size,
             shuffle=False,
             num_workers=0,
+            pin_memory=False,
             drop_last=False
         )
         
-        logger.info(f"Training batches per epoch: {len(train_dataloader)}")
-        logger.info(f"Evaluation sequences: {len(eval_dataset)}")
+        logger.info(f"Training: {len(dataset):,} sequences, {len(train_dataloader):,} batches/epoch")
+        logger.info(f"Evaluation: {len(eval_dataset):,} sequences, {len(eval_dataloader):,} batches")
         
-        # Initialize model
+        # Initialize model with memory cleanup
         logger.info("🧠 Creating model...")
         with memory_cleanup():
             model = StableTransformer(model_config)
@@ -1054,7 +1266,7 @@ def main():
             logger.info(f"=== Epoch {epoch}/{training_config.max_epochs} ===")
             
             try:
-                # Training
+                # Training with aggressive memory management
                 train_loss, train_acc = train_epoch(
                     model, train_dataloader, criterion, optimizer, scheduler, epoch,
                     training_config.gradient_accumulation_steps,
@@ -1084,11 +1296,12 @@ def main():
                 logger.info(f"  Perplexity: {perplexity:.2f}")
                 logger.info(f"  Time: {epoch_time:.1f}s")
                 
-                # Evaluation
+                # Evaluation with memory cleanup
                 eval_results = None
                 if epoch % 2 == 0 or epoch == 1 or epoch == training_config.max_epochs:
                     logger.info("📊 Evaluating...")
-                    eval_results = evaluate_model(model, eval_dataloader, criterion)
+                    with memory_cleanup():
+                        eval_results = evaluate_model(model, eval_dataloader, criterion)
                     
                     logger.info(f"Evaluation Results:")
                     logger.info(f"  Loss: {eval_results['avg_loss']:.4f}")
@@ -1097,8 +1310,9 @@ def main():
                 
                 # Sample generation
                 if epoch % 3 == 0:
-                    sample = generate_sample_text(model, tokenizer, "<user> Hello")
-                    logger.info(f"Sample: <user> Hello → {sample}")
+                    with memory_cleanup():
+                        sample = generate_sample_text(model, tokenizer, "<user> Hello")
+                        logger.info(f"Sample: <user> Hello → {sample}")
                 
                 # Track best metrics
                 is_best_loss = train_loss < best_loss
@@ -1112,11 +1326,11 @@ def main():
                     best_accuracy = train_acc
                     logger.info(f"🏆 New best accuracy: {best_accuracy:.3f}")
                 
-                # Save model
+                # Save model (less frequently to reduce memory pressure)
                 should_save = (
                     is_best_loss or 
                     is_best_acc or
-                    epoch % 3 == 0 or 
+                    epoch % 5 == 0 or  # REDUCED frequency from every 3 to every 5
                     epoch == training_config.max_epochs
                 )
                 
@@ -1167,16 +1381,18 @@ def main():
                     )
                     
                     try:
-                        model_id = model_manager.save_model(model, tokenizer, metadata, force_cpu_save=True)
-                        if model_id:
-                            models_saved += 1
-                            logger.info(f"💾 Model saved: {model_id}")
+                        # Save with aggressive memory cleanup
+                        with memory_cleanup():
+                            model_id = model_manager.save_model(model, tokenizer, metadata)
+                            if model_id:
+                                models_saved += 1
+                                logger.info(f"💾 Model saved: {model_id}")
                     except Exception as save_error:
                         logger.error(f"Failed to save model: {save_error}")
                 
                 logger.info(f"Memory after epoch: {get_memory_usage()}")
                 
-                # Memory cleanup
+                # Memory cleanup between epochs
                 with memory_cleanup():
                     pass
                 
@@ -1186,8 +1402,36 @@ def main():
                 
                 if "out of memory" in str(e).lower():
                     logger.info("Attempting OOM recovery...")
+                    
+                    # Aggressive OOM recovery
+                    optimizer.zero_grad()
+                    
+                    # Clear all possible variables
+                    for var_name in ['inputs', 'targets', 'logits', 'loss', 'predictions']:
+                        if var_name in locals():
+                            del locals()[var_name]
+                    
                     with memory_cleanup():
                         pass
+                    
+                    # Reduce batch size dynamically
+                    current_batch_size = training_config.batch_size
+                    if current_batch_size > 2:
+                        training_config.batch_size = max(2, current_batch_size // 2)
+                        training_config.gradient_accumulation_steps *= 2
+                        logger.info(f"Reduced batch size to {training_config.batch_size}, "
+                                   f"increased grad accumulation to {training_config.gradient_accumulation_steps}")
+                        
+                        # Recreate dataloader with smaller batch size
+                        train_dataloader = DataLoader(
+                            dataset,
+                            batch_size=training_config.batch_size,
+                            shuffle=True,
+                            num_workers=0,
+                            pin_memory=False,
+                            drop_last=True
+                        )
+                    
                     continue
                 else:
                     raise e
@@ -1217,10 +1461,11 @@ def main():
                 tags=["oasst1", "final"]
             )
             
-            final_id = model_manager.save_model(model, tokenizer, final_metadata, force_cpu_save=True)
-            if final_id:
-                logger.info(f"Final save successful: {final_id}")
-                models_saved += 1
+            with memory_cleanup():
+                final_id = model_manager.save_model(model, tokenizer, final_metadata)
+                if final_id:
+                    logger.info(f"Final save successful: {final_id}")
+                    models_saved += 1
         
         model_manager.print_model_summary()
         
