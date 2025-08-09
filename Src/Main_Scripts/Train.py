@@ -20,6 +20,20 @@ import torch.nn.functional as F
 import gc
 from contextlib import contextmanager
 
+# NEW: Mixed Precision Training
+try:
+    from torch.cuda.amp import GradScaler, autocast
+    AMP_AVAILABLE = True
+except ImportError:
+    AMP_AVAILABLE = False
+
+# NEW: Gradient Checkpointing
+try:
+    from torch.utils.checkpoint import checkpoint
+    CHECKPOINT_AVAILABLE = True
+except ImportError:
+    CHECKPOINT_AVAILABLE = False
+
 # Enhanced logging setup
 def setup_logging():
     """Setup comprehensive logging."""
@@ -37,54 +51,7 @@ def setup_logging():
 
 logger = setup_logging()
 
-def check_environment():
-    """Check environment and dependencies."""
-    logger.info("🔍 Checking environment...")
-    
-    try:
-        # Python version
-        logger.info(f"Python version: {sys.version}")
-        
-        # PyTorch version and setup
-        logger.info(f"PyTorch version: {torch.__version__}")
-        logger.info(f"CUDA available: {torch.cuda.is_available()}")
-        if torch.cuda.is_available():
-            logger.info(f"CUDA version: {torch.version.cuda}")
-            logger.info(f"CUDA device count: {torch.cuda.device_count()}")
-            for i in range(torch.cuda.device_count()):
-                props = torch.cuda.get_device_properties(i)
-                logger.info(f"GPU {i}: {props.name} ({props.total_memory / 1024**3:.1f} GB)")
-        
-        # MPS availability
-        if hasattr(torch.backends, 'mps'):
-            logger.info(f"MPS available: {torch.backends.mps.is_available()}")
-            logger.info(f"MPS built: {torch.backends.mps.is_built()}")
-        
-        # Check current directory and files
-        cwd = Path.cwd()
-        logger.info(f"Current directory: {cwd}")
-        
-        # Check for required files
-        required_files = [
-            "oasst1_data/oasst1_train.jsonl"
-        ]
-        
-        for file_path in required_files:
-            path = Path(file_path)
-            exists = path.exists()
-            logger.info(f"Required file {file_path}: {'✅ EXISTS' if exists else '❌ MISSING'}")
-            if exists and path.is_file():
-                size = path.stat().st_size / 1024**2
-                logger.info(f"  Size: {size:.2f} MB")
-        
-        return True
-        
-    except Exception as e:
-        logger.error(f"❌ Environment check failed: {e}")
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        return False
-
-# Configuration classes
+# Configuration classes (enhanced with new options)
 @dataclass
 class ModelConfig:
     vocab_size: int = 50000
@@ -95,6 +62,9 @@ class ModelConfig:
     dropout: float = 0.1
     model_type: str = "transformer"
     tokenizer_type: str = "subword"
+    # NEW: Memory optimization options
+    gradient_checkpointing: bool = True
+    use_flash_attention: bool = False  # For future compatibility
 
 @dataclass
 class TrainingConfig:
@@ -110,6 +80,11 @@ class TrainingConfig:
     label_smoothing: float = 0.0
     beta1: float = 0.9
     beta2: float = 0.95
+    # NEW: Mixed precision and memory optimization
+    use_mixed_precision: bool = True
+    amp_opt_level: str = "O1"  # O0, O1, O2, O3
+    dataloader_num_workers: int = 0
+    pin_memory: bool = False
 
 @dataclass
 class ModelMetadata:
@@ -134,6 +109,52 @@ class ModelMetadata:
     notes: str = ""
     tags: list = None
 
+# ULTRA-AGGRESSIVE memory management (enhanced)
+@contextmanager
+def ultra_memory_cleanup():
+    """Ultra-aggressive memory cleanup with new optimizations."""
+    try:
+        yield
+    finally:
+        # Force Python garbage collection multiple times
+        for _ in range(3):
+            gc.collect()
+        
+        # CUDA cleanup
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+            torch.cuda.ipc_collect()
+            # Force GPU memory release
+            if hasattr(torch.cuda, 'reset_peak_memory_stats'):
+                torch.cuda.reset_peak_memory_stats()
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            torch.mps.empty_cache()
+
+def setup_device():
+    """Setup device with ultra-conservative memory management."""
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        logger.info(f"Using device: CUDA ({torch.cuda.get_device_name()})")
+        logger.info(f"CUDA Capability: {torch.cuda.get_device_capability()}")
+        logger.info(f"Mixed Precision Available: {AMP_AVAILABLE}")
+        
+        # Much more conservative memory fraction
+        torch.cuda.set_per_process_memory_fraction(0.70)  # Only use 70% of GPU memory
+        torch.cuda.empty_cache()
+    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        device = torch.device("mps")
+        logger.info("Using device: MPS (Apple Silicon)")
+        torch.mps.empty_cache()
+    else:
+        device = torch.device("cpu")
+        logger.info("Using device: CPU")
+        torch.set_num_threads(min(4, os.cpu_count() or 1))
+    
+    return device
+
+device = setup_device()
+
 class ImprovedTokenizer:
     """Improved tokenizer with better stability."""
     
@@ -143,25 +164,23 @@ class ImprovedTokenizer:
             "<user>": 4, "<assistant>": 5, "\n": 6, " ": 7
         }
         self.id_to_token = {v: k for k, v in self.vocab.items()}
-        self.target_vocab_size = 10000
+        self.target_vocab_size = 5000  # Drastically reduced
         self.trained = False
     
     def train_from_text(self, text, vocab_size=None, min_freq=2):
-        """Train tokenizer with improved frequency analysis."""
+        """Train tokenizer with much smaller vocabulary."""
         if vocab_size:
-            self.target_vocab_size = vocab_size
+            self.target_vocab_size = min(vocab_size, 5000)  # Cap at 5000
         
         # Character and word frequency counting
         char_freq = {}
         word_freq = {}
         
         for line in text.split('\n'):
-            # Process characters
             for char in line:
                 if char.isprintable() and char not in self.vocab:
                     char_freq[char] = char_freq.get(char, 0) + 1
             
-            # Process words
             words = line.lower().split()
             for word in words:
                 if word not in self.vocab:
@@ -201,18 +220,15 @@ class ImprovedTokenizer:
             if word.lower() in self.vocab:
                 tokens.append(self.vocab[word.lower()])
             else:
-                # Character-level fallback
                 for char in word:
                     if char in self.vocab:
                         tokens.append(self.vocab[char])
                     else:
                         tokens.append(self.vocab["<unk>"])
             
-            # Add space token
             if " " in self.vocab:
                 tokens.append(self.vocab[" "])
         
-        # Remove trailing space
         if tokens and tokens[-1] == self.vocab.get(" ", -1):
             tokens.pop()
         
@@ -227,14 +243,13 @@ class ImprovedTokenizer:
                 if token not in ["<pad>", "<bos>", "<eos>"]:
                     tokens.append(token)
         
-        # Reconstruct text
         text = ""
         for token in tokens:
             if token == " ":
                 text += " "
-            elif len(token) == 1:  # Character
+            elif len(token) == 1:
                 text += token
-            else:  # Word
+            else:
                 if text and not text.endswith(" "):
                     text += " "
                 text += token
@@ -244,124 +259,123 @@ class ImprovedTokenizer:
     def vocab_size(self):
         return len(self.vocab)
 
-class StableTransformer(nn.Module):
-    """Improved transformer with better numerical stability."""
+# NEW: Gradient Checkpointing Wrapper
+class CheckpointWrapper(nn.Module):
+    """Wrapper to apply gradient checkpointing to any module."""
+    
+    def __init__(self, module):
+        super().__init__()
+        self.module = module
+    
+    def forward(self, *args, **kwargs):
+        if self.training and CHECKPOINT_AVAILABLE:
+            return checkpoint(self.module, *args, **kwargs)
+        else:
+            return self.module(*args, **kwargs)
+
+class MiniTransformer(nn.Module):
+    """Drastically simplified transformer for ultra-low VRAM with new optimizations."""
     
     def __init__(self, config):
         super().__init__()
         self.config = config
         
-        # Embeddings with proper scaling
+        # Much smaller embeddings
         self.embeddings = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=0)
-        self.pos_embeddings = nn.Embedding(config.seq_length, config.hidden_size)
         
-        # Input normalization
-        self.input_norm = nn.LayerNorm(config.hidden_size, eps=1e-6)
+        # Simplified positional embeddings - learnable but small
+        self.pos_embeddings = nn.Parameter(torch.zeros(config.seq_length, config.hidden_size))
         
-        # Transformer layers with prenorm
+        # Minimal transformer layers with optional gradient checkpointing
         self.layers = nn.ModuleList()
         for _ in range(config.num_layers):
-            layer = TransformerBlock(config)
+            layer = MiniTransformerBlock(config)
+            if config.gradient_checkpointing and CHECKPOINT_AVAILABLE:
+                layer = CheckpointWrapper(layer)
             self.layers.append(layer)
         
         # Output layers
-        self.output_norm = nn.LayerNorm(config.hidden_size, eps=1e-6)
-        self.dropout = nn.Dropout(config.dropout)
+        self.ln_final = nn.LayerNorm(config.hidden_size, eps=1e-6)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         
-        # Initialize weights
-        self.apply(self._init_weights)
-        
-        # Scale embeddings
-        nn.init.normal_(self.embeddings.weight, mean=0.0, std=0.02)
-        nn.init.normal_(self.pos_embeddings.weight, mean=0.0, std=0.02)
-        
-        # Tie embeddings and output weights for better performance
+        # Tie embeddings to reduce parameters
         self.lm_head.weight = self.embeddings.weight
-    
-    def _init_weights(self, module):
-        """Improved weight initialization."""
-        if isinstance(module, nn.Linear):
-            nn.init.normal_(module.weight, mean=0.0, std=0.02)
-            if module.bias is not None:
-                nn.init.zeros_(module.bias)
-        elif isinstance(module, nn.Embedding):
-            nn.init.normal_(module.weight, mean=0.0, std=0.02)
-        elif isinstance(module, nn.LayerNorm):
-            nn.init.zeros_(module.bias)
-            nn.init.ones_(module.weight)
-    
-    def forward(self, input_ids, attention_mask=None):
-        batch_size, seq_len = input_ids.shape
-        device = input_ids.device
         
-        # Create position IDs
-        position_ids = torch.arange(seq_len, dtype=torch.long, device=device)
-        position_ids = position_ids.unsqueeze(0).expand(batch_size, -1)
+        # Initialize with smaller values
+        self._init_weights()
+    
+    def _init_weights(self):
+        """Ultra-conservative weight initialization."""
+        nn.init.normal_(self.embeddings.weight, mean=0.0, std=0.01)  # Smaller std
+        nn.init.normal_(self.pos_embeddings, mean=0.0, std=0.01)
+        
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.normal_(module.weight, mean=0.0, std=0.01)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+            elif isinstance(module, nn.LayerNorm):
+                nn.init.zeros_(module.bias)
+                nn.init.ones_(module.weight)
+    
+    def forward(self, input_ids):
+        batch_size, seq_len = input_ids.shape
         
         # Embeddings
         token_embeddings = self.embeddings(input_ids)
-        position_embeddings = self.pos_embeddings(position_ids)
+        pos_embeddings = self.pos_embeddings[:seq_len].unsqueeze(0).expand(batch_size, -1, -1)
         
-        # Combine and normalize embeddings
-        hidden_states = token_embeddings + position_embeddings
-        hidden_states = self.input_norm(hidden_states)
-        hidden_states = self.dropout(hidden_states)
+        hidden_states = token_embeddings + pos_embeddings
         
-        # Create causal attention mask
-        if attention_mask is None:
-            attention_mask = torch.triu(
-                torch.ones(seq_len, seq_len, device=device), 
-                diagonal=1
-            ).bool()
+        # Apply layers one by one and clean up immediately
+        for i, layer in enumerate(self.layers):
+            hidden_states = layer(hidden_states)
+            # Force garbage collection after each layer
+            if i % 2 == 1:  # Every other layer
+                torch.cuda.empty_cache() if torch.cuda.is_available() else None
         
-        # Apply transformer layers
-        for layer in self.layers:
-            hidden_states = layer(hidden_states, attention_mask)
-        
-        # Output normalization and projection
-        hidden_states = self.output_norm(hidden_states)
+        hidden_states = self.ln_final(hidden_states)
         logits = self.lm_head(hidden_states)
         
         return logits
 
-class TransformerBlock(nn.Module):
-    """Transformer block with pre-normalization and residual connections."""
+class MiniTransformerBlock(nn.Module):
+    """Ultra-simplified transformer block."""
     
     def __init__(self, config):
         super().__init__()
-        self.config = config
+        self.ln1 = nn.LayerNorm(config.hidden_size, eps=1e-6)
+        self.ln2 = nn.LayerNorm(config.hidden_size, eps=1e-6)
         
-        # Pre-normalization layers
-        self.ln_1 = nn.LayerNorm(config.hidden_size, eps=1e-6)
-        self.ln_2 = nn.LayerNorm(config.hidden_size, eps=1e-6)
+        # Simplified attention
+        self.attn = MiniAttention(config)
         
-        # Attention
-        self.attn = MultiHeadAttention(config)
+        # Smaller MLP
+        self.mlp = MiniMLP(config)
         
-        # MLP
-        self.mlp = MLP(config)
-        
-        # Dropout
         self.dropout = nn.Dropout(config.dropout)
     
-    def forward(self, x, attention_mask=None):
-        # Pre-norm attention
+    def forward(self, x):
+        # Pre-norm with immediate cleanup
         residual = x
-        x = self.ln_1(x)
-        attn_output = self.attn(x, attention_mask)
-        x = residual + self.dropout(attn_output)
+        x_norm = self.ln1(x)
+        attn_out = self.attn(x_norm)
+        del x_norm  # Immediate cleanup
+        x = residual + self.dropout(attn_out)
+        del residual, attn_out  # Cleanup
         
-        # Pre-norm MLP
+        # MLP block
         residual = x
-        x = self.ln_2(x)
-        mlp_output = self.mlp(x)
-        x = residual + self.dropout(mlp_output)
+        x_norm = self.ln2(x)
+        mlp_out = self.mlp(x_norm)
+        del x_norm  # Cleanup
+        x = residual + self.dropout(mlp_out)
+        del residual, mlp_out  # Cleanup
         
         return x
 
-class MultiHeadAttention(nn.Module):
-    """Stable multi-head attention implementation."""
+class MiniAttention(nn.Module):
+    """Memory-efficient attention with immediate cleanup."""
     
     def __init__(self, config):
         super().__init__()
@@ -369,47 +383,65 @@ class MultiHeadAttention(nn.Module):
         self.head_dim = config.hidden_size // config.num_heads
         self.scale = self.head_dim ** -0.5
         
-        assert config.hidden_size % config.num_heads == 0
-        
+        # Single projection for Q, K, V
         self.qkv = nn.Linear(config.hidden_size, 3 * config.hidden_size, bias=False)
         self.out_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=False)
         self.dropout = nn.Dropout(config.dropout)
+        
+        # Register causal mask as buffer
+        self.register_buffer(
+            "causal_mask",
+            torch.triu(torch.ones(config.seq_length, config.seq_length), diagonal=1).bool()
+        )
     
-    def forward(self, x, attention_mask=None):
+    def forward(self, x):
         batch_size, seq_len, hidden_size = x.shape
         
         # Compute Q, K, V
-        qkv = self.qkv(x).chunk(3, dim=-1)
-        q, k, v = map(lambda t: t.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2), qkv)
+        qkv = self.qkv(x)
+        q, k, v = qkv.chunk(3, dim=-1)
         
-        # Scaled dot-product attention
+        # Reshape for multi-head
+        q = q.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        k = k.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        v = v.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        
+        del qkv  # Immediate cleanup
+        
+        # Attention scores
         scores = torch.matmul(q, k.transpose(-2, -1)) * self.scale
+        del q, k  # Cleanup Q and K immediately
         
         # Apply causal mask
-        if attention_mask is not None:
-            scores = scores.masked_fill(attention_mask.unsqueeze(0).unsqueeze(0), float('-inf'))
+        scores.masked_fill_(self.causal_mask[:seq_len, :seq_len], float('-inf'))
         
-        # Softmax with numerical stability
+        # Softmax with stability
         attn_weights = F.softmax(scores, dim=-1)
-        attn_weights = torch.nan_to_num(attn_weights, nan=0.0, posinf=0.0, neginf=0.0)
+        del scores  # Cleanup scores
+        
         attn_weights = self.dropout(attn_weights)
         
-        # Apply attention to values
+        # Apply attention
         attn_output = torch.matmul(attn_weights, v)
+        del attn_weights, v  # Cleanup
         
         # Reshape and project
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, hidden_size)
         output = self.out_proj(attn_output)
+        del attn_output  # Final cleanup
         
         return output
 
-class MLP(nn.Module):
-    """MLP block with GELU activation."""
+class MiniMLP(nn.Module):
+    """Smaller MLP block."""
     
     def __init__(self, config):
         super().__init__()
-        self.fc1 = nn.Linear(config.hidden_size, 4 * config.hidden_size)
-        self.fc2 = nn.Linear(4 * config.hidden_size, config.hidden_size)
+        # Smaller intermediate size
+        intermediate_size = max(config.hidden_size * 2, 128)  # Much smaller
+        
+        self.fc1 = nn.Linear(config.hidden_size, intermediate_size)
+        self.fc2 = nn.Linear(intermediate_size, config.hidden_size)
         self.dropout = nn.Dropout(config.dropout)
     
     def forward(self, x):
@@ -419,29 +451,103 @@ class MLP(nn.Module):
         x = self.fc2(x)
         return x
 
+class UltraDataset(Dataset):
+    """Ultra-efficient dataset with minimal memory usage."""
+    
+    def __init__(self, texts: List[str], tokenizer, seq_length: int, max_sequences: int = 5000):
+        self.tokenizer = tokenizer
+        self.seq_length = seq_length
+        self.pad_token_id = tokenizer.vocab.get("<pad>", 0)
+        
+        logger.info(f"Creating ultra-efficient dataset with seq_length={seq_length}...")
+        
+        # Process in smaller chunks to save memory
+        self.sequences = []
+        chunk_size = 100
+        
+        for i in range(0, len(texts), chunk_size):
+            if len(self.sequences) >= max_sequences:
+                break
+                
+            chunk = texts[i:i+chunk_size]
+            
+            for text in chunk:
+                if len(self.sequences) >= max_sequences:
+                    break
+                    
+                if not text or len(text.strip()) < 10:
+                    continue
+                
+                try:
+                    tokens = tokenizer.encode(text.strip())
+                    if len(tokens) < 5:
+                        continue
+                    
+                    # Add special tokens
+                    bos_id = tokenizer.vocab.get("<bos>", 2)
+                    eos_id = tokenizer.vocab.get("<eos>", 3)
+                    full_sequence = [bos_id] + tokens[:seq_length-2] + [eos_id]
+                    
+                    # Pad to exact length
+                    if len(full_sequence) < seq_length + 1:
+                        full_sequence.extend([self.pad_token_id] * (seq_length + 1 - len(full_sequence)))
+                    else:
+                        full_sequence = full_sequence[:seq_length + 1]
+                    
+                    self.sequences.append(full_sequence)
+                    
+                except Exception as e:
+                    continue
+            
+            # Cleanup chunk
+            del chunk
+            if i % 500 == 0:
+                gc.collect()
+        
+        if not self.sequences:
+            raise ValueError("No valid sequences created!")
+        
+        logger.info(f"Created {len(self.sequences):,} sequences")
+    
+    def __len__(self):
+        return len(self.sequences)
+    
+    def __getitem__(self, idx):
+        sequence = self.sequences[idx]
+        input_ids = torch.tensor(sequence[:-1], dtype=torch.long)
+        target_ids = torch.tensor(sequence[1:], dtype=torch.long)
+        return input_ids, target_ids
+
 class ModelManager:
-    """Model manager for saving and loading models."""
+    """Ultra-lightweight model manager."""
     
     def __init__(self, save_dir):
         self.save_dir = Path(save_dir)
         self.save_dir.mkdir(exist_ok=True)
     
     def save_model(self, model, tokenizer, metadata, optimizer=None, scheduler=None, force_cpu_save=True):
-        """Save model with proper error handling - ALWAYS force CPU save to prevent OOM."""
+        """Save model with ultra-aggressive memory management."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         model_id = f"model_{timestamp}"
         model_path = self.save_dir / model_id
         model_path.mkdir(exist_ok=True)
         
         try:
-            # ALWAYS save to CPU to prevent memory issues
-            model_state = {k: v.cpu() for k, v in model.state_dict().items()}
-            torch.save(model_state, model_path / "model.pth")
+            # ALWAYS move to CPU and clean up GPU memory
+            with ultra_memory_cleanup():
+                # Move model to CPU temporarily
+                original_device = next(model.parameters()).device
+                model.cpu()
+                
+                # Save state dict with CPU tensors
+                state_dict = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+                torch.save(state_dict, model_path / "model.pth")
+                del state_dict
+                
+                # Move model back
+                model.to(original_device)
             
-            # Move model back to device
-            model.to(device)
-            
-            # Save tokenizer
+            # Save tokenizer data
             tokenizer_data = {
                 'vocab': tokenizer.vocab,
                 'id_to_token': tokenizer.id_to_token,
@@ -451,7 +557,11 @@ class ModelManager:
                 json.dump(tokenizer_data, f, indent=2)
             
             # Save metadata
-            metadata_dict = asdict(metadata) if hasattr(metadata, '__dict__') else metadata.__dict__
+            if hasattr(metadata, '__dict__'):
+                metadata_dict = asdict(metadata) if hasattr(metadata, '__dataclass_fields__') else metadata.__dict__
+            else:
+                metadata_dict = metadata
+                
             with open(model_path / "metadata.json", 'w') as f:
                 json.dump(metadata_dict, f, indent=2, default=str)
             
@@ -461,187 +571,63 @@ class ModelManager:
         except Exception as e:
             logger.error(f"Error saving model: {e}")
             return None
-    
-    def print_model_summary(self):
-        """Print summary of saved models."""
-        models = list(self.save_dir.glob("model_*"))
-        logger.info(f"Found {len(models)} saved models in {self.save_dir}")
-        for model_path in sorted(models):
-            logger.info(f"  - {model_path.name}")
 
-@contextmanager
-def memory_cleanup():
-    """Context manager for aggressive memory cleanup."""
-    try:
-        yield
-    finally:
-        # Clear Python garbage
-        gc.collect()
-        
-        # Clear CUDA cache
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            torch.cuda.synchronize()
-            torch.cuda.ipc_collect()  # Clear IPC cache too
-        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-            torch.mps.empty_cache()
-
-def get_memory_usage():
-    """Get current memory usage."""
-    if torch.cuda.is_available():
-        allocated = torch.cuda.memory_allocated() / 1024**3
-        cached = torch.cuda.memory_reserved() / 1024**3
-        total = torch.cuda.get_device_properties(0).total_memory / 1024**3
-        return f"CUDA: {allocated:.2f}GB allocated, {cached:.2f}GB cached, {total:.1f}GB total"
-    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-        allocated = torch.mps.current_allocated_memory() / 1024**3
-        return f"MPS: {allocated:.2f}GB allocated"
-    else:
-        return "CPU mode"
-
-def setup_device():
-    """Setup device with proper memory management."""
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
-        logger.info(f"Using device: CUDA ({torch.cuda.get_device_name()})")
-        # Set memory fraction to prevent OOM
-        torch.cuda.set_per_process_memory_fraction(0.85)  # Leave 15% buffer
-        torch.cuda.empty_cache()
-    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-        device = torch.device("mps")
-        logger.info("Using device: MPS (Apple Silicon)")
-        torch.mps.empty_cache()
-    else:
-        device = torch.device("cpu")
-        logger.info("Using device: CPU")
-        torch.set_num_threads(min(4, os.cpu_count() or 1))
+def get_ultra_low_vram_config():
+    """Ultra-conservative configuration for minimal VRAM usage with new optimizations."""
+    if device.type == 'cuda':
+        model_config = ModelConfig(
+            vocab_size=20000,   # Extremely small vocabulary
+            hidden_size=2048,   # Very small hidden size
+            num_layers=24,      # Minimal layers
+            num_heads=16,       # Fewer heads
+            seq_length=1024,     # Much shorter sequences
+            dropout=0.1,
+            gradient_checkpointing=True  # NEW: Enable gradient checkpointing
+        )
+        batch_size = 1      # Single batch
+        max_samples = 80000  # Very small dataset
+    elif device.type == 'mps':
+        model_config = ModelConfig(
+            vocab_size=1500,
+            hidden_size=96,
+            num_layers=2,
+            num_heads=4,
+            seq_length=48,
+            dropout=0.1,
+            gradient_checkpointing=True
+        )
+        batch_size = 1
+        max_samples = 1000
+    else:  # CPU
+        model_config = ModelConfig(
+            vocab_size=1000,
+            hidden_size=64,
+            num_layers=2,
+            num_heads=2,
+            seq_length=32,
+            dropout=0.1,
+            gradient_checkpointing=False  # Don't use on CPU
+        )
+        batch_size = 2
+        max_samples = 500
     
-    return device
-
-device = setup_device()
-
-class StableDataset(Dataset):
-    """Fixed dataset with proper sequence creation."""
+    training_config = TrainingConfig(
+        learning_rate=1e-3,  # Higher LR for faster convergence
+        weight_decay=0.01,
+        batch_size=batch_size,
+        gradient_accumulation_steps=16,  # Large accumulation to maintain effective batch size
+        max_epochs=20,  # Fewer epochs
+        warmup_ratio=0.05,  # Less warmup
+        max_grad_norm=0.5,   # Smaller gradient norm
+        use_mixed_precision=AMP_AVAILABLE and device.type == 'cuda',  # NEW: Enable mixed precision
+        dataloader_num_workers=0,  # NEW: No multiprocessing
+        pin_memory=False  # NEW: Don't pin memory
+    )
     
-    def __init__(self, texts: List[str], tokenizer, seq_length: int, max_sequences: int = 10000):
-        self.tokenizer = tokenizer
-        self.seq_length = seq_length
-        
-        logger.info(f"Creating dataset with seq_length={seq_length}...")
-        
-        vocab_size = tokenizer.vocab_size()
-        pad_token_id = tokenizer.vocab.get("<pad>", 0)
-        bos_token_id = tokenizer.vocab.get("<bos>", 2)
-        eos_token_id = tokenizer.vocab.get("<eos>", 3)
-        
-        logger.info(f"Tokenizer vocab size: {vocab_size}")
-        logger.info(f"Special tokens - PAD: {pad_token_id}, BOS: {bos_token_id}, EOS: {eos_token_id}")
-        
-        self.sequences = []
-        processed_texts = 0
-        
-        for text_idx, text in enumerate(texts):
-            if len(self.sequences) >= max_sequences:
-                break
-                
-            if not text or not text.strip():
-                continue
-            
-            try:
-                # Tokenize text
-                text_clean = text.strip()
-                tokens = tokenizer.encode(text_clean)
-                
-                if not tokens or len(tokens) < 5:
-                    continue
-                
-                # Add special tokens
-                full_sequence = [bos_token_id] + tokens + [eos_token_id]
-                
-                # Validate all tokens are in range
-                valid_tokens = []
-                for token in full_sequence:
-                    if 0 <= token < vocab_size:
-                        valid_tokens.append(token)
-                    else:
-                        valid_tokens.append(tokenizer.vocab.get("<unk>", 1))
-                
-                # Create training sequences
-                if len(valid_tokens) > seq_length + 1:
-                    # Multiple sequences from long text
-                    for start in range(0, len(valid_tokens) - seq_length, seq_length // 2):
-                        if start + seq_length + 1 <= len(valid_tokens):
-                            sequence = valid_tokens[start:start + seq_length + 1]
-                            if len(sequence) == seq_length + 1:
-                                self.sequences.append(sequence)
-                                
-                                if len(self.sequences) >= max_sequences:
-                                    break
-                elif len(valid_tokens) >= seq_length + 1:
-                    # Exact fit or pad
-                    sequence = valid_tokens[:seq_length + 1]
-                    if len(sequence) == seq_length + 1:
-                        self.sequences.append(sequence)
-                else:
-                    # Pad short sequences
-                    sequence = valid_tokens + [pad_token_id] * (seq_length + 1 - len(valid_tokens))
-                    if len(sequence) == seq_length + 1:
-                        self.sequences.append(sequence)
-                
-                processed_texts += 1
-                
-                if processed_texts % 1000 == 0:
-                    logger.info(f"Processed {processed_texts} texts, created {len(self.sequences)} sequences")
-                    
-            except Exception as e:
-                logger.warning(f"Error processing text {text_idx}: {e}")
-                continue
-        
-        if not self.sequences:
-            raise ValueError("No valid sequences created! Check your data and tokenizer.")
-        
-        self.pad_token_id = pad_token_id
-        self.vocab_size = vocab_size
-        
-        logger.info(f"Final dataset: {len(self.sequences):,} sequences from {processed_texts} texts")
-        
-        # Validate all sequences
-        invalid_sequences = 0
-        for i, seq in enumerate(self.sequences):
-            if len(seq) != seq_length + 1:
-                invalid_sequences += 1
-            elif any(token < 0 or token >= vocab_size for token in seq):
-                invalid_sequences += 1
-        
-        if invalid_sequences > 0:
-            raise ValueError(f"Found {invalid_sequences} invalid sequences!")
-        
-        logger.info("✅ All sequences validated successfully")
-        
-        # Print sample sequences for debugging
-        logger.info("Sample sequences:")
-        for i in range(min(3, len(self.sequences))):
-            seq = self.sequences[i]
-            input_part = seq[:-1]
-            target_part = seq[1:]
-            logger.info(f"  Seq {i}: input={input_part[:10]}..., target={target_part[:10]}...")
-    
-    def __len__(self):
-        return len(self.sequences)
-    
-    def __getitem__(self, idx):
-        if idx >= len(self.sequences):
-            raise IndexError(f"Index {idx} out of range for dataset of size {len(self.sequences)}")
-            
-        sequence = self.sequences[idx]
-        
-        input_ids = torch.tensor(sequence[:-1], dtype=torch.long)
-        target_ids = torch.tensor(sequence[1:], dtype=torch.long)
-        
-        return input_ids, target_ids
+    return model_config, training_config, max_samples
 
 def load_and_process_data(data_path: str, max_samples: Optional[int] = None) -> List[str]:
-    """Load OASST1 data with better processing."""
+    """Load data with ultra-minimal processing."""
     data_path = Path(data_path)
     if not data_path.exists():
         raise FileNotFoundError(f"Data file not found: {data_path}")
@@ -664,22 +650,18 @@ def load_and_process_data(data_path: str, max_samples: Optional[int] = None) -> 
                     
                     record = json.loads(line)
                     
-                    if record.get("deleted", False):
-                        continue
-                    
-                    if record.get("lang") != "en":
+                    if record.get("deleted", False) or record.get("lang") != "en":
                         continue
                     
                     text = record.get("text", "").strip()
-                    if not text:
+                    if not text or len(text.split()) < 3:
                         continue
                     
-                    # Better length filtering
+                    # Much more aggressive length filtering
                     word_count = len(text.split())
-                    if word_count < 5 or word_count > 150:
+                    if word_count < 3 or word_count > 50:  # Much shorter texts
                         continue
                     
-                    # Add role formatting
                     role = record.get("role", "").lower()
                     if role == "prompter":
                         formatted_text = f"<user> {text}"
@@ -691,12 +673,12 @@ def load_and_process_data(data_path: str, max_samples: Optional[int] = None) -> 
                     texts.append(formatted_text)
                     processed_count += 1
                     
-                    if processed_count % 1000 == 0:
-                        logger.info(f"Processed {processed_count:,} samples...")
-                    
                 except (json.JSONDecodeError, KeyError):
                     continue
-    
+        
+        # Immediate cleanup
+        gc.collect()
+        
     except Exception as e:
         logger.error(f"Error loading data: {e}")
         raise
@@ -704,8 +686,159 @@ def load_and_process_data(data_path: str, max_samples: Optional[int] = None) -> 
     logger.info(f"Loaded {len(texts):,} texts")
     return texts
 
+# NEW: Enhanced training loop with mixed precision
+def train_epoch_ultra_efficient(model, dataloader, criterion, optimizer, scheduler, epoch, 
+                               gradient_accumulation_steps=1, max_grad_norm=1.0, 
+                               use_mixed_precision=False, scaler=None):
+    """Ultra-efficient training loop with mixed precision and aggressive memory management."""
+    model.train()
+    total_loss = 0.0
+    total_correct = 0
+    total_tokens = 0
+    num_batches = 0
+    accumulation_count = 0
+    
+    optimizer.zero_grad()
+    
+    logger.info(f"Starting ultra-efficient epoch {epoch} with {len(dataloader)} batches")
+    logger.info(f"Mixed precision: {use_mixed_precision}")
+    
+    for batch_idx, (inputs, targets) in enumerate(dataloader):
+        try:
+            # Ultra-aggressive memory cleanup every 5 batches
+            if batch_idx > 0 and batch_idx % 5 == 0:
+                with ultra_memory_cleanup():
+                    pass
+            
+            # Skip empty batches
+            if inputs.numel() == 0 or targets.numel() == 0:
+                continue
+                
+            inputs = inputs.to(device, non_blocking=True)
+            targets = targets.to(device, non_blocking=True)
+            
+            # Validate inputs
+            if torch.isnan(inputs).any() or torch.isinf(inputs).any():
+                del inputs, targets
+                continue
+            
+            # Forward pass with optional mixed precision
+            if use_mixed_precision and scaler is not None:
+                with autocast():
+                    logits = model(inputs)
+                    loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
+            else:
+                logits = model(inputs)
+                loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
+            
+            # Check for invalid loss
+            if torch.isnan(loss) or torch.isinf(loss):
+                del inputs, targets, logits, loss
+                continue
+            
+            # Scale loss and backward
+            scaled_loss = loss / gradient_accumulation_steps
+            
+            if use_mixed_precision and scaler is not None:
+                scaler.scale(scaled_loss).backward()
+            else:
+                scaled_loss.backward()
+            
+            # Immediate cleanup of forward pass tensors
+            with torch.no_grad():
+                predictions = torch.argmax(logits, dim=-1)
+                pad_mask = (targets != criterion.ignore_index)
+                correct = ((predictions == targets) & pad_mask).sum().item()
+                valid_tokens = pad_mask.sum().item()
+                
+                total_correct += correct
+                total_tokens += valid_tokens
+                total_loss += loss.item()
+                num_batches += 1
+            
+            # Clean up all tensors immediately
+            del logits, predictions, pad_mask, scaled_loss, inputs, targets
+            
+            accumulation_count += 1
+            
+            # Gradient step
+            if accumulation_count >= gradient_accumulation_steps:
+                if use_mixed_precision and scaler is not None:
+                    # Mixed precision gradient step
+                    if max_grad_norm > 0:
+                        scaler.unscale_(optimizer)
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    # Regular gradient step
+                    if max_grad_norm > 0:
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+                    optimizer.step()
+                
+                scheduler.step()
+                optimizer.zero_grad()
+                accumulation_count = 0
+                
+                # Extra cleanup after optimizer step
+                with ultra_memory_cleanup():
+                    pass
+            
+            # Logging every 5 batches
+            if batch_idx % 5 == 0 and num_batches > 0:
+                current_loss = total_loss / num_batches
+                current_acc = total_correct / max(total_tokens, 1)
+                current_lr = optimizer.param_groups[0]['lr']
+                
+                logger.info(f"Epoch {epoch} | Batch {batch_idx} | "
+                           f"Loss: {current_loss:.4f} | Acc: {current_acc:.3f} | "
+                           f"LR: {current_lr:.6f}")
+            
+            del loss  # Final cleanup
+            
+        except RuntimeError as e:
+            if "out of memory" in str(e).lower():
+                logger.warning(f"OOM at batch {batch_idx}, skipping...")
+                optimizer.zero_grad()
+                
+                # Ultra-aggressive cleanup
+                for var_name in ['inputs', 'targets', 'logits', 'loss', 'predictions']:
+                    if var_name in locals():
+                        del locals()[var_name]
+                
+                with ultra_memory_cleanup():
+                    pass
+                continue
+            else:
+                raise e
+        except Exception as e:
+            logger.warning(f"Error at batch {batch_idx}: {e}")
+            continue
+    
+    # Final gradient step if needed
+    if accumulation_count > 0:
+        if use_mixed_precision and scaler is not None:
+            if max_grad_norm > 0:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            if max_grad_norm > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+            optimizer.step()
+        optimizer.zero_grad()
+    
+    if num_batches == 0:
+        return float('inf'), 0.0
+    
+    avg_loss = total_loss / num_batches
+    avg_acc = total_correct / max(total_tokens, 1)
+    
+    return avg_loss, avg_acc
+
 class ImprovedScheduler:
-    """Improved learning rate scheduler with warmup and cosine decay."""
+    """Ultra-simple scheduler."""
     
     def __init__(self, optimizer, warmup_steps: int, total_steps: int, min_lr_ratio: float = 0.1):
         self.optimizer = optimizer
@@ -719,10 +852,8 @@ class ImprovedScheduler:
         self.current_step += 1
         
         if self.current_step <= self.warmup_steps:
-            # Linear warmup
             lr = self.base_lr * self.current_step / self.warmup_steps
         else:
-            # Cosine decay
             progress = (self.current_step - self.warmup_steps) / (self.total_steps - self.warmup_steps)
             progress = min(progress, 1.0)
             lr = self.min_lr + (self.base_lr - self.min_lr) * 0.5 * (1 + math.cos(math.pi * progress))
@@ -732,230 +863,168 @@ class ImprovedScheduler:
         
         return lr
 
+def get_memory_usage():
+    """Get current memory usage with enhanced reporting."""
+    if torch.cuda.is_available():
+        allocated = torch.cuda.memory_allocated() / 1024**3
+        cached = torch.cuda.memory_reserved() / 1024**3
+        max_allocated = torch.cuda.max_memory_allocated() / 1024**3
+        return f"GPU: {allocated:.2f}GB allocated, {cached:.2f}GB cached, {max_allocated:.2f}GB peak"
+    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        allocated = torch.mps.current_allocated_memory() / 1024**3
+        return f"MPS: {allocated:.2f}GB allocated"
+    else:
+        return "CPU mode"
+
 def count_parameters(model):
     """Count model parameters."""
     total = sum(p.numel() for p in model.parameters())
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     return total, trainable
 
-def train_epoch(model, dataloader, criterion, optimizer, scheduler, epoch, 
-                gradient_accumulation_steps=1, max_grad_norm=1.0):
-    """FIXED training loop with aggressive OOM prevention."""
-    model.train()
+def evaluate_model_minimal(model, dataloader, criterion, max_batches=3, use_mixed_precision=False):
+    """Ultra-minimal evaluation with optional mixed precision."""
+    model.eval()
     total_loss = 0.0
     total_correct = 0
     total_tokens = 0
     num_batches = 0
-    accumulation_count = 0
     
-    optimizer.zero_grad()
-    
-    logger.info(f"Starting epoch {epoch} with {len(dataloader)} batches")
-    
-    for batch_idx, (inputs, targets) in enumerate(dataloader):
-        try:
-            # AGGRESSIVE memory management every 25 batches
-            if batch_idx > 0 and batch_idx % 25 == 0:
-                with memory_cleanup():
-                    pass
-                logger.info(f"Memory cleanup at batch {batch_idx}: {get_memory_usage()}")
-            
-            # Ensure we have valid data
-            if inputs.numel() == 0 or targets.numel() == 0:
-                logger.warning(f"Empty batch at index {batch_idx}, skipping")
-                continue
+    try:
+        with torch.no_grad():
+            for batch_idx, (inputs, targets) in enumerate(dataloader):
+                if batch_idx >= max_batches:
+                    break
                 
-            inputs = inputs.to(device, non_blocking=True)
-            targets = targets.to(device, non_blocking=True)
-            
-            # Validate input data
-            if torch.isnan(inputs).any() or torch.isinf(inputs).any():
-                logger.warning(f"Invalid inputs at batch {batch_idx}, skipping")
-                continue
-            
-            # Forward pass with memory-efficient autocast
-            with torch.autocast(device_type=device.type, enabled=(device.type == 'cuda')):
-                logits = model(inputs)
-                
-                # Validate logits
-                if torch.isnan(logits).any() or torch.isinf(logits).any():
-                    logger.warning(f"Invalid logits at batch {batch_idx}, skipping")
-                    optimizer.zero_grad()
+                try:
+                    inputs = inputs.to(device)
+                    targets = targets.to(device)
+                    
+                    # Forward pass with optional mixed precision
+                    if use_mixed_precision and AMP_AVAILABLE:
+                        with autocast():
+                            logits = model(inputs)
+                            loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
+                    else:
+                        logits = model(inputs)
+                        loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
+                    
+                    # Quick accuracy calculation
+                    predictions = torch.argmax(logits, dim=-1)
+                    pad_mask = (targets != criterion.ignore_index)
+                    correct = ((predictions == targets) & pad_mask).sum().item()
+                    valid_tokens = pad_mask.sum().item()
+                    
+                    total_loss += loss.item()
+                    total_correct += correct
+                    total_tokens += valid_tokens
+                    num_batches += 1
+                    
+                    # Immediate cleanup
+                    del logits, loss, predictions, pad_mask, inputs, targets
+                    
+                except Exception as e:
                     continue
                 
-                # Calculate loss
-                flat_logits = logits.view(-1, logits.size(-1))
-                flat_targets = targets.view(-1)
-                loss = criterion(flat_logits, flat_targets)
-            
-            # Check for invalid loss
-            if torch.isnan(loss) or torch.isinf(loss) or loss.item() < 0:
-                logger.warning(f"Invalid loss at batch {batch_idx}: {loss.item()}, skipping")
-                optimizer.zero_grad()
-                continue
-            
-            # Scale loss for gradient accumulation
-            scaled_loss = loss / gradient_accumulation_steps
-            
-            # Backward pass
-            scaled_loss.backward()
-            
-            # Clear intermediate tensors immediately
-            del logits, flat_logits, flat_targets, scaled_loss
-            
-            accumulation_count += 1
-            
-            # Gradient step when accumulation is complete
-            if accumulation_count >= gradient_accumulation_steps:
-                # Gradient clipping
-                if max_grad_norm > 0:
-                    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
-                    
-                    # Check for gradient explosion
-                    if grad_norm > max_grad_norm * 10:
-                        logger.warning(f"Very large gradients: {grad_norm:.2f}, reducing LR")
-                        for param_group in optimizer.param_groups:
-                            param_group['lr'] *= 0.5
-                
-                optimizer.step()
-                current_lr = scheduler.step()
-                optimizer.zero_grad()
-                accumulation_count = 0
-            
-            # Calculate accuracy efficiently
-            with torch.no_grad():
-                # Recreate logits for accuracy (memory efficient)
-                with torch.autocast(device_type=device.type, enabled=(device.type == 'cuda')):
-                    pred_logits = model(inputs)
-                predictions = torch.argmax(pred_logits, dim=-1)
-                del pred_logits  # Clear immediately
-                
-                # Only count non-padding tokens
-                pad_mask = (targets != criterion.ignore_index)
-                correct = ((predictions == targets) & pad_mask).sum().item()
-                valid_tokens = pad_mask.sum().item()
-                
-                del predictions, pad_mask  # Clear tensors
-                
-                total_correct += correct
-                total_tokens += valid_tokens
-            
-            # Statistics
-            total_loss += loss.item()
-            num_batches += 1
-            
-            # Clear loss tensor
-            del loss
-            
-            # Detailed logging every 10 batches
-            if batch_idx % 10 == 0:
-                current_loss = total_loss / max(num_batches, 1)
-                current_acc = total_correct / max(total_tokens, 1)
-                current_lr = optimizer.param_groups[0]['lr']
-                
-                logger.info(f"Epoch {epoch} | Batch {batch_idx}/{len(dataloader)} | "
-                           f"Loss: {current_loss:.4f} | Acc: {current_acc:.3f} ({current_acc*100:.1f}%) | "
-                           f"LR: {current_lr:.6f} | Tokens: {total_tokens}")
-                logger.info(f"Memory: {get_memory_usage()}")
-            
-        except RuntimeError as e:
-            error_msg = str(e).lower()
-            if "out of memory" in error_msg:
-                logger.warning(f"OOM at batch {batch_idx}, clearing cache...")
-                optimizer.zero_grad()
-                
-                # Aggressive cleanup
-                if 'inputs' in locals():
-                    del inputs
-                if 'targets' in locals():
-                    del targets
-                if 'logits' in locals():
-                    del logits
-                if 'loss' in locals():
-                    del loss
-                
-                with memory_cleanup():
+                # Memory cleanup after each batch
+                with ultra_memory_cleanup():
                     pass
-                
-                # Skip this batch and continue
-                continue
-            else:
-                logger.error(f"Runtime error at batch {batch_idx}: {e}")
-                raise e
-        except Exception as e:
-            logger.error(f"Unexpected error at batch {batch_idx}: {e}")
-            # Clean up any remaining tensors
-            for var_name in ['inputs', 'targets', 'logits', 'loss']:
-                if var_name in locals():
-                    del locals()[var_name]
-            continue
     
-    # Final gradient step if needed
-    if accumulation_count > 0:
-        if max_grad_norm > 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
-        optimizer.step()
-        optimizer.zero_grad()
+    finally:
+        model.train()
     
-    # Calculate final metrics
     if num_batches == 0:
-        logger.error("No batches processed! Check your dataset and dataloader.")
-        return float('inf'), 0.0
+        return {'avg_loss': float('inf'), 'accuracy': 0.0, 'perplexity': float('inf')}
     
     avg_loss = total_loss / num_batches
-    avg_acc = total_correct / max(total_tokens, 1)
+    accuracy = total_correct / max(total_tokens, 1)
+    perplexity = math.exp(min(avg_loss, 10))
     
-    logger.info(f"Epoch {epoch} completed: {num_batches} batches, {total_tokens} tokens processed")
-    
-    return avg_loss, avg_acc
+    return {
+        'avg_loss': avg_loss,
+        'accuracy': accuracy,
+        'perplexity': perplexity
+    }
 
-def get_improved_config():
-    """Get improved configuration with smaller batch sizes to prevent OOM."""
-    if device.type == 'cuda':
-        model_config = ModelConfig(
-            vocab_size=8000,   # Drastically reduced from 80000
-            hidden_size=512,   # Reduced from 1008
-            num_layers=6,      # Reduced from 12
-            num_heads=8,       # Reduced from 12
-            seq_length=512,    # Reduced from 1024
-            dropout=0.1
-        )
-        batch_size = 6  # Keep at 1
-        max_samples = 20000  # Reduced from 80000
-    elif device.type == 'mps':
-        model_config = ModelConfig(
-            vocab_size=4000,
-            hidden_size=256,
-            num_layers=4,
-            num_heads=4,
-            seq_length=128,
-            dropout=0.1
-        )
-        batch_size = 6  # REDUCED
-        max_samples = 5000
-    else:
-        model_config = ModelConfig(
-            vocab_size=2000,
-            hidden_size=128,
-            num_layers=3,
-            num_heads=4,
-            seq_length=64,
-            dropout=0.1
-        )
-        batch_size = 4
-        max_samples = 2000
+def generate_sample_text_minimal(model, tokenizer, prompt="<user> Hello", max_length=20, use_mixed_precision=False):
+    """Minimal text generation with optional mixed precision."""
+    model.eval()
     
-    training_config = TrainingConfig(
-        learning_rate=3e-4,
-        weight_decay=0.01,
-        batch_size=batch_size,
-        gradient_accumulation_steps=4,  # INCREASED to maintain effective batch size
-        max_epochs=10,
-        warmup_ratio=0.1,
-        max_grad_norm=1.0
-    )
+    try:
+        with torch.no_grad():
+            input_ids = torch.tensor(tokenizer.encode(prompt), dtype=torch.long).unsqueeze(0).to(device)
+            generated = input_ids.clone()
+            
+            for _ in range(max_length):
+                if generated.size(1) >= model.config.seq_length:
+                    break
+                
+                if use_mixed_precision and AMP_AVAILABLE:
+                    with autocast():
+                        logits = model(generated)
+                else:
+                    logits = model(generated)
+                
+                next_token_logits = logits[0, -1, :]
+                next_token = torch.argmax(next_token_logits, dim=-1)
+                
+                generated = torch.cat([generated, next_token.unsqueeze(0).unsqueeze(0)], dim=1)
+                
+                # Stop on EOS
+                if next_token.item() == tokenizer.vocab.get("<eos>", -1):
+                    break
+                
+                # Cleanup
+                del logits, next_token_logits
+            
+            response_ids = generated[0][input_ids.size(1):].tolist()
+            response = tokenizer.decode(response_ids)
+            
+            # Cleanup
+            del input_ids, generated
+            
+            return response.strip()
     
-    return model_config, training_config, max_samples
+    except Exception as e:
+        return "Generation failed"
+    finally:
+        model.train()
+
+def check_environment():
+    """Enhanced environment check with optimization features."""
+    logger.info("🔍 Checking environment...")
+    
+    try:
+        logger.info(f"Python version: {sys.version}")
+        logger.info(f"PyTorch version: {torch.__version__}")
+        logger.info(f"CUDA available: {torch.cuda.is_available()}")
+        logger.info(f"Mixed Precision available: {AMP_AVAILABLE}")
+        logger.info(f"Gradient Checkpointing available: {CHECKPOINT_AVAILABLE}")
+        
+        if torch.cuda.is_available():
+            logger.info(f"CUDA device count: {torch.cuda.device_count()}")
+            props = torch.cuda.get_device_properties(0)
+            logger.info(f"GPU: {props.name} ({props.total_memory / 1024**3:.1f} GB)")
+            
+            # Check for Tensor Core support (for mixed precision)
+            major, minor = props.major, props.minor
+            if major >= 7 or (major == 6 and minor >= 0):
+                logger.info("✅ Tensor Cores supported (good for mixed precision)")
+            else:
+                logger.info("⚠️ Limited Tensor Core support")
+        
+        # Check for required files
+        required_files = ["oasst1_data/oasst1_train.jsonl"]
+        for file_path in required_files:
+            path = Path(file_path)
+            exists = path.exists()
+            logger.info(f"Required file {file_path}: {'✅ EXISTS' if exists else '❌ MISSING'}")
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"❌ Environment check failed: {e}")
+        return False
 
 def validate_training_setup():
     """Validate required files exist."""
@@ -968,296 +1037,148 @@ def validate_training_setup():
     
     return True
 
-def generate_sample_text(model, tokenizer, prompt="<user> Hello", max_length=50):
-    """Generate sample text for evaluation."""
-    model.eval()
-    
-    try:
-        with torch.no_grad():
-            input_ids = torch.tensor(tokenizer.encode(prompt), dtype=torch.long).unsqueeze(0).to(device)
-            generated = input_ids.clone()
-            
-            for _ in range(max_length):
-                if generated.size(1) >= model.config.seq_length:
-                    break
-                
-                logits = model(generated)
-                
-                if torch.isnan(logits).any() or torch.isinf(logits).any():
-                    break
-                
-                next_token_logits = logits[0, -1, :]
-                next_token_probs = F.softmax(next_token_logits / 0.8, dim=-1)
-                
-                if torch.isnan(next_token_probs).any():
-                    break
-                
-                next_token = torch.multinomial(next_token_probs, 1)
-                generated = torch.cat([generated, next_token.unsqueeze(0)], dim=1)
-                
-                # Stop on EOS
-                if next_token.item() == tokenizer.vocab.get("<eos>", -1):
-                    break
-            
-            response_ids = generated[0][input_ids.size(1):].tolist()
-            response = tokenizer.decode(response_ids)
-            return response.strip()
-    
-    except Exception as e:
-        logger.warning(f"Error generating sample: {e}")
-        return "Generation failed"
-    finally:
-        model.train()
+# NEW: Additional memory optimization utilities
+def optimize_cuda_settings():
+    """Apply additional CUDA optimizations."""
+    if torch.cuda.is_available():
+        # Enable memory efficiency optimizations
+        torch.backends.cudnn.benchmark = False  # Disable for consistent memory usage
+        torch.backends.cudnn.deterministic = True  # For reproducibility
+        
+        # Set memory growth to avoid fragmentation
+        os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:128'
+        
+        logger.info("CUDA optimizations applied")
 
-def evaluate_model(model, dataloader, criterion, max_batches=5):
-    """FIXED evaluation with aggressive memory management."""
-    model.eval()
-    total_loss = 0.0
-    total_correct = 0
-    total_tokens = 0
-    num_batches = 0
-    
-    logger.info(f"Starting evaluation with max {max_batches} batches from {len(dataloader)} available")
-    
-    try:
-        with torch.no_grad():
-            for batch_idx, (inputs, targets) in enumerate(dataloader):
-                if batch_idx >= max_batches:
-                    break
-                
-                try:
-                    if inputs.numel() == 0 or targets.numel() == 0:
-                        continue
-                        
-                    inputs = inputs.to(device)
-                    targets = targets.to(device)
-                    
-                    if torch.isnan(inputs).any() or torch.isinf(inputs).any():
-                        continue
-                    
-                    # Memory-efficient forward pass
-                    with torch.autocast(device_type=device.type, enabled=(device.type == 'cuda')):
-                        logits = model(inputs)
-                    
-                    if torch.isnan(logits).any() or torch.isinf(logits).any():
-                        del logits
-                        continue
-                    
-                    loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
-                    
-                    if torch.isnan(loss) or torch.isinf(loss):
-                        del logits, loss
-                        continue
-                    
-                    # Calculate accuracy for non-padding tokens
-                    predictions = torch.argmax(logits, dim=-1)
-                    pad_mask = (targets != criterion.ignore_index)
-                    correct = ((predictions == targets) & pad_mask).sum().item()
-                    valid_tokens = pad_mask.sum().item()
-                    
-                    total_loss += loss.item()
-                    total_correct += correct
-                    total_tokens += valid_tokens
-                    num_batches += 1
-                    
-                    logger.info(f"Eval batch {batch_idx}: loss={loss.item():.4f}, acc={correct/max(valid_tokens,1):.3f}")
-                    
-                    # Clear all tensors immediately
-                    del logits, loss, predictions, pad_mask, inputs, targets
-                    
-                except Exception as e:
-                    logger.warning(f"Error in eval batch {batch_idx}: {e}")
-                    # Clean up any remaining tensors
-                    for var_name in ['inputs', 'targets', 'logits', 'loss', 'predictions']:
-                        if var_name in locals():
-                            del locals()[var_name]
-                    continue
-                
-                # Memory cleanup after each eval batch
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-    
-    except Exception as e:
-        logger.error(f"Error during evaluation: {e}")
-    
-    finally:
-        model.train()
-        # Final cleanup
-        with memory_cleanup():
-            pass
-    
-    if num_batches == 0:
-        logger.warning("No evaluation batches processed!")
-        return {'avg_loss': float('inf'), 'accuracy': 0.0, 'perplexity': float('inf')}
-    
-    avg_loss = total_loss / num_batches
-    accuracy = total_correct / max(total_tokens, 1)
-    perplexity = math.exp(min(avg_loss, 20)) if avg_loss < float('inf') else float('inf')
-    
-    logger.info(f"Evaluation completed: {num_batches} batches, {total_tokens} tokens")
-    
-    return {
-        'avg_loss': avg_loss,
-        'accuracy': accuracy,
-        'perplexity': perplexity
-    }
+def create_optimized_dataloader(dataset, batch_size, training_config, shuffle=True):
+    """Create memory-optimized dataloader."""
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=training_config.dataloader_num_workers,
+        pin_memory=training_config.pin_memory,
+        drop_last=True,
+        persistent_workers=False,
+        prefetch_factor=2 if training_config.dataloader_num_workers > 0 else 2
+    )
 
 def main():
-    """Main training function with improved stability."""
-    logger.info("🚀 Starting Improved OASST1 Training")
-    logger.info("=" * 80)
+    """Ultra-low VRAM training main function with enhanced optimizations."""
+    logger.info("🚀 Starting ULTRA LOW VRAM Training with Enhanced Optimizations")
+    logger.info("=" * 60)
     
     # Environment check
-    if not check_environment():
+    if not check_environment() or not validate_training_setup():
         return 1
     
-    if not validate_training_setup():
-        return 1
+    # Apply CUDA optimizations
+    optimize_cuda_settings()
     
-    # Configuration
-    model_config, training_config, max_samples = get_improved_config()
+    # Ultra-conservative configuration
+    model_config, training_config, max_samples = get_ultra_low_vram_config()
     
-    logger.info(f"Configuration:")
+    logger.info(f"Ultra-low VRAM Configuration:")
     logger.info(f"  Model: {model_config.hidden_size}x{model_config.num_layers}")
     logger.info(f"  Vocab size: {model_config.vocab_size}")
     logger.info(f"  Sequence length: {model_config.seq_length}")
     logger.info(f"  Batch size: {training_config.batch_size}")
-    logger.info(f"  Learning rate: {training_config.learning_rate}")
+    logger.info(f"  Gradient accumulation: {training_config.gradient_accumulation_steps}")
+    logger.info(f"  Mixed precision: {training_config.use_mixed_precision}")
+    logger.info(f"  Gradient checkpointing: {model_config.gradient_checkpointing}")
     logger.info(f"  Max samples: {max_samples}")
     
     model_manager = ModelManager("models")
     
+    # Initialize mixed precision scaler
+    scaler = None
+    if training_config.use_mixed_precision and AMP_AVAILABLE:
+        scaler = GradScaler()
+        logger.info("Mixed precision scaler initialized")
+    
     try:
-        # Load data
-        logger.info("📚 Loading data...")
+        # Load minimal data
+        logger.info("📚 Loading minimal dataset...")
         texts = load_and_process_data("oasst1_data/oasst1_train.jsonl", max_samples)
         
         if len(texts) == 0:
             raise ValueError("No training data loaded!")
         
-        logger.info(f"Loaded {len(texts):,} texts")
-        
-        # Create and train tokenizer
-        logger.info("🔤 Training tokenizer...")
+        # Create tiny tokenizer
+        logger.info("🔤 Training ultra-small tokenizer...")
         tokenizer = ImprovedTokenizer()
         
-        # Use sample for tokenizer training
-        sample_texts = texts[:min(1000, len(texts))]
-        all_text = "\n".join(sample_texts)
+        # Use even smaller sample for tokenizer
+        sample_texts = texts[:min(200, len(texts))]
+        sample_text = "\n".join(sample_texts)
         
-        tokenizer.train_from_text(all_text, vocab_size=model_config.vocab_size, min_freq=2)
+        tokenizer.train_from_text(sample_text, vocab_size=model_config.vocab_size, min_freq=1)
         actual_vocab_size = tokenizer.vocab_size()
         model_config.vocab_size = actual_vocab_size
         
-        logger.info(f"Tokenizer trained with {actual_vocab_size:,} tokens")
+        logger.info(f"Tokenizer: {actual_vocab_size:,} tokens")
         
-        # Test tokenizer
-        test_text = "Hello world! How are you?"
-        test_tokens = tokenizer.encode(test_text)
-        test_decoded = tokenizer.decode(test_tokens)
+        # Clean up sample data
+        del sample_texts, sample_text
+        gc.collect()
         
-        logger.info(f"Tokenizer test:")
-        logger.info(f"  Original: '{test_text}'")
-        logger.info(f"  Tokens: {test_tokens}")
-        logger.info(f"  Decoded: '{test_decoded}'")
+        # Create ultra-efficient dataset
+        logger.info("📦 Creating ultra-efficient dataset...")
+        dataset = UltraDataset(texts, tokenizer, model_config.seq_length, max_sequences=len(texts))
         
-        # Create dataset
-        logger.info("📦 Creating dataset...")
-        dataset = StableDataset(
-            texts, 
-            tokenizer, 
-            model_config.seq_length,
-            max_sequences=min(10000, len(texts) * 2)
+        # Ultra-small optimized dataloaders
+        train_dataloader = create_optimized_dataloader(
+            dataset, training_config.batch_size, training_config, shuffle=True
         )
         
-        logger.info(f"Created {len(dataset):,} training sequences")
-        
-        # Create dataloaders with debugging
-        logger.info("📦 Creating dataloaders...")
-        train_dataloader = DataLoader(
-            dataset,
-            batch_size=training_config.batch_size,
-            shuffle=True,
-            num_workers=0,  # Keep at 0 to prevent memory issues
-            pin_memory=False,  # Disable pin_memory to save memory
-            drop_last=True,
-            persistent_workers=False  # Don't keep workers alive
-        )
-        
-        # Test dataloader
-        logger.info("🔍 Testing dataloader...")
-        test_batch_count = 0
-        try:
-            for batch_idx, (inputs, targets) in enumerate(train_dataloader):
-                test_batch_count += 1
-                logger.info(f"Test batch {batch_idx}: inputs shape {inputs.shape}, targets shape {targets.shape}")
-                logger.info(f"  Input range: {inputs.min().item()} to {inputs.max().item()}")
-                logger.info(f"  Target range: {targets.min().item()} to {targets.max().item()}")
-                
-                # Clear test tensors immediately
-                del inputs, targets
-                
-                if batch_idx >= 2:  # Test first 3 batches
-                    break
-        except Exception as e:
-            logger.error(f"Dataloader test failed: {e}")
-            raise e
-        
-        logger.info(f"Dataloader test successful: {test_batch_count} batches tested")
-        
-        # Create evaluation dataset
-        eval_size = min(200, len(dataset) // 10)
-        eval_indices = torch.randperm(len(dataset))[:eval_size]
+        # Minimal eval dataset
+        eval_size = min(50, len(dataset) // 10)
+        eval_indices = list(range(0, len(dataset), len(dataset) // eval_size))[:eval_size]
         eval_dataset = torch.utils.data.Subset(dataset, eval_indices)
-        eval_dataloader = DataLoader(
-            eval_dataset,
-            batch_size=training_config.batch_size,
-            shuffle=False,
-            num_workers=0,
-            pin_memory=False,
-            drop_last=False
+        eval_dataloader = create_optimized_dataloader(
+            eval_dataset, training_config.batch_size, training_config, shuffle=False
         )
         
-        logger.info(f"Training: {len(dataset):,} sequences, {len(train_dataloader):,} batches/epoch")
-        logger.info(f"Evaluation: {len(eval_dataset):,} sequences, {len(eval_dataloader):,} batches")
+        logger.info(f"Training: {len(dataset):,} sequences")
+        logger.info(f"Evaluation: {len(eval_dataset):,} sequences")
         
-        # Initialize model with memory cleanup
-        logger.info("🧠 Creating model...")
-        with memory_cleanup():
-            model = StableTransformer(model_config)
+        # Create ultra-small model
+        logger.info("🧠 Creating ultra-small model...")
+        with ultra_memory_cleanup():
+            model = MiniTransformer(model_config)
             model = model.to(device)
         
         total_params, trainable_params = count_parameters(model)
         model_size_mb = total_params * 4 / 1024**2
         
         logger.info(f"Model parameters: {total_params:,} (~{model_size_mb:.1f}MB)")
-        logger.info(f"Trainable parameters: {trainable_params:,}")
+        logger.info(f"Gradient checkpointing: {model_config.gradient_checkpointing}")
         
-        # Training components
+        # Ultra-efficient optimizer
         optimizer = optim.AdamW(
             model.parameters(),
             lr=training_config.learning_rate,
             weight_decay=training_config.weight_decay,
-            betas=(training_config.beta1, training_config.beta2),
-            eps=1e-8
+            eps=1e-8,
+            betas=(training_config.beta1, training_config.beta2)
         )
         
         pad_token_id = tokenizer.vocab.get("<pad>", 0)
-        criterion = nn.CrossEntropyLoss(ignore_index=pad_token_id, label_smoothing=0.1)
+        criterion = nn.CrossEntropyLoss(ignore_index=pad_token_id, label_smoothing=training_config.label_smoothing)
         
         total_steps = len(train_dataloader) * training_config.max_epochs // training_config.gradient_accumulation_steps
         warmup_steps = int(total_steps * training_config.warmup_ratio)
         
         scheduler = ImprovedScheduler(optimizer, warmup_steps, total_steps)
         
-        logger.info(f"Training steps: {total_steps:,} (warmup: {warmup_steps:,})")
+        logger.info(f"Training steps: {total_steps:,}")
+        logger.info(f"Warmup steps: {warmup_steps:,}")
         logger.info(f"Memory before training: {get_memory_usage()}")
         
-        # Training loop
-        logger.info("🚀 Starting training...")
+        # Ultra-efficient training loop
+        logger.info("🚀 Starting ultra-efficient training with enhanced optimizations...")
         training_start = time.time()
         best_loss = float('inf')
-        best_accuracy = 0.0
         models_saved = 0
         
         for epoch in range(1, training_config.max_epochs + 1):
@@ -1266,170 +1187,123 @@ def main():
             logger.info(f"=== Epoch {epoch}/{training_config.max_epochs} ===")
             
             try:
-                # Training with aggressive memory management
-                train_loss, train_acc = train_epoch(
+                # Ultra-efficient training with enhanced features
+                train_loss, train_acc = train_epoch_ultra_efficient(
                     model, train_dataloader, criterion, optimizer, scheduler, epoch,
                     training_config.gradient_accumulation_steps,
-                    training_config.max_grad_norm
+                    training_config.max_grad_norm,
+                    training_config.use_mixed_precision,
+                    scaler
                 )
                 
-                # Check for training issues
+                # Check for invalid loss
                 if math.isnan(train_loss) or math.isinf(train_loss):
-                    logger.error(f"Invalid training loss: {train_loss}")
-                    # Reduce learning rate and continue
-                    for param_group in optimizer.param_groups:
-                        param_group['lr'] *= 0.5
-                    logger.info(f"Reduced learning rate to {optimizer.param_groups[0]['lr']}")
+                    logger.error(f"Invalid loss: {train_loss}, skipping epoch")
                     continue
                 
-                if train_loss > 15.0:
-                    logger.warning(f"Very high loss: {train_loss:.4f}")
-                    for param_group in optimizer.param_groups:
-                        param_group['lr'] *= 0.8
-                
-                perplexity = math.exp(min(train_loss, 20))
+                perplexity = math.exp(min(train_loss, 10))
                 epoch_time = time.time() - epoch_start
                 
-                logger.info(f"Training Results:")
-                logger.info(f"  Loss: {train_loss:.4f}")
-                logger.info(f"  Accuracy: {train_acc:.3f} ({train_acc*100:.1f}%)")
-                logger.info(f"  Perplexity: {perplexity:.2f}")
-                logger.info(f"  Time: {epoch_time:.1f}s")
+                logger.info(f"Training - Loss: {train_loss:.4f}, Acc: {train_acc:.3f}, PPL: {perplexity:.2f}, Time: {epoch_time:.1f}s")
                 
-                # Evaluation with memory cleanup
+                # Minimal evaluation every 5 epochs
                 eval_results = None
-                if epoch % 2 == 0 or epoch == 1 or epoch == training_config.max_epochs:
-                    logger.info("📊 Evaluating...")
-                    with memory_cleanup():
-                        eval_results = evaluate_model(model, eval_dataloader, criterion)
-                    
-                    logger.info(f"Evaluation Results:")
-                    logger.info(f"  Loss: {eval_results['avg_loss']:.4f}")
-                    logger.info(f"  Accuracy: {eval_results['accuracy']:.3f} ({eval_results['accuracy']*100:.1f}%)")
-                    logger.info(f"  Perplexity: {eval_results['perplexity']:.2f}")
+                if epoch % 5 == 0 or epoch == 1:
+                    with ultra_memory_cleanup():
+                        eval_results = evaluate_model_minimal(
+                            model, eval_dataloader, criterion, max_batches=3,
+                            use_mixed_precision=training_config.use_mixed_precision
+                        )
+                    logger.info(f"Eval - Loss: {eval_results['avg_loss']:.4f}, Acc: {eval_results['accuracy']:.3f}")
                 
-                # Sample generation
-                if epoch % 3 == 0:
-                    with memory_cleanup():
-                        sample = generate_sample_text(model, tokenizer, "<user> Hello")
-                        logger.info(f"Sample: <user> Hello → {sample}")
+                # Sample generation every 10 epochs
+                if epoch % 10 == 0:
+                    with ultra_memory_cleanup():
+                        sample = generate_sample_text_minimal(
+                            model, tokenizer, 
+                            use_mixed_precision=training_config.use_mixed_precision
+                        )
+                        logger.info(f"Sample: {sample}")
                 
-                # Track best metrics
-                is_best_loss = train_loss < best_loss
-                is_best_acc = train_acc > best_accuracy
-                
-                if is_best_loss:
+                # Track best loss
+                is_best = train_loss < best_loss
+                if is_best:
                     best_loss = train_loss
                     logger.info(f"🏆 New best loss: {best_loss:.4f}")
                 
-                if is_best_acc:
-                    best_accuracy = train_acc
-                    logger.info(f"🏆 New best accuracy: {best_accuracy:.3f}")
-                
-                # Save model (less frequently to reduce memory pressure)
-                should_save = (
-                    is_best_loss or 
-                    is_best_acc or
-                    epoch % 5 == 0 or  # REDUCED frequency from every 3 to every 5
-                    epoch == training_config.max_epochs
-                )
-                
-                if should_save:
+                # Save model less frequently (every 10 epochs or if best)
+                if is_best or epoch % 10 == 0 or epoch == training_config.max_epochs:
                     performance_metrics = {
                         "train_loss": float(train_loss),
                         "train_accuracy": float(train_acc),
-                        "train_perplexity": float(perplexity),
                         "epoch": int(epoch),
-                        "learning_rate": float(optimizer.param_groups[0]['lr']),
-                        "is_best_loss": is_best_loss,
-                        "is_best_accuracy": is_best_acc,
+                        "is_best": is_best,
+                        "mixed_precision_used": training_config.use_mixed_precision,
+                        "gradient_checkpointing_used": model_config.gradient_checkpointing,
                     }
                     
                     if eval_results:
                         performance_metrics.update({
                             "eval_loss": float(eval_results['avg_loss']),
                             "eval_accuracy": float(eval_results['accuracy']),
-                            "eval_perplexity": float(eval_results['perplexity']),
                         })
                     
                     metadata = ModelMetadata(
-                        model_name="OASST1_Stable_Transformer",
-                        version=f"v1.0_epoch_{epoch}",
+                        model_name="Ultra_Low_VRAM_Model_Enhanced",
+                        version=f"v2.0_epoch_{epoch}",
                         created_at=datetime.now().isoformat(),
                         model_config=model_config,
                         training_config=training_config,
-                        dataset_info={
-                            "name": "OpenAssistant OASST1",
-                            "num_samples": len(texts),
-                            "vocab_size": actual_vocab_size,
-                            "seq_length": model_config.seq_length,
-                            "train_sequences": len(dataset),
-                        },
                         performance_metrics=performance_metrics,
                         model_size_mb=float(model_size_mb),
                         total_parameters=int(total_params),
-                        trainable_parameters=int(trainable_params),
                         epochs_trained=int(epoch),
                         best_loss=float(best_loss),
-                        best_perplexity=float(math.exp(min(best_loss, 20))),
                         hardware_used=device.type.upper(),
                         pytorch_version=torch.__version__,
-                        notes=f"Improved stable training epoch {epoch}",
-                        tags=["oasst1", "stable", f"epoch_{epoch}"] + 
-                             (["best_loss"] if is_best_loss else []) +
-                             (["best_accuracy"] if is_best_acc else [])
+                        notes=f"Enhanced ultra-low VRAM training epoch {epoch} with mixed precision and gradient checkpointing",
+                        tags=["ultra_low_vram", "enhanced", f"epoch_{epoch}"] + (["best"] if is_best else []) + 
+                             (["mixed_precision"] if training_config.use_mixed_precision else []) +
+                             (["gradient_checkpointing"] if model_config.gradient_checkpointing else [])
                     )
                     
                     try:
-                        # Save with aggressive memory cleanup
-                        with memory_cleanup():
+                        with ultra_memory_cleanup():
                             model_id = model_manager.save_model(model, tokenizer, metadata)
                             if model_id:
                                 models_saved += 1
                                 logger.info(f"💾 Model saved: {model_id}")
                     except Exception as save_error:
-                        logger.error(f"Failed to save model: {save_error}")
+                        logger.error(f"Save failed: {save_error}")
                 
-                logger.info(f"Memory after epoch: {get_memory_usage()}")
+                logger.info(f"Memory: {get_memory_usage()}")
                 
-                # Memory cleanup between epochs
-                with memory_cleanup():
+                # Ultra-aggressive cleanup between epochs
+                with ultra_memory_cleanup():
                     pass
                 
             except Exception as e:
                 logger.error(f"Error in epoch {epoch}: {e}")
-                logger.error(f"Traceback: {traceback.format_exc()}")
                 
                 if "out of memory" in str(e).lower():
-                    logger.info("Attempting OOM recovery...")
+                    logger.info("OOM detected, attempting recovery...")
                     
-                    # Aggressive OOM recovery
                     optimizer.zero_grad()
+                    if scaler is not None:
+                        scaler = GradScaler()  # Reset scaler
                     
-                    # Clear all possible variables
-                    for var_name in ['inputs', 'targets', 'logits', 'loss', 'predictions']:
-                        if var_name in locals():
-                            del locals()[var_name]
-                    
-                    with memory_cleanup():
+                    with ultra_memory_cleanup():
                         pass
                     
-                    # Reduce batch size dynamically
-                    current_batch_size = training_config.batch_size
-                    if current_batch_size > 2:
-                        training_config.batch_size = max(2, current_batch_size // 2)
+                    # Further reduce batch size if needed
+                    if training_config.batch_size > 1:
+                        training_config.batch_size = 1
                         training_config.gradient_accumulation_steps *= 2
-                        logger.info(f"Reduced batch size to {training_config.batch_size}, "
-                                   f"increased grad accumulation to {training_config.gradient_accumulation_steps}")
+                        logger.info("Reduced to batch size 1")
                         
-                        # Recreate dataloader with smaller batch size
-                        train_dataloader = DataLoader(
-                            dataset,
-                            batch_size=training_config.batch_size,
-                            shuffle=True,
-                            num_workers=0,
-                            pin_memory=False,
-                            drop_last=True
+                        # Recreate dataloader
+                        train_dataloader = create_optimized_dataloader(
+                            dataset, 1, training_config, shuffle=True
                         )
                     
                     continue
@@ -1439,35 +1313,14 @@ def main():
         # Training completion
         total_time = time.time() - training_start
         
-        logger.info("=" * 80)
-        logger.info("✅ Training completed successfully!")
+        logger.info("=" * 60)
+        logger.info("✅ Enhanced ultra-low VRAM training completed!")
         logger.info(f"Best loss: {best_loss:.4f}")
-        logger.info(f"Best accuracy: {best_accuracy:.3f} ({best_accuracy*100:.1f}%)")
-        logger.info(f"Best perplexity: {math.exp(min(best_loss, 20)):.2f}")
         logger.info(f"Models saved: {models_saved}")
-        logger.info(f"Training time: {total_time/3600:.2f} hours")
+        logger.info(f"Training time: {total_time/60:.1f} minutes")
         logger.info(f"Final memory: {get_memory_usage()}")
-        
-        # Final save if needed
-        if models_saved == 0:
-            logger.warning("No models saved! Performing final save...")
-            final_metadata = ModelMetadata(
-                model_name="OASST1_Final",
-                version="v1.0_FINAL",
-                created_at=datetime.now().isoformat(),
-                model_config=model_config,
-                performance_metrics={"final_loss": float(best_loss), "final_accuracy": float(best_accuracy)},
-                notes="Final save",
-                tags=["oasst1", "final"]
-            )
-            
-            with memory_cleanup():
-                final_id = model_manager.save_model(model, tokenizer, final_metadata)
-                if final_id:
-                    logger.info(f"Final save successful: {final_id}")
-                    models_saved += 1
-        
-        model_manager.print_model_summary()
+        logger.info(f"Mixed precision used: {training_config.use_mixed_precision}")
+        logger.info(f"Gradient checkpointing used: {model_config.gradient_checkpointing}")
         
         return 0 if models_saved > 0 else 1
         
@@ -1479,7 +1332,7 @@ def main():
         logger.error(f"Traceback: {traceback.format_exc()}")
         return 1
     finally:
-        with memory_cleanup():
+        with ultra_memory_cleanup():
             pass
 
 if __name__ == "__main__":

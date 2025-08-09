@@ -1,6 +1,25 @@
 # LuminaAI Desktop Python Dependencies
-torch>=2.0.0
-numpy>=1.21.0
-flask>=2.3.0
+
+# Core ML Framework
+torch>=2.1.0,<3.0.0
+torchvision>=0.16.0
+torchaudio>=2.1.0
+
+# ML Optimization & Training
+accelerate>=0.24.0
+bitsandbytes>=0.41.0
+peft>=0.6.0
+
+# Core Computing
+numpy>=1.24.0,<2.0.0
+
+# Web Framework
+flask>=2.3.0,<3.0.0
 flask-socketio>=5.3.0
 flask-cors>=4.0.0
+
+# Optional: Additional ML utilities (uncomment if needed)
+# transformers>=4.35.0
+# datasets>=2.14.0
+# wandb>=0.16.0
+# tensorboard>=2.15.0

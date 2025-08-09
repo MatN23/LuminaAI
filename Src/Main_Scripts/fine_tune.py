@@ -20,6 +20,26 @@ import torch.nn.functional as F
 import gc
 from contextlib import contextmanager
 
+# Try to import optional memory optimization libraries
+try:
+    import bitsandbytes as bnb
+    HAS_BITSANDBYTES = True
+except ImportError:
+    HAS_BITSANDBYTES = False
+
+try:
+    from peft import get_peft_model, LoraConfig, TaskType, PeftModel
+    HAS_PEFT = True
+except ImportError:
+    HAS_PEFT = False
+
+try:
+    from accelerate import Accelerator, init_empty_weights, load_checkpoint_and_dispatch
+    from accelerate.utils import set_seed
+    HAS_ACCELERATE = True
+except ImportError:
+    HAS_ACCELERATE = False
+
 # Enhanced logging setup
 def setup_logging():
     """Setup comprehensive logging."""
@@ -55,14 +75,15 @@ def check_environment():
                 props = torch.cuda.get_device_properties(i)
                 logger.info(f"GPU {i}: {props.name} ({props.total_memory / 1024**3:.1f} GB)")
         
+        # Check optional libraries for memory optimization
+        logger.info(f"BitsAndBytes available: {HAS_BITSANDBYTES}")
+        logger.info(f"PEFT available: {HAS_PEFT}")
+        logger.info(f"Accelerate available: {HAS_ACCELERATE}")
+        
         # MPS availability
         if hasattr(torch.backends, 'mps'):
             logger.info(f"MPS available: {torch.backends.mps.is_available()}")
             logger.info(f"MPS built: {torch.backends.mps.is_built()}")
-        
-        # Check current directory and files
-        cwd = Path.cwd()
-        logger.info(f"Current directory: {cwd}")
         
         return True
         
@@ -71,7 +92,7 @@ def check_environment():
         logger.error(f"Traceback: {traceback.format_exc()}")
         return False
 
-# Configuration classes
+# Enhanced Configuration classes with memory optimization options
 @dataclass
 class ModelConfig:
     vocab_size: int = 50000
@@ -82,27 +103,47 @@ class ModelConfig:
     dropout: float = 0.1
     model_type: str = "transformer"
     tokenizer_type: str = "subword"
+    gradient_checkpointing: bool = False  # Enable gradient checkpointing
 
 @dataclass
 class FineTuningConfig:
-    learning_rate: float = 1e-5  # Lower LR for fine-tuning
+    learning_rate: float = 1e-5
     weight_decay: float = 0.01
-    batch_size: int = 4  # Smaller for fine-tuning
-    gradient_accumulation_steps: int = 8  # Higher to maintain effective batch size
-    max_epochs: int = 5  # Fewer epochs for fine-tuning
+    batch_size: int = 4
+    gradient_accumulation_steps: int = 8
+    max_epochs: int = 5
     warmup_ratio: float = 0.1
     save_every: int = 500
     eval_every: int = 100
-    max_grad_norm: float = 0.5  # Lower for stability
+    max_grad_norm: float = 0.5
     label_smoothing: float = 0.1
     beta1: float = 0.9
     beta2: float = 0.95
-    freeze_embeddings: bool = False  # Option to freeze embeddings
-    freeze_layers: int = 0  # Number of bottom layers to freeze
-    lora_enabled: bool = False  # LoRA fine-tuning
+    freeze_embeddings: bool = False
+    freeze_layers: int = 0
+    
+    # LoRA settings
+    lora_enabled: bool = False
     lora_rank: int = 16
     lora_alpha: float = 32.0
     lora_dropout: float = 0.1
+    lora_target_modules: List[str] = None
+    
+    # Memory optimization settings
+    use_mixed_precision: bool = True  # Enable FP16/BF16
+    use_gradient_checkpointing: bool = True  # Enable gradient checkpointing
+    use_cpu_offload: bool = False  # Offload parts to CPU
+    use_quantization: bool = False  # Use quantized training
+    quantization_bits: int = 8  # 4 or 8 bit quantization
+    dataloader_num_workers: int = 0  # Reduce for memory savings
+    pin_memory: bool = False  # Disable to save memory
+    
+    # 8-bit optimizer settings
+    use_8bit_optimizer: bool = False  # Use 8-bit AdamW
+    
+    # Memory cleanup settings
+    aggressive_memory_cleanup: bool = True
+    empty_cache_every_n_steps: int = 10
 
 @dataclass
 class ModelMetadata:
@@ -112,7 +153,7 @@ class ModelMetadata:
     last_modified: str = ""
     model_config: ModelConfig = None
     training_config: FineTuningConfig = None
-    pretrained_model: str = None  # Path to pre-trained model
+    pretrained_model: str = None
     dataset_info: dict = None
     performance_metrics: dict = None
     model_size_mb: float = 0.0
@@ -126,6 +167,7 @@ class ModelMetadata:
     hardware_used: str = ""
     pytorch_version: str = ""
     cuda_version: str = None
+    memory_optimizations: dict = None  # Track which optimizations were used
     notes: str = ""
     tags: list = None
 
@@ -251,60 +293,41 @@ class ImprovedTokenizer:
     def vocab_size(self):
         return len(self.vocab)
 
-class LoRALayer(nn.Module):
-    """Low-Rank Adaptation layer for efficient fine-tuning."""
+class MemoryOptimizedLinear(nn.Module):
+    """Memory-optimized linear layer with optional quantization."""
     
-    def __init__(self, in_features: int, out_features: int, rank: int = 16, alpha: float = 32.0, dropout: float = 0.1):
+    def __init__(self, in_features: int, out_features: int, bias: bool = True, 
+                 use_quantization: bool = False, quantization_bits: int = 8):
         super().__init__()
-        self.rank = rank
-        self.alpha = alpha
-        self.scaling = alpha / rank
+        self.use_quantization = use_quantization and HAS_BITSANDBYTES
         
-        # Low-rank matrices
-        self.lora_A = nn.Parameter(torch.randn(rank, in_features) * 0.02)
-        self.lora_B = nn.Parameter(torch.zeros(out_features, rank))
-        self.dropout = nn.Dropout(dropout)
-        
-    def forward(self, x):
-        # x: (batch_size, seq_len, in_features)
-        lora_output = F.linear(x, (self.lora_B @ self.lora_A) * self.scaling)
-        return self.dropout(lora_output)
-
-class FineTuneableLinear(nn.Module):
-    """Linear layer that can be enhanced with LoRA for fine-tuning."""
-    
-    def __init__(self, original_layer: nn.Linear, lora_config: Optional[dict] = None):
-        super().__init__()
-        self.original_layer = original_layer
-        self.lora_enabled = lora_config is not None
-        
-        if self.lora_enabled:
-            self.lora_layer = LoRALayer(
-                in_features=original_layer.in_features,
-                out_features=original_layer.out_features,
-                rank=lora_config.get('rank', 16),
-                alpha=lora_config.get('alpha', 32.0),
-                dropout=lora_config.get('dropout', 0.1)
-            )
-        
-        # Freeze original layer for LoRA
-        if self.lora_enabled:
-            for param in self.original_layer.parameters():
-                param.requires_grad = False
+        if self.use_quantization:
+            if quantization_bits == 8:
+                self.linear = bnb.nn.Linear8bitLt(in_features, out_features, bias=bias, has_fp16_weights=False)
+            elif quantization_bits == 4:
+                self.linear = bnb.nn.Linear4bit(in_features, out_features, bias=bias)
+            else:
+                logger.warning(f"Unsupported quantization bits: {quantization_bits}, falling back to standard linear")
+                self.linear = nn.Linear(in_features, out_features, bias=bias)
+        else:
+            self.linear = nn.Linear(in_features, out_features, bias=bias)
     
     def forward(self, x):
-        output = self.original_layer(x)
-        if self.lora_enabled:
-            output = output + self.lora_layer(x)
-        return output
+        return self.linear(x)
 
 class StableTransformer(nn.Module):
-    """Improved transformer with fine-tuning capabilities."""
+    """Memory-optimized transformer with gradient checkpointing and mixed precision support."""
     
-    def __init__(self, config, lora_config=None):
+    def __init__(self, config, training_config=None):
         super().__init__()
         self.config = config
-        self.lora_config = lora_config
+        self.training_config = training_config or FineTuningConfig()
+        
+        # Enable gradient checkpointing if requested
+        self.gradient_checkpointing = (
+            config.gradient_checkpointing or 
+            self.training_config.use_gradient_checkpointing
+        )
         
         # Embeddings with proper scaling
         self.embeddings = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=0)
@@ -313,20 +336,24 @@ class StableTransformer(nn.Module):
         # Input normalization
         self.input_norm = nn.LayerNorm(config.hidden_size, eps=1e-6)
         
-        # Transformer layers with prenorm
+        # Transformer layers
         self.layers = nn.ModuleList()
         for _ in range(config.num_layers):
-            layer = TransformerBlock(config, lora_config=lora_config)
+            layer = TransformerBlock(config, self.training_config)
             self.layers.append(layer)
         
-        # Output layers
+        # Output layers with optional quantization
         self.output_norm = nn.LayerNorm(config.hidden_size, eps=1e-6)
         self.dropout = nn.Dropout(config.dropout)
-        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         
-        # Apply LoRA to output layer if enabled
-        if lora_config:
-            self.lm_head = FineTuneableLinear(self.lm_head, lora_config)
+        # Use memory-optimized linear layer for output
+        self.lm_head = MemoryOptimizedLinear(
+            config.hidden_size, 
+            config.vocab_size, 
+            bias=False,
+            use_quantization=self.training_config.use_quantization,
+            quantization_bits=self.training_config.quantization_bits
+        )
         
         # Initialize weights
         self.apply(self._init_weights)
@@ -335,17 +362,22 @@ class StableTransformer(nn.Module):
         nn.init.normal_(self.embeddings.weight, mean=0.0, std=0.02)
         nn.init.normal_(self.pos_embeddings.weight, mean=0.0, std=0.02)
         
-        # Tie embeddings and output weights for better performance (if not using LoRA)
-        if not lora_config:
-            if hasattr(self.lm_head, 'weight'):
-                self.lm_head.weight = self.embeddings.weight
+        # Tie embeddings and output weights if not using quantization
+        if not self.training_config.use_quantization:
+            if hasattr(self.lm_head.linear, 'weight'):
+                self.lm_head.linear.weight = self.embeddings.weight
     
     def _init_weights(self, module):
         """Improved weight initialization."""
-        if isinstance(module, nn.Linear):
-            nn.init.normal_(module.weight, mean=0.0, std=0.02)
-            if module.bias is not None:
-                nn.init.zeros_(module.bias)
+        if isinstance(module, (nn.Linear, MemoryOptimizedLinear)):
+            if hasattr(module, 'linear'):
+                nn.init.normal_(module.linear.weight, mean=0.0, std=0.02)
+                if module.linear.bias is not None:
+                    nn.init.zeros_(module.linear.bias)
+            elif hasattr(module, 'weight'):
+                nn.init.normal_(module.weight, mean=0.0, std=0.02)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
         elif isinstance(module, nn.Embedding):
             nn.init.normal_(module.weight, mean=0.0, std=0.02)
         elif isinstance(module, nn.LayerNorm):
@@ -375,6 +407,11 @@ class StableTransformer(nn.Module):
         frozen = total - trainable
         return total, trainable, frozen
     
+    def enable_gradient_checkpointing(self):
+        """Enable gradient checkpointing for memory savings."""
+        self.gradient_checkpointing = True
+        logger.info("Gradient checkpointing enabled")
+    
     def forward(self, input_ids, attention_mask=None):
         batch_size, seq_len = input_ids.shape
         device = input_ids.device
@@ -399,9 +436,14 @@ class StableTransformer(nn.Module):
                 diagonal=1
             ).bool()
         
-        # Apply transformer layers
+        # Apply transformer layers with optional gradient checkpointing
         for layer in self.layers:
-            hidden_states = layer(hidden_states, attention_mask)
+            if self.gradient_checkpointing and self.training:
+                hidden_states = torch.utils.checkpoint.checkpoint(
+                    layer, hidden_states, attention_mask, use_reentrant=False
+                )
+            else:
+                hidden_states = layer(hidden_states, attention_mask)
         
         # Output normalization and projection
         hidden_states = self.output_norm(hidden_states)
@@ -410,21 +452,22 @@ class StableTransformer(nn.Module):
         return logits
 
 class TransformerBlock(nn.Module):
-    """Transformer block with pre-normalization and LoRA support."""
+    """Transformer block with memory optimizations."""
     
-    def __init__(self, config, lora_config=None):
+    def __init__(self, config, training_config=None):
         super().__init__()
         self.config = config
+        self.training_config = training_config or FineTuningConfig()
         
         # Pre-normalization layers
         self.ln_1 = nn.LayerNorm(config.hidden_size, eps=1e-6)
         self.ln_2 = nn.LayerNorm(config.hidden_size, eps=1e-6)
         
         # Attention
-        self.attn = MultiHeadAttention(config, lora_config=lora_config)
+        self.attn = MultiHeadAttention(config, training_config)
         
         # MLP
-        self.mlp = MLP(config, lora_config=lora_config)
+        self.mlp = MLP(config, training_config)
         
         # Dropout
         self.dropout = nn.Dropout(config.dropout)
@@ -445,23 +488,32 @@ class TransformerBlock(nn.Module):
         return x
 
 class MultiHeadAttention(nn.Module):
-    """Stable multi-head attention implementation with LoRA support."""
+    """Memory-optimized multi-head attention."""
     
-    def __init__(self, config, lora_config=None):
+    def __init__(self, config, training_config=None):
         super().__init__()
         self.num_heads = config.num_heads
         self.head_dim = config.hidden_size // config.num_heads
         self.scale = self.head_dim ** -0.5
+        self.training_config = training_config or FineTuningConfig()
         
         assert config.hidden_size % config.num_heads == 0
         
-        self.qkv = nn.Linear(config.hidden_size, 3 * config.hidden_size, bias=False)
-        self.out_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=False)
-        
-        # Apply LoRA if enabled
-        if lora_config:
-            self.qkv = FineTuneableLinear(self.qkv, lora_config)
-            self.out_proj = FineTuneableLinear(self.out_proj, lora_config)
+        # Use memory-optimized linear layers
+        self.qkv = MemoryOptimizedLinear(
+            config.hidden_size, 
+            3 * config.hidden_size, 
+            bias=False,
+            use_quantization=self.training_config.use_quantization,
+            quantization_bits=self.training_config.quantization_bits
+        )
+        self.out_proj = MemoryOptimizedLinear(
+            config.hidden_size, 
+            config.hidden_size, 
+            bias=False,
+            use_quantization=self.training_config.use_quantization,
+            quantization_bits=self.training_config.quantization_bits
+        )
         
         self.dropout = nn.Dropout(config.dropout)
     
@@ -472,20 +524,32 @@ class MultiHeadAttention(nn.Module):
         qkv = self.qkv(x).chunk(3, dim=-1)
         q, k, v = map(lambda t: t.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2), qkv)
         
-        # Scaled dot-product attention
-        scores = torch.matmul(q, k.transpose(-2, -1)) * self.scale
-        
-        # Apply causal mask
-        if attention_mask is not None:
-            scores = scores.masked_fill(attention_mask.unsqueeze(0).unsqueeze(0), float('-inf'))
-        
-        # Softmax with numerical stability
-        attn_weights = F.softmax(scores, dim=-1)
-        attn_weights = torch.nan_to_num(attn_weights, nan=0.0, posinf=0.0, neginf=0.0)
-        attn_weights = self.dropout(attn_weights)
-        
-        # Apply attention to values
-        attn_output = torch.matmul(attn_weights, v)
+        # Use memory-efficient attention if available
+        if hasattr(F, 'scaled_dot_product_attention'):
+            # PyTorch 2.0+ memory-efficient attention
+            if attention_mask is not None:
+                # Convert boolean mask to float mask for scaled_dot_product_attention
+                float_mask = torch.zeros_like(attention_mask, dtype=torch.float)
+                float_mask.masked_fill_(attention_mask, float('-inf'))
+                attention_mask = float_mask.unsqueeze(0).unsqueeze(0)
+            
+            attn_output = F.scaled_dot_product_attention(
+                q, k, v, 
+                attn_mask=attention_mask,
+                dropout_p=self.dropout.p if self.training else 0.0,
+                is_causal=attention_mask is None  # Use causal attention if no mask provided
+            )
+        else:
+            # Fallback to manual attention computation
+            scores = torch.matmul(q, k.transpose(-2, -1)) * self.scale
+            
+            if attention_mask is not None:
+                scores = scores.masked_fill(attention_mask.unsqueeze(0).unsqueeze(0), float('-inf'))
+            
+            attn_weights = F.softmax(scores, dim=-1)
+            attn_weights = torch.nan_to_num(attn_weights, nan=0.0, posinf=0.0, neginf=0.0)
+            attn_weights = self.dropout(attn_weights)
+            attn_output = torch.matmul(attn_weights, v)
         
         # Reshape and project
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, hidden_size)
@@ -494,17 +558,24 @@ class MultiHeadAttention(nn.Module):
         return output
 
 class MLP(nn.Module):
-    """MLP block with GELU activation and LoRA support."""
+    """Memory-optimized MLP block."""
     
-    def __init__(self, config, lora_config=None):
+    def __init__(self, config, training_config=None):
         super().__init__()
-        self.fc1 = nn.Linear(config.hidden_size, 4 * config.hidden_size)
-        self.fc2 = nn.Linear(4 * config.hidden_size, config.hidden_size)
+        self.training_config = training_config or FineTuningConfig()
         
-        # Apply LoRA if enabled
-        if lora_config:
-            self.fc1 = FineTuneableLinear(self.fc1, lora_config)
-            self.fc2 = FineTuneableLinear(self.fc2, lora_config)
+        self.fc1 = MemoryOptimizedLinear(
+            config.hidden_size, 
+            4 * config.hidden_size,
+            use_quantization=self.training_config.use_quantization,
+            quantization_bits=self.training_config.quantization_bits
+        )
+        self.fc2 = MemoryOptimizedLinear(
+            4 * config.hidden_size, 
+            config.hidden_size,
+            use_quantization=self.training_config.use_quantization,
+            quantization_bits=self.training_config.quantization_bits
+        )
         
         self.dropout = nn.Dropout(config.dropout)
     
@@ -515,15 +586,85 @@ class MLP(nn.Module):
         x = self.fc2(x)
         return x
 
+# Enhanced memory management and device setup
+@contextmanager
+def memory_cleanup(aggressive=True):
+    """Context manager for memory cleanup with aggressive option."""
+    try:
+        yield
+    finally:
+        if aggressive:
+            # More thorough cleanup
+            for obj in gc.get_objects():
+                if torch.is_tensor(obj):
+                    try:
+                        obj.detach_()
+                        del obj
+                    except:
+                        pass
+        
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+            torch.cuda.ipc_collect()
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            torch.mps.empty_cache()
+
+def get_memory_usage():
+    """Get detailed current memory usage."""
+    if torch.cuda.is_available():
+        allocated = torch.cuda.memory_allocated() / 1024**3
+        cached = torch.cuda.memory_reserved() / 1024**3
+        max_allocated = torch.cuda.max_memory_allocated() / 1024**3
+        total = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        return f"CUDA: {allocated:.2f}GB alloc, {cached:.2f}GB cached, {max_allocated:.2f}GB max, {total:.1f}GB total"
+    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        allocated = torch.mps.current_allocated_memory() / 1024**3
+        return f"MPS: {allocated:.2f}GB allocated"
+    else:
+        return "CPU mode"
+
+def setup_device_optimized(config: FineTuningConfig):
+    """Setup device with advanced memory optimizations."""
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        logger.info(f"Using device: CUDA ({torch.cuda.get_device_name()})")
+        
+        # More aggressive memory management for fine-tuning
+        torch.cuda.set_per_process_memory_fraction(0.90)  # Use more VRAM
+        torch.cuda.empty_cache()
+        
+        # Enable memory efficiency optimizations
+        if hasattr(torch.backends.cuda, 'enable_flash_sdp'):
+            torch.backends.cuda.enable_flash_sdp(True)
+        if hasattr(torch.backends.cuda, 'enable_math_sdp'):
+            torch.backends.cuda.enable_math_sdp(True)
+        if hasattr(torch.backends.cuda, 'enable_mem_efficient_sdp'):
+            torch.backends.cuda.enable_mem_efficient_sdp(True)
+            
+    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        device = torch.device("mps")
+        logger.info("Using device: MPS (Apple Silicon)")
+        torch.mps.empty_cache()
+    else:
+        device = torch.device("cpu")
+        logger.info("Using device: CPU")
+        torch.set_num_threads(min(4, os.cpu_count() or 1))
+    
+    logger.info(f"Initial memory: {get_memory_usage()}")
+    return device
+
 class ModelManager:
-    """Model manager for saving, loading, and fine-tuning models."""
+    """Enhanced model manager with memory optimization support."""
     
     def __init__(self, save_dir):
         self.save_dir = Path(save_dir)
         self.save_dir.mkdir(exist_ok=True)
     
-    def load_pretrained_model(self, model_path: Union[str, Path]) -> Tuple[nn.Module, ImprovedTokenizer, dict]:
-        """Load a pre-trained model for fine-tuning."""
+    def load_pretrained_model(self, model_path: Union[str, Path], 
+                             training_config: Optional[FineTuningConfig] = None) -> Tuple[nn.Module, ImprovedTokenizer, dict]:
+        """Load a pre-trained model with memory optimizations."""
         model_path = Path(model_path)
         
         if not model_path.exists():
@@ -546,6 +687,10 @@ class ModelManager:
         else:
             model_config = model_config_dict
         
+        # Update model config with training-specific settings
+        if training_config:
+            model_config.gradient_checkpointing = training_config.use_gradient_checkpointing
+        
         # Load tokenizer
         tokenizer_file = model_path / "tokenizer.json"
         if not tokenizer_file.exists():
@@ -557,36 +702,50 @@ class ModelManager:
         tokenizer = ImprovedTokenizer()
         tokenizer.load_from_dict(tokenizer_data)
         
-        # Create model with same config
-        model = StableTransformer(model_config)
-        
-        # Load model weights
-        model_file = model_path / "model.pth"
-        if not model_file.exists():
-            raise FileNotFoundError(f"Model file not found: {model_file}")
-        
-        state_dict = torch.load(model_file, map_location='cpu')
-        
-        # Handle potential key mismatches
-        model_state_dict = model.state_dict()
-        filtered_state_dict = {}
-        
-        for key, value in state_dict.items():
-            if key in model_state_dict:
-                if model_state_dict[key].shape == value.shape:
-                    filtered_state_dict[key] = value
+        # Create model with memory optimizations
+        if training_config and HAS_ACCELERATE and training_config.use_cpu_offload:
+            # Use accelerate for CPU offloading
+            with init_empty_weights():
+                model = StableTransformer(model_config, training_config)
+            
+            model = load_checkpoint_and_dispatch(
+                model,
+                str(model_path / "model.pth"),
+                device_map="auto",
+                offload_folder=str(model_path / "offload"),
+                offload_state_dict=True
+            )
+        else:
+            # Standard loading
+            model = StableTransformer(model_config, training_config)
+            
+            # Load model weights
+            model_file = model_path / "model.pth"
+            if not model_file.exists():
+                raise FileNotFoundError(f"Model file not found: {model_file}")
+            
+            state_dict = torch.load(model_file, map_location='cpu')
+            
+            # Handle potential key mismatches
+            model_state_dict = model.state_dict()
+            filtered_state_dict = {}
+            
+            for key, value in state_dict.items():
+                if key in model_state_dict:
+                    if model_state_dict[key].shape == value.shape:
+                        filtered_state_dict[key] = value
+                    else:
+                        logger.warning(f"Shape mismatch for {key}: expected {model_state_dict[key].shape}, got {value.shape}")
                 else:
-                    logger.warning(f"Shape mismatch for {key}: expected {model_state_dict[key].shape}, got {value.shape}")
-            else:
-                logger.warning(f"Unknown key in state_dict: {key}")
-        
-        # Load the filtered state dict
-        missing_keys, unexpected_keys = model.load_state_dict(filtered_state_dict, strict=False)
-        
-        if missing_keys:
-            logger.warning(f"Missing keys in loaded model: {missing_keys}")
-        if unexpected_keys:
-            logger.warning(f"Unexpected keys in loaded model: {unexpected_keys}")
+                    logger.warning(f"Unknown key in state_dict: {key}")
+            
+            # Load the filtered state dict
+            missing_keys, unexpected_keys = model.load_state_dict(filtered_state_dict, strict=False)
+            
+            if missing_keys:
+                logger.warning(f"Missing keys in loaded model: {missing_keys}")
+            if unexpected_keys:
+                logger.warning(f"Unexpected keys in loaded model: {unexpected_keys}")
         
         logger.info(f"✅ Pre-trained model loaded successfully")
         logger.info(f"  Model config: {model_config.hidden_size}x{model_config.num_layers}")
@@ -596,70 +755,112 @@ class ModelManager:
         return model, tokenizer, metadata
     
     def prepare_model_for_finetuning(self, model: nn.Module, config: FineTuningConfig) -> nn.Module:
-        """Prepare a model for fine-tuning with various strategies."""
+        """Prepare a model for fine-tuning with memory optimizations."""
         logger.info("🔧 Preparing model for fine-tuning...")
         
-        # Apply LoRA if enabled
-        if config.lora_enabled:
-            logger.info("Applying LoRA (Low-Rank Adaptation)")
-            lora_config = {
-                'rank': config.lora_rank,
-                'alpha': config.lora_alpha,
-                'dropout': config.lora_dropout
-            }
+        memory_optimizations = []
+        
+        # Enable gradient checkpointing if requested
+        if config.use_gradient_checkpointing:
+            if hasattr(model, 'enable_gradient_checkpointing'):
+                model.enable_gradient_checkpointing()
+                memory_optimizations.append("gradient_checkpointing")
+                logger.info("✓ Gradient checkpointing enabled")
+        
+        # Apply LoRA if enabled and PEFT is available
+        if config.lora_enabled and HAS_PEFT:
+            logger.info("Applying LoRA (Low-Rank Adaptation) with PEFT")
             
-            # Convert existing model to use LoRA
-            model = self._apply_lora_to_model(model, lora_config)
+            # Define target modules for LoRA
+            target_modules = config.lora_target_modules or ["qkv", "out_proj", "fc1", "fc2"]
+            
+            peft_config = LoraConfig(
+                task_type=TaskType.CAUSAL_LM,
+                inference_mode=False,
+                r=config.lora_rank,
+                lora_alpha=config.lora_alpha,
+                lora_dropout=config.lora_dropout,
+                target_modules=target_modules,
+                bias="none"
+            )
+            
+            model = get_peft_model(model, peft_config)
+            memory_optimizations.append(f"lora_rank_{config.lora_rank}")
+            logger.info(f"✓ LoRA applied with rank={config.lora_rank}, alpha={config.lora_alpha}")
+        
+        elif config.lora_enabled and not HAS_PEFT:
+            logger.warning("LoRA requested but PEFT not available. Install with: pip install peft")
         
         # Freeze embeddings if requested
         if config.freeze_embeddings:
-            model.freeze_embeddings()
+            if hasattr(model, 'freeze_embeddings'):
+                model.freeze_embeddings()
+                memory_optimizations.append("freeze_embeddings")
+            elif hasattr(model, 'base_model') and hasattr(model.base_model, 'freeze_embeddings'):
+                model.base_model.freeze_embeddings()
+                memory_optimizations.append("freeze_embeddings")
         
         # Freeze bottom layers if requested
         if config.freeze_layers > 0:
-            model.freeze_layers(config.freeze_layers)
+            if hasattr(model, 'freeze_layers'):
+                model.freeze_layers(config.freeze_layers)
+                memory_optimizations.append(f"freeze_{config.freeze_layers}_layers")
+            elif hasattr(model, 'base_model') and hasattr(model.base_model, 'freeze_layers'):
+                model.base_model.freeze_layers(config.freeze_layers)
+                memory_optimizations.append(f"freeze_{config.freeze_layers}_layers")
         
         # Print parameter statistics
-        total, trainable, frozen = model.get_parameter_counts()
-        logger.info(f"Parameter counts after fine-tuning preparation:")
-        logger.info(f"  Total: {total:,}")
-        logger.info(f"  Trainable: {trainable:,} ({trainable/total*100:.1f}%)")
-        logger.info(f"  Frozen: {frozen:,} ({frozen/total*100:.1f}%)")
+        if hasattr(model, 'print_trainable_parameters'):
+            # PEFT model
+            model.print_trainable_parameters()
+        else:
+            # Standard model
+            total, trainable, frozen = self._get_parameter_counts(model)
+            logger.info(f"Parameter counts after fine-tuning preparation:")
+            logger.info(f"  Total: {total:,}")
+            logger.info(f"  Trainable: {trainable:,} ({trainable/total*100:.1f}%)")
+            logger.info(f"  Frozen: {frozen:,} ({frozen/total*100:.1f}%)")
+        
+        # Store memory optimizations info
+        model._memory_optimizations = memory_optimizations
         
         return model
     
-    def _apply_lora_to_model(self, model: nn.Module, lora_config: dict) -> nn.Module:
-        """Apply LoRA to existing model layers."""
-        # This would need to be implemented to convert existing layers to LoRA layers
-        # For now, we'll create a new model with LoRA support
-        new_model = StableTransformer(model.config, lora_config=lora_config)
-        
-        # Copy non-LoRA parameters
-        model_dict = model.state_dict()
-        new_model_dict = new_model.state_dict()
-        
-        # Copy compatible parameters
-        for key, value in model_dict.items():
-            if key in new_model_dict and new_model_dict[key].shape == value.shape:
-                new_model_dict[key] = value
-        
-        new_model.load_state_dict(new_model_dict, strict=False)
-        return new_model
+    def _get_parameter_counts(self, model):
+        """Get parameter counts for any model."""
+        if hasattr(model, 'get_parameter_counts'):
+            return model.get_parameter_counts()
+        else:
+            total = sum(p.numel() for p in model.parameters())
+            trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+            frozen = total - trainable
+            return total, trainable, frozen
     
     def save_model(self, model, tokenizer, metadata, optimizer=None, scheduler=None, force_cpu_save=True):
-        """Save model with proper error handling - ALWAYS force CPU save to prevent OOM."""
+        """Save model with memory optimization tracking."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         model_id = f"finetuned_{timestamp}"
         model_path = self.save_dir / model_id
         model_path.mkdir(exist_ok=True)
         
         try:
-            # ALWAYS save to CPU to prevent memory issues
-            model_state = {k: v.cpu() for k, v in model.state_dict().items()}
-            torch.save(model_state, model_path / "model.pth")
+            # Save PEFT adapter if it's a PEFT model
+            if HAS_PEFT and hasattr(model, 'save_pretrained'):
+                logger.info("Saving PEFT adapter weights...")
+                model.save_pretrained(model_path / "peft_adapter")
+                
+                # Also save the base model state dict
+                if hasattr(model, 'base_model'):
+                    base_model_state = {k: v.cpu() for k, v in model.base_model.state_dict().items()}
+                    torch.save(base_model_state, model_path / "base_model.pth")
+            else:
+                # ALWAYS save to CPU to prevent memory issues
+                model_state = {k: v.cpu() for k, v in model.state_dict().items()}
+                torch.save(model_state, model_path / "model.pth")
             
             # Move model back to device
-            model.to(device)
+            if hasattr(model, 'to'):
+                model.to(device)
             
             # Save tokenizer
             tokenizer_data = {
@@ -670,8 +871,22 @@ class ModelManager:
             with open(model_path / "tokenizer.json", 'w') as f:
                 json.dump(tokenizer_data, f, indent=2)
             
-            # Save metadata
-            metadata_dict = asdict(metadata) if hasattr(metadata, '__dict__') else metadata.__dict__
+            # Enhanced metadata with memory optimization info
+            if hasattr(metadata, '__dict__'):
+                metadata_dict = metadata.__dict__.copy()
+            else:
+                metadata_dict = asdict(metadata) if hasattr(metadata, '__dataclass_fields__') else metadata
+            
+            # Add memory optimization info
+            if hasattr(model, '_memory_optimizations'):
+                metadata_dict['memory_optimizations'] = {
+                    'optimizations_applied': model._memory_optimizations,
+                    'mixed_precision': getattr(metadata.training_config, 'use_mixed_precision', False),
+                    'gradient_checkpointing': getattr(metadata.training_config, 'use_gradient_checkpointing', False),
+                    'quantization': getattr(metadata.training_config, 'use_quantization', False),
+                    'cpu_offload': getattr(metadata.training_config, 'use_cpu_offload', False)
+                }
+            
             with open(model_path / "metadata.json", 'w') as f:
                 json.dump(metadata_dict, f, indent=2, default=str)
             
@@ -679,12 +894,14 @@ class ModelManager:
             finetune_info = {
                 'is_finetuned': True,
                 'pretrained_model': metadata.pretrained_model,
-                'finetuning_config': asdict(metadata.training_config) if hasattr(metadata.training_config, '__dict__') else metadata.training_config.__dict__,
+                'is_peft_model': HAS_PEFT and hasattr(model, 'save_pretrained'),
+                'finetuning_config': asdict(metadata.training_config) if hasattr(metadata.training_config, '__dataclass_fields__') else metadata.training_config.__dict__,
                 'parameter_counts': {
                     'total': metadata.total_parameters,
                     'trainable': metadata.trainable_parameters,
                     'frozen': metadata.frozen_parameters
-                }
+                },
+                'memory_optimizations': getattr(model, '_memory_optimizations', [])
             }
             
             with open(model_path / "finetune_info.json", 'w') as f:
@@ -705,58 +922,25 @@ class ModelManager:
         logger.info(f"Found {len(models)} total models, {len(finetuned_models)} fine-tuned models in {self.save_dir}")
         for model_path in sorted(models):
             model_type = "FINE-TUNED" if model_path.name.startswith("finetuned_") else "TRAINED"
-            logger.info(f"  - {model_path.name} ({model_type})")
+            
+            # Check for memory optimization info
+            finetune_info_file = model_path / "finetune_info.json"
+            optimizations = []
+            if finetune_info_file.exists():
+                try:
+                    with open(finetune_info_file, 'r') as f:
+                        info = json.load(f)
+                        optimizations = info.get('memory_optimizations', [])
+                except:
+                    pass
+            
+            opt_str = f" [{', '.join(optimizations)}]" if optimizations else ""
+            logger.info(f"  - {model_path.name} ({model_type}){opt_str}")
 
-# Memory management and device setup
-@contextmanager
-def memory_cleanup():
-    """Context manager for aggressive memory cleanup."""
-    try:
-        yield
-    finally:
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            torch.cuda.synchronize()
-            torch.cuda.ipc_collect()
-        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-            torch.mps.empty_cache()
-
-def get_memory_usage():
-    """Get current memory usage."""
-    if torch.cuda.is_available():
-        allocated = torch.cuda.memory_allocated() / 1024**3
-        cached = torch.cuda.memory_reserved() / 1024**3
-        total = torch.cuda.get_device_properties(0).total_memory / 1024**3
-        return f"CUDA: {allocated:.2f}GB allocated, {cached:.2f}GB cached, {total:.1f}GB total"
-    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-        allocated = torch.mps.current_allocated_memory() / 1024**3
-        return f"MPS: {allocated:.2f}GB allocated"
-    else:
-        return "CPU mode"
-
-def setup_device():
-    """Setup device with proper memory management."""
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
-        logger.info(f"Using device: CUDA ({torch.cuda.get_device_name()})")
-        torch.cuda.set_per_process_memory_fraction(0.85)
-        torch.cuda.empty_cache()
-    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-        device = torch.device("mps")
-        logger.info("Using device: MPS (Apple Silicon)")
-        torch.mps.empty_cache()
-    else:
-        device = torch.device("cpu")
-        logger.info("Using device: CPU")
-        torch.set_num_threads(min(4, os.cpu_count() or 1))
-    
-    return device
-
-device = setup_device()
+device = None
 
 class StableDataset(Dataset):
-    """Fixed dataset with proper sequence creation."""
+    """Memory-efficient dataset with reduced memory footprint."""
     
     def __init__(self, texts: List[str], tokenizer, seq_length: int, max_sequences: int = 10000):
         self.tokenizer = tokenizer
@@ -844,6 +1028,10 @@ class StableDataset(Dataset):
             raise ValueError(f"Found {invalid_sequences} invalid sequences!")
         
         logger.info("✅ All sequences validated successfully")
+        
+        # Convert to more memory-efficient format
+        self.sequences = torch.tensor(self.sequences, dtype=torch.long)
+        logger.info(f"Dataset converted to tensor: {self.sequences.shape}")
     
     def __len__(self):
         return len(self.sequences)
@@ -853,8 +1041,8 @@ class StableDataset(Dataset):
             raise IndexError(f"Index {idx} out of range for dataset of size {len(self.sequences)}")
             
         sequence = self.sequences[idx]
-        input_ids = torch.tensor(sequence[:-1], dtype=torch.long)
-        target_ids = torch.tensor(sequence[1:], dtype=torch.long)
+        input_ids = sequence[:-1]
+        target_ids = sequence[1:]
         
         return input_ids, target_ids
 
@@ -946,16 +1134,36 @@ class ImprovedScheduler:
         
         return lr
 
-def count_parameters(model):
-    """Count model parameters."""
-    total = sum(p.numel() for p in model.parameters())
-    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    frozen = total - trainable
-    return total, trainable, frozen
+def get_optimized_optimizer(model, config: FineTuningConfig):
+    """Get memory-optimized optimizer."""
+    
+    # Filter parameters that require gradients
+    params_to_optimize = [p for p in model.parameters() if p.requires_grad]
+    
+    if config.use_8bit_optimizer and HAS_BITSANDBYTES:
+        logger.info("Using 8-bit AdamW optimizer for memory savings")
+        optimizer = bnb.optim.AdamW8bit(
+            params_to_optimize,
+            lr=config.learning_rate,
+            weight_decay=config.weight_decay,
+            betas=(config.beta1, config.beta2),
+            eps=1e-8
+        )
+    else:
+        logger.info("Using standard AdamW optimizer")
+        optimizer = optim.AdamW(
+            params_to_optimize,
+            lr=config.learning_rate,
+            weight_decay=config.weight_decay,
+            betas=(config.beta1, config.beta2),
+            eps=1e-8
+        )
+    
+    return optimizer
 
-def finetune_epoch(model, dataloader, criterion, optimizer, scheduler, epoch, 
-                   gradient_accumulation_steps=1, max_grad_norm=1.0):
-    """Fine-tuning epoch with lower learning rates and careful gradient handling."""
+def finetune_epoch_optimized(model, dataloader, criterion, optimizer, scheduler, epoch, 
+                            config: FineTuningConfig, accelerator=None):
+    """Memory-optimized fine-tuning epoch with mixed precision and gradient checkpointing."""
     model.train()
     total_loss = 0.0
     total_correct = 0
@@ -963,16 +1171,23 @@ def finetune_epoch(model, dataloader, criterion, optimizer, scheduler, epoch,
     num_batches = 0
     accumulation_count = 0
     
+    # Setup mixed precision scaler
+    scaler = torch.cuda.amp.GradScaler() if config.use_mixed_precision and torch.cuda.is_available() else None
+    
     optimizer.zero_grad()
     
-    logger.info(f"Starting fine-tuning epoch {epoch} with {len(dataloader)} batches")
+    logger.info(f"Starting memory-optimized fine-tuning epoch {epoch} with {len(dataloader)} batches")
+    logger.info(f"Memory optimizations: mixed_precision={config.use_mixed_precision}, "
+               f"gradient_checkpointing={config.use_gradient_checkpointing}")
     
     for batch_idx, (inputs, targets) in enumerate(dataloader):
         try:
-            if batch_idx > 0 and batch_idx % 20 == 0:
-                with memory_cleanup():
+            # Aggressive memory cleanup
+            if config.aggressive_memory_cleanup and batch_idx % config.empty_cache_every_n_steps == 0:
+                with memory_cleanup(aggressive=True):
                     pass
-                logger.info(f"Memory cleanup at batch {batch_idx}: {get_memory_usage()}")
+                if batch_idx > 0:
+                    logger.info(f"Memory cleanup at batch {batch_idx}: {get_memory_usage()}")
             
             if inputs.numel() == 0 or targets.numel() == 0:
                 logger.warning(f"Empty batch at index {batch_idx}, skipping")
@@ -985,7 +1200,21 @@ def finetune_epoch(model, dataloader, criterion, optimizer, scheduler, epoch,
                 logger.warning(f"Invalid inputs at batch {batch_idx}, skipping")
                 continue
             
-            with torch.autocast(device_type=device.type, enabled=(device.type == 'cuda')):
+            # Mixed precision forward pass
+            if config.use_mixed_precision and scaler is not None:
+                with torch.cuda.amp.autocast():
+                    logits = model(inputs)
+                    
+                    if torch.isnan(logits).any() or torch.isinf(logits).any():
+                        logger.warning(f"Invalid logits at batch {batch_idx}, skipping")
+                        optimizer.zero_grad()
+                        continue
+                    
+                    flat_logits = logits.view(-1, logits.size(-1))
+                    flat_targets = targets.view(-1)
+                    loss = criterion(flat_logits, flat_targets)
+            else:
+                # Standard precision
                 logits = model(inputs)
                 
                 if torch.isnan(logits).any() or torch.isinf(logits).any():
@@ -1002,31 +1231,51 @@ def finetune_epoch(model, dataloader, criterion, optimizer, scheduler, epoch,
                 optimizer.zero_grad()
                 continue
             
-            scaled_loss = loss / gradient_accumulation_steps
-            scaled_loss.backward()
+            # Backward pass with mixed precision
+            scaled_loss = loss / config.gradient_accumulation_steps
             
+            if config.use_mixed_precision and scaler is not None:
+                scaler.scale(scaled_loss).backward()
+            else:
+                scaled_loss.backward()
+            
+            # Clean up intermediate tensors
             del logits, flat_logits, flat_targets, scaled_loss
             
             accumulation_count += 1
             
-            if accumulation_count >= gradient_accumulation_steps:
-                if max_grad_norm > 0:
-                    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+            # Optimizer step with gradient accumulation
+            if accumulation_count >= config.gradient_accumulation_steps:
+                if config.max_grad_norm > 0:
+                    if config.use_mixed_precision and scaler is not None:
+                        scaler.unscale_(optimizer)
+                        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), config.max_grad_norm)
+                    else:
+                        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), config.max_grad_norm)
                     
-                    if grad_norm > max_grad_norm * 5:  # More conservative for fine-tuning
+                    if grad_norm > config.max_grad_norm * 5:
                         logger.warning(f"Large gradients detected: {grad_norm:.2f}, reducing LR")
                         for param_group in optimizer.param_groups:
                             param_group['lr'] *= 0.8
                 
-                optimizer.step()
+                if config.use_mixed_precision and scaler is not None:
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    optimizer.step()
+                
                 current_lr = scheduler.step()
                 optimizer.zero_grad()
                 accumulation_count = 0
             
-            # Calculate accuracy
+            # Calculate accuracy (without storing gradients)
             with torch.no_grad():
-                with torch.autocast(device_type=device.type, enabled=(device.type == 'cuda')):
+                if config.use_mixed_precision:
+                    with torch.cuda.amp.autocast():
+                        pred_logits = model(inputs)
+                else:
                     pred_logits = model(inputs)
+                    
                 predictions = torch.argmax(pred_logits, dim=-1)
                 del pred_logits
                 
@@ -1043,6 +1292,7 @@ def finetune_epoch(model, dataloader, criterion, optimizer, scheduler, epoch,
             num_batches += 1
             del loss
             
+            # Progress logging
             if batch_idx % 10 == 0:
                 current_loss = total_loss / max(num_batches, 1)
                 current_acc = total_correct / max(total_tokens, 1)
@@ -1056,30 +1306,42 @@ def finetune_epoch(model, dataloader, criterion, optimizer, scheduler, epoch,
         except RuntimeError as e:
             error_msg = str(e).lower()
             if "out of memory" in error_msg:
-                logger.warning(f"OOM at batch {batch_idx}, clearing cache...")
+                logger.warning(f"OOM at batch {batch_idx}, clearing cache and reducing batch size...")
                 optimizer.zero_grad()
                 
-                for var_name in ['inputs', 'targets', 'logits', 'loss']:
+                # Clear all possible tensors
+                for var_name in ['inputs', 'targets', 'logits', 'loss', 'scaled_loss', 'pred_logits', 'predictions']:
                     if var_name in locals():
                         del locals()[var_name]
                 
-                with memory_cleanup():
+                # Aggressive memory cleanup
+                with memory_cleanup(aggressive=True):
                     pass
+                
+                logger.info(f"Memory after OOM cleanup: {get_memory_usage()}")
                 continue
             else:
                 logger.error(f"Runtime error at batch {batch_idx}: {e}")
                 raise e
         except Exception as e:
             logger.error(f"Unexpected error at batch {batch_idx}: {e}")
+            # Clean up and continue
             for var_name in ['inputs', 'targets', 'logits', 'loss']:
                 if var_name in locals():
                     del locals()[var_name]
             continue
     
+    # Final gradient step if needed
     if accumulation_count > 0:
-        if max_grad_norm > 0:
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
-        optimizer.step()
+        if config.max_grad_norm > 0:
+            if config.use_mixed_precision and scaler is not None:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), config.max_grad_norm)
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), config.max_grad_norm)
+                optimizer.step()
         optimizer.zero_grad()
     
     if num_batches == 0:
@@ -1093,15 +1355,15 @@ def finetune_epoch(model, dataloader, criterion, optimizer, scheduler, epoch,
     
     return avg_loss, avg_acc
 
-def evaluate_model(model, dataloader, criterion, max_batches=5):
-    """Evaluation function for fine-tuned models."""
+def evaluate_model_optimized(model, dataloader, criterion, config: FineTuningConfig, max_batches=5):
+    """Memory-optimized evaluation function."""
     model.eval()
     total_loss = 0.0
     total_correct = 0
     total_tokens = 0
     num_batches = 0
     
-    logger.info(f"Starting evaluation with max {max_batches} batches from {len(dataloader)} available")
+    logger.info(f"Starting optimized evaluation with max {max_batches} batches from {len(dataloader)} available")
     
     try:
         with torch.no_grad():
@@ -1119,7 +1381,11 @@ def evaluate_model(model, dataloader, criterion, max_batches=5):
                     if torch.isnan(inputs).any() or torch.isinf(inputs).any():
                         continue
                     
-                    with torch.autocast(device_type=device.type, enabled=(device.type == 'cuda')):
+                    # Use mixed precision for evaluation too
+                    if config.use_mixed_precision:
+                        with torch.cuda.amp.autocast():
+                            logits = model(inputs)
+                    else:
                         logits = model(inputs)
                     
                     if torch.isnan(logits).any() or torch.isinf(logits).any():
@@ -1153,6 +1419,7 @@ def evaluate_model(model, dataloader, criterion, max_batches=5):
                             del locals()[var_name]
                     continue
                 
+                # Clean up memory during evaluation
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
     
@@ -1180,8 +1447,8 @@ def evaluate_model(model, dataloader, criterion, max_batches=5):
         'perplexity': perplexity
     }
 
-def generate_sample_text(model, tokenizer, prompt="<user> Hello", max_length=50):
-    """Generate sample text for evaluation."""
+def generate_sample_text_optimized(model, tokenizer, prompt="<user> Hello", max_length=50, config=None):
+    """Memory-optimized sample text generation."""
     model.eval()
     
     try:
@@ -1193,7 +1460,12 @@ def generate_sample_text(model, tokenizer, prompt="<user> Hello", max_length=50)
                 if generated.size(1) >= model.config.seq_length:
                     break
                 
-                logits = model(generated)
+                # Use mixed precision for generation if enabled
+                if config and config.use_mixed_precision:
+                    with torch.cuda.amp.autocast():
+                        logits = model(generated)
+                else:
+                    logits = model(generated)
                 
                 if torch.isnan(logits).any() or torch.isinf(logits).any():
                     break
@@ -1219,55 +1491,97 @@ def generate_sample_text(model, tokenizer, prompt="<user> Hello", max_length=50)
         return "Generation failed"
     finally:
         model.train()
+        # Clean up generation tensors
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
-def get_finetuning_config(device_type: str, use_lora: bool = False):
-    """Get fine-tuning specific configuration."""
+def get_finetuning_config_optimized(device_type: str, use_lora: bool = False, memory_aggressive: bool = True):
+    """Get memory-optimized fine-tuning configuration."""
+    base_config = {
+        'use_mixed_precision': True,
+        'use_gradient_checkpointing': True,
+        'aggressive_memory_cleanup': memory_aggressive,
+        'empty_cache_every_n_steps': 5 if memory_aggressive else 10,
+        'dataloader_num_workers': 0,
+        'pin_memory': False,
+        'use_8bit_optimizer': HAS_BITSANDBYTES,
+        'lora_enabled': use_lora and (HAS_PEFT or not use_lora)
+    }
+    
     if device_type == 'cuda':
         config = FineTuningConfig(
-            learning_rate=2e-5,  # Lower learning rate for fine-tuning
+            learning_rate=2e-5,
             weight_decay=0.01,
-            batch_size=4,  # Smaller batch size
-            gradient_accumulation_steps=8,  # Higher accumulation
-            max_epochs=3,  # Fewer epochs
+            batch_size=2 if memory_aggressive else 4,
+            gradient_accumulation_steps=16 if memory_aggressive else 8,
+            max_epochs=3,
             warmup_ratio=0.1,
-            max_grad_norm=0.5,  # Lower gradient clipping
+            max_grad_norm=0.5,
             label_smoothing=0.1,
             freeze_embeddings=False,
-            freeze_layers=0,  # Can be adjusted based on needs
-            lora_enabled=use_lora,
-            lora_rank=16,
-            lora_alpha=32.0,
-            lora_dropout=0.1
+            freeze_layers=0,
+            lora_rank=8 if memory_aggressive else 16,
+            lora_alpha=16 if memory_aggressive else 32,
+            lora_dropout=0.1,
+            use_quantization=memory_aggressive and HAS_BITSANDBYTES,
+            quantization_bits=8,
+            **base_config
         )
-        max_samples = 5000
+        max_samples = 3000 if memory_aggressive else 5000
+        
     elif device_type == 'mps':
         config = FineTuningConfig(
             learning_rate=1e-5,
-            batch_size=2,
-            gradient_accumulation_steps=12,
+            batch_size=1,
+            gradient_accumulation_steps=24,
             max_epochs=2,
-            freeze_layers=2,  # Freeze more layers on smaller devices
-            lora_enabled=use_lora,
-            lora_rank=8
+            freeze_layers=2,
+            lora_rank=4,
+            lora_alpha=8,
+            use_mixed_precision=False,  # MPS doesn't support mixed precision yet
+            use_8bit_optimizer=False,   # BitsAndBytes doesn't support MPS
+            use_quantization=False,
+            **{k: v for k, v in base_config.items() if k not in ['use_mixed_precision', 'use_8bit_optimizer']}
         )
-        max_samples = 2000
-    else:
+        max_samples = 1500
+        
+    else:  # CPU
         config = FineTuningConfig(
             learning_rate=5e-6,
             batch_size=1,
-            gradient_accumulation_steps=16,
+            gradient_accumulation_steps=32,
             max_epochs=2,
-            freeze_layers=4,
-            lora_enabled=use_lora,
-            lora_rank=4
+            freeze_layers=6,
+            lora_rank=4,
+            lora_alpha=8,
+            use_mixed_precision=False,
+            use_8bit_optimizer=False,
+            use_quantization=False,
+            use_gradient_checkpointing=False,  # May be slower on CPU
+            **{k: v for k, v in base_config.items() if k not in ['use_mixed_precision', 'use_8bit_optimizer', 'use_gradient_checkpointing']}
         )
-        max_samples = 1000
+        max_samples = 800
     
     return config, max_samples
 
+def count_parameters(model):
+    """Count model parameters with PEFT support."""
+    if HAS_PEFT and hasattr(model, 'print_trainable_parameters'):
+        # PEFT model - get the counts differently
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        total_params = sum(p.numel() for p in model.parameters())
+        frozen_params = total_params - trainable_params
+        return total_params, trainable_params, frozen_params
+    else:
+        # Standard model
+        total = sum(p.numel() for p in model.parameters())
+        trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+        frozen = total - trainable
+        return total, trainable, frozen
+
 def main():
-    """Main fine-tuning function."""
-    logger.info("🚀 Starting OASST1 Fine-Tuning")
+    """Main memory-optimized fine-tuning function."""
+    logger.info("🚀 Starting Memory-Optimized OASST1 Fine-Tuning")
     logger.info("=" * 80)
     
     if not check_environment():
@@ -1275,7 +1589,8 @@ def main():
     
     # Parse arguments (in a real implementation, use argparse)
     pretrained_model_path = "models/model_20250108_123456"  # Example path
-    use_lora = False  # Set to True to enable LoRA fine-tuning
+    use_lora = True  # Enable LoRA by default for memory efficiency
+    memory_aggressive = True  # Enable aggressive memory optimizations
     finetune_data_path = "oasst1_data/oasst1_train.jsonl"
     
     # Check if paths exist
@@ -1292,30 +1607,54 @@ def main():
         logger.error(f"Fine-tuning data not found: {finetune_data_path}")
         return 1
     
-    # Configuration
-    finetuning_config, max_samples = get_finetuning_config(device.type, use_lora)
+    # Setup memory-optimized device
+    global device
+    device = setup_device_optimized(FineTuningConfig())
     
-    logger.info(f"Fine-tuning Configuration:")
+    # Get optimized configuration
+    finetuning_config, max_samples = get_finetuning_config_optimized(
+        device.type, use_lora, memory_aggressive
+    )
+    
+    logger.info(f"Memory-Optimized Fine-tuning Configuration:")
     logger.info(f"  Pre-trained model: {pretrained_model_path}")
     logger.info(f"  LoRA enabled: {finetuning_config.lora_enabled}")
+    logger.info(f"  Mixed precision: {finetuning_config.use_mixed_precision}")
+    logger.info(f"  Gradient checkpointing: {finetuning_config.use_gradient_checkpointing}")
+    logger.info(f"  8-bit optimizer: {finetuning_config.use_8bit_optimizer}")
+    logger.info(f"  Quantization: {finetuning_config.use_quantization}")
+    logger.info(f"  Aggressive cleanup: {finetuning_config.aggressive_memory_cleanup}")
     logger.info(f"  Learning rate: {finetuning_config.learning_rate}")
     logger.info(f"  Batch size: {finetuning_config.batch_size}")
     logger.info(f"  Max epochs: {finetuning_config.max_epochs}")
-    logger.info(f"  Freeze layers: {finetuning_config.freeze_layers}")
     logger.info(f"  Max samples: {max_samples}")
     
     model_manager = ModelManager("models")
     
+    # Initialize accelerator if available
+    accelerator = None
+    if HAS_ACCELERATE and finetuning_config.use_cpu_offload:
+        accelerator = Accelerator(
+            mixed_precision="fp16" if finetuning_config.use_mixed_precision else "no",
+            gradient_accumulation_steps=finetuning_config.gradient_accumulation_steps
+        )
+        logger.info("Using Accelerate for distributed training and CPU offloading")
+    
     try:
-        # Load pre-trained model
-        logger.info("📂 Loading pre-trained model...")
-        model, tokenizer, pretrained_metadata = model_manager.load_pretrained_model(pretrained_model_path)
+        # Load pre-trained model with memory optimizations
+        logger.info("📂 Loading pre-trained model with memory optimizations...")
+        with memory_cleanup():
+            model, tokenizer, pretrained_metadata = model_manager.load_pretrained_model(
+                pretrained_model_path, finetuning_config
+            )
         
         # Move to device
         model = model.to(device)
         
-        # Prepare model for fine-tuning
+        # Prepare model for fine-tuning with optimizations
         model = model_manager.prepare_model_for_finetuning(model, finetuning_config)
+        
+        logger.info(f"Memory after model preparation: {get_memory_usage()}")
         
         # Load fine-tuning data
         logger.info("📚 Loading fine-tuning data...")
@@ -1326,30 +1665,32 @@ def main():
         
         logger.info(f"Loaded {len(texts):,} texts for fine-tuning")
         
-        # Create dataset
-        logger.info("📦 Creating fine-tuning dataset...")
-        dataset = StableDataset(
-            texts, 
-            tokenizer, 
-            model.config.seq_length,
-            max_sequences=min(5000, len(texts) * 2)
-        )
+        # Create memory-efficient dataset
+        logger.info("📦 Creating memory-efficient dataset...")
+        with memory_cleanup():
+            dataset = StableDataset(
+                texts, 
+                tokenizer, 
+                model.config.seq_length,
+                max_sequences=min(3000, len(texts) * 2)
+            )
         
         logger.info(f"Created {len(dataset):,} fine-tuning sequences")
+        logger.info(f"Memory after dataset creation: {get_memory_usage()}")
         
-        # Create dataloaders
+        # Create optimized dataloaders
         train_dataloader = DataLoader(
             dataset,
             batch_size=finetuning_config.batch_size,
             shuffle=True,
-            num_workers=0,
-            pin_memory=False,
+            num_workers=finetuning_config.dataloader_num_workers,
+            pin_memory=finetuning_config.pin_memory,
             drop_last=True,
             persistent_workers=False
         )
         
         # Create evaluation dataset
-        eval_size = min(100, len(dataset) // 10)
+        eval_size = min(50, len(dataset) // 20)  # Smaller eval set for memory
         eval_indices = torch.randperm(len(dataset))[:eval_size]
         eval_dataset = torch.utils.data.Subset(dataset, eval_indices)
         eval_dataloader = DataLoader(
@@ -1368,14 +1709,8 @@ def main():
         logger.info(f"  Trainable: {trainable_params:,} ({trainable_params/total_params*100:.1f}%)")
         logger.info(f"  Frozen: {frozen_params:,} ({frozen_params/total_params*100:.1f}%)")
         
-        # Setup optimizer and scheduler for fine-tuning
-        optimizer = optim.AdamW(
-            filter(lambda p: p.requires_grad, model.parameters()),  # Only trainable parameters
-            lr=finetuning_config.learning_rate,
-            weight_decay=finetuning_config.weight_decay,
-            betas=(finetuning_config.beta1, finetuning_config.beta2),
-            eps=1e-8
-        )
+        # Setup memory-optimized optimizer and scheduler
+        optimizer = get_optimized_optimizer(model, finetuning_config)
         
         pad_token_id = tokenizer.vocab.get("<pad>", 0)
         criterion = nn.CrossEntropyLoss(ignore_index=pad_token_id, label_smoothing=finetuning_config.label_smoothing)
@@ -1385,11 +1720,17 @@ def main():
         
         scheduler = ImprovedScheduler(optimizer, warmup_steps, total_steps)
         
+        # Prepare with accelerator if available
+        if accelerator:
+            model, optimizer, train_dataloader, eval_dataloader = accelerator.prepare(
+                model, optimizer, train_dataloader, eval_dataloader
+            )
+        
         logger.info(f"Fine-tuning steps: {total_steps:,} (warmup: {warmup_steps:,})")
         logger.info(f"Memory before fine-tuning: {get_memory_usage()}")
         
-        # Fine-tuning loop
-        logger.info("🚀 Starting fine-tuning...")
+        # Memory-optimized fine-tuning loop
+        logger.info("🚀 Starting memory-optimized fine-tuning...")
         training_start = time.time()
         best_loss = float('inf')
         best_accuracy = 0.0
@@ -1398,13 +1739,13 @@ def main():
         for epoch in range(1, finetuning_config.max_epochs + 1):
             epoch_start = time.time()
             
-            logger.info(f"=== Fine-tuning Epoch {epoch}/{finetuning_config.max_epochs} ===")
+            logger.info(f"=== Memory-Optimized Fine-tuning Epoch {epoch}/{finetuning_config.max_epochs} ===")
             
             try:
-                train_loss, train_acc = finetune_epoch(
-                    model, train_dataloader, criterion, optimizer, scheduler, epoch,
-                    finetuning_config.gradient_accumulation_steps,
-                    finetuning_config.max_grad_norm
+                # Memory-optimized training epoch
+                train_loss, train_acc = finetune_epoch_optimized(
+                    model, train_dataloader, criterion, optimizer, scheduler, epoch, 
+                    finetuning_config, accelerator
                 )
                 
                 if math.isnan(train_loss) or math.isinf(train_loss):
@@ -1417,28 +1758,33 @@ def main():
                 perplexity = math.exp(min(train_loss, 20))
                 epoch_time = time.time() - epoch_start
                 
-                logger.info(f"Fine-tuning Results:")
+                logger.info(f"Memory-Optimized Fine-tuning Results:")
                 logger.info(f"  Loss: {train_loss:.4f}")
                 logger.info(f"  Accuracy: {train_acc:.3f} ({train_acc*100:.1f}%)")
                 logger.info(f"  Perplexity: {perplexity:.2f}")
                 logger.info(f"  Time: {epoch_time:.1f}s")
+                logger.info(f"  Memory: {get_memory_usage()}")
                 
-                # Evaluation
+                # Memory-optimized evaluation
                 eval_results = None
-                if epoch % 1 == 0:  # Evaluate every epoch for fine-tuning
-                    logger.info("📊 Evaluating...")
+                if epoch % 1 == 0:
+                    logger.info("📊 Memory-optimized evaluation...")
                     with memory_cleanup():
-                        eval_results = evaluate_model(model, eval_dataloader, criterion)
+                        eval_results = evaluate_model_optimized(
+                            model, eval_dataloader, criterion, finetuning_config, max_batches=3
+                        )
                     
                     logger.info(f"Evaluation Results:")
                     logger.info(f"  Loss: {eval_results['avg_loss']:.4f}")
                     logger.info(f"  Accuracy: {eval_results['accuracy']:.3f} ({eval_results['accuracy']*100:.1f}%)")
                     logger.info(f"  Perplexity: {eval_results['perplexity']:.2f}")
                 
-                # Sample generation
+                # Memory-optimized sample generation
                 if epoch % 1 == 0:
                     with memory_cleanup():
-                        sample = generate_sample_text(model, tokenizer, "<user> Hello, how are you?")
+                        sample = generate_sample_text_optimized(
+                            model, tokenizer, "<user> Hello, how are you?", max_length=30, config=finetuning_config
+                        )
                         logger.info(f"Sample: <user> Hello, how are you? → {sample}")
                 
                 # Track best metrics
@@ -1453,7 +1799,7 @@ def main():
                     best_accuracy = train_acc
                     logger.info(f"🏆 New best accuracy: {best_accuracy:.3f}")
                 
-                # Save model
+                # Save model with memory optimizations info
                 should_save = (
                     is_best_loss or 
                     is_best_acc or
@@ -1469,6 +1815,14 @@ def main():
                         "learning_rate": float(optimizer.param_groups[0]['lr']),
                         "is_best_loss": is_best_loss,
                         "is_best_accuracy": is_best_acc,
+                        "memory_optimizations_used": {
+                            "mixed_precision": finetuning_config.use_mixed_precision,
+                            "gradient_checkpointing": finetuning_config.use_gradient_checkpointing,
+                            "lora": finetuning_config.lora_enabled,
+                            "8bit_optimizer": finetuning_config.use_8bit_optimizer,
+                            "quantization": finetuning_config.use_quantization,
+                            "aggressive_cleanup": finetuning_config.aggressive_memory_cleanup
+                        }
                     }
                     
                     if eval_results:
@@ -1479,17 +1833,17 @@ def main():
                         })
                     
                     metadata = ModelMetadata(
-                        model_name="OASST1_FineTuned_Transformer",
-                        version=f"v1.0_ft_epoch_{epoch}",
+                        model_name="OASST1_MemoryOptimized_FineTuned",
+                        version=f"v1.0_ft_epoch_{epoch}_optimized",
                         created_at=datetime.now().isoformat(),
-                        model_config=model.config,
+                        model_config=model.config if hasattr(model, 'config') else model.base_model.config,
                         training_config=finetuning_config,
                         pretrained_model=str(pretrained_model_path),
                         dataset_info={
-                            "name": "OpenAssistant OASST1 Fine-tuning",
+                            "name": "OpenAssistant OASST1 Memory-Optimized Fine-tuning",
                             "num_samples": len(texts),
                             "vocab_size": tokenizer.vocab_size(),
-                            "seq_length": model.config.seq_length,
+                            "seq_length": model.config.seq_length if hasattr(model, 'config') else model.base_model.config.seq_length,
                             "train_sequences": len(dataset),
                             "base_model": pretrained_metadata.get("model_name", "Unknown")
                         },
@@ -1503,27 +1857,42 @@ def main():
                         best_perplexity=float(math.exp(min(best_loss, 20))),
                         hardware_used=device.type.upper(),
                         pytorch_version=torch.__version__,
-                        notes=f"Fine-tuned from {pretrained_model_path} on epoch {epoch}" + 
-                              (f" with LoRA (rank={finetuning_config.lora_rank})" if finetuning_config.lora_enabled else ""),
-                        tags=["oasst1", "finetuned", f"epoch_{epoch}"] + 
+                        memory_optimizations={
+                            "mixed_precision": finetuning_config.use_mixed_precision,
+                            "gradient_checkpointing": finetuning_config.use_gradient_checkpointing,
+                            "lora_enabled": finetuning_config.lora_enabled,
+                            "lora_rank": finetuning_config.lora_rank if finetuning_config.lora_enabled else None,
+                            "8bit_optimizer": finetuning_config.use_8bit_optimizer,
+                            "quantization": finetuning_config.use_quantization,
+                            "cpu_offload": finetuning_config.use_cpu_offload,
+                            "aggressive_cleanup": finetuning_config.aggressive_memory_cleanup
+                        },
+                        notes=f"Memory-optimized fine-tuning from {pretrained_model_path} on epoch {epoch}" + 
+                              (f" with LoRA (rank={finetuning_config.lora_rank})" if finetuning_config.lora_enabled else "") +
+                              f" using {device.type.upper()} with aggressive memory optimizations",
+                        tags=["oasst1", "finetuned", "memory_optimized", f"epoch_{epoch}"] + 
                              (["lora"] if finetuning_config.lora_enabled else []) +
+                             (["mixed_precision"] if finetuning_config.use_mixed_precision else []) +
+                             (["gradient_checkpointing"] if finetuning_config.use_gradient_checkpointing else []) +
+                             (["8bit_optimizer"] if finetuning_config.use_8bit_optimizer else []) +
+                             (["quantized"] if finetuning_config.use_quantization else []) +
                              (["best_loss"] if is_best_loss else []) +
                              (["best_accuracy"] if is_best_acc else [])
                     )
                     
                     try:
-                        with memory_cleanup():
+                        with memory_cleanup(aggressive=True):
                             model_id = model_manager.save_model(model, tokenizer, metadata)
                             if model_id:
                                 models_saved += 1
-                                logger.info(f"💾 Fine-tuned model saved: {model_id}")
+                                logger.info(f"💾 Memory-optimized model saved: {model_id}")
                     except Exception as save_error:
                         logger.error(f"Failed to save model: {save_error}")
                 
                 logger.info(f"Memory after epoch: {get_memory_usage()}")
                 
-                # Memory cleanup between epochs
-                with memory_cleanup():
+                # Aggressive memory cleanup between epochs
+                with memory_cleanup(aggressive=True):
                     pass
                 
             except Exception as e:
@@ -1531,34 +1900,40 @@ def main():
                 logger.error(f"Traceback: {traceback.format_exc()}")
                 
                 if "out of memory" in str(e).lower():
-                    logger.info("Attempting OOM recovery...")
+                    logger.info("Attempting aggressive OOM recovery...")
                     
                     optimizer.zero_grad()
                     
+                    # Clear all possible variables
                     for var_name in ['inputs', 'targets', 'logits', 'loss', 'predictions']:
                         if var_name in locals():
                             del locals()[var_name]
                     
-                    with memory_cleanup():
+                    with memory_cleanup(aggressive=True):
                         pass
                     
-                    # Reduce batch size for fine-tuning
+                    # Further reduce batch size and increase accumulation
                     current_batch_size = finetuning_config.batch_size
                     if current_batch_size > 1:
-                        finetuning_config.batch_size = max(1, current_batch_size // 2)
-                        finetuning_config.gradient_accumulation_steps *= 2
-                        logger.info(f"Reduced batch size to {finetuning_config.batch_size}, "
-                                   f"increased grad accumulation to {finetuning_config.gradient_accumulation_steps}")
+                        finetuning_config.batch_size = 1
+                        finetuning_config.gradient_accumulation_steps *= current_batch_size
+                        logger.info(f"Reduced batch size to 1, increased grad accumulation to {finetuning_config.gradient_accumulation_steps}")
                         
                         train_dataloader = DataLoader(
                             dataset,
-                            batch_size=finetuning_config.batch_size,
+                            batch_size=1,
                             shuffle=True,
                             num_workers=0,
                             pin_memory=False,
                             drop_last=True
                         )
+                        
+                        if accelerator:
+                            model, optimizer, train_dataloader, eval_dataloader = accelerator.prepare(
+                                model, optimizer, train_dataloader, eval_dataloader
+                            )
                     
+                    logger.info(f"Memory after OOM recovery: {get_memory_usage()}")
                     continue
                 else:
                     raise e
@@ -1567,7 +1942,7 @@ def main():
         total_time = time.time() - training_start
         
         logger.info("=" * 80)
-        logger.info("✅ Fine-tuning completed successfully!")
+        logger.info("✅ Memory-optimized fine-tuning completed successfully!")
         logger.info(f"Pre-trained model: {pretrained_model_path}")
         logger.info(f"Best loss: {best_loss:.4f}")
         logger.info(f"Best accuracy: {best_accuracy:.3f} ({best_accuracy*100:.1f}%)")
@@ -1575,8 +1950,24 @@ def main():
         logger.info(f"Models saved: {models_saved}")
         logger.info(f"Fine-tuning time: {total_time/3600:.2f} hours")
         logger.info(f"Parameter efficiency: {trainable_params/total_params*100:.1f}% trainable")
+        
+        # Print memory optimization summary
+        logger.info("\n🧠 Memory Optimizations Applied:")
+        if finetuning_config.use_mixed_precision:
+            logger.info("  ✓ Mixed precision (FP16/BF16) training")
+        if finetuning_config.use_gradient_checkpointing:
+            logger.info("  ✓ Gradient checkpointing")
         if finetuning_config.lora_enabled:
-            logger.info(f"LoRA configuration: rank={finetuning_config.lora_rank}, alpha={finetuning_config.lora_alpha}")
+            logger.info(f"  ✓ LoRA (rank={finetuning_config.lora_rank}, alpha={finetuning_config.lora_alpha})")
+        if finetuning_config.use_8bit_optimizer:
+            logger.info("  ✓ 8-bit optimizer")
+        if finetuning_config.use_quantization:
+            logger.info(f"  ✓ {finetuning_config.quantization_bits}-bit quantization")
+        if finetuning_config.aggressive_memory_cleanup:
+            logger.info("  ✓ Aggressive memory cleanup")
+        if finetuning_config.freeze_layers > 0:
+            logger.info(f"  ✓ Frozen {finetuning_config.freeze_layers} layers")
+        
         logger.info(f"Final memory: {get_memory_usage()}")
         
         # Final comparison with base model
@@ -1596,28 +1987,29 @@ def main():
         if models_saved == 0:
             logger.warning("No models saved! Performing final save...")
             final_metadata = ModelMetadata(
-                model_name="OASST1_FineTuned_FINAL",
-                version="v1.0_FT_FINAL",
+                model_name="OASST1_MemoryOptimized_FINAL",
+                version="v1.0_FT_FINAL_OPTIMIZED",
                 created_at=datetime.now().isoformat(),
-                model_config=model.config,
+                model_config=model.config if hasattr(model, 'config') else model.base_model.config,
                 training_config=finetuning_config,
                 pretrained_model=str(pretrained_model_path),
                 performance_metrics={"final_loss": float(best_loss), "final_accuracy": float(best_accuracy)},
                 total_parameters=int(total_params),
                 trainable_parameters=int(trainable_params),
                 frozen_parameters=int(frozen_params),
-                notes="Final fine-tuned save",
-                tags=["oasst1", "finetuned", "final"]
+                memory_optimizations=finetuning_config.__dict__,
+                notes="Final memory-optimized fine-tuned save",
+                tags=["oasst1", "finetuned", "memory_optimized", "final"]
             )
             
-            with memory_cleanup():
+            with memory_cleanup(aggressive=True):
                 final_id = model_manager.save_model(model, tokenizer, final_metadata)
                 if final_id:
                     logger.info(f"Final save successful: {final_id}")
                     models_saved += 1
         
-        # Generate final samples
-        logger.info("\n🎯 Final Sample Generations:")
+        # Generate final samples with memory optimization
+        logger.info("\n🎯 Final Memory-Optimized Sample Generations:")
         test_prompts = [
             "<user> Hello, how are you?",
             "<user> What is machine learning?",
@@ -1628,7 +2020,9 @@ def main():
         for prompt in test_prompts:
             try:
                 with memory_cleanup():
-                    response = generate_sample_text(model, tokenizer, prompt, max_length=40)
+                    response = generate_sample_text_optimized(
+                        model, tokenizer, prompt, max_length=30, config=finetuning_config
+                    )
                     logger.info(f"  {prompt} → {response}")
             except Exception as e:
                 logger.warning(f"  {prompt} → Generation failed: {e}")
@@ -1638,29 +2032,30 @@ def main():
         return 0 if models_saved > 0 else 1
         
     except KeyboardInterrupt:
-        logger.info("Fine-tuning interrupted by user")
+        logger.info("Memory-optimized fine-tuning interrupted by user")
         return 1
     except Exception as e:
-        logger.error(f"Fine-tuning failed: {e}")
+        logger.error(f"Memory-optimized fine-tuning failed: {e}")
         logger.error(f"Traceback: {traceback.format_exc()}")
         return 1
     finally:
-        with memory_cleanup():
+        # Final aggressive cleanup
+        with memory_cleanup(aggressive=True):
             pass
 
 def create_finetuning_script_with_args():
-    """Create a command-line interface for the fine-tuning script."""
+    """Create a command-line interface for the memory-optimized fine-tuning script."""
     import argparse
     
-    parser = argparse.ArgumentParser(description="Fine-tune OASST1 models")
+    parser = argparse.ArgumentParser(description="Memory-optimized fine-tune OASST1 models")
     parser.add_argument("--pretrained_model", type=str, required=True,
                        help="Path to pre-trained model directory")
     parser.add_argument("--data_path", type=str, default="oasst1_data/oasst1_train.jsonl",
                        help="Path to fine-tuning data")
-    parser.add_argument("--use_lora", action="store_true",
-                       help="Enable LoRA fine-tuning")
-    parser.add_argument("--lora_rank", type=int, default=16,
-                       help="LoRA rank")
+    parser.add_argument("--use_lora", action="store_true", default=True,
+                       help="Enable LoRA fine-tuning (default: True)")
+    parser.add_argument("--lora_rank", type=int, default=8,
+                       help="LoRA rank (default: 8 for memory efficiency)")
     parser.add_argument("--learning_rate", type=float, default=2e-5,
                        help="Learning rate for fine-tuning")
     parser.add_argument("--batch_size", type=int, default=None,
@@ -1674,17 +2069,181 @@ def create_finetuning_script_with_args():
     parser.add_argument("--output_dir", type=str, default="models",
                        help="Output directory for saved models")
     
+    # Memory optimization arguments
+    parser.add_argument("--no_mixed_precision", action="store_true",
+                       help="Disable mixed precision training")
+    parser.add_argument("--no_gradient_checkpointing", action="store_true",
+                       help="Disable gradient checkpointing")
+    parser.add_argument("--no_8bit_optimizer", action="store_true",
+                       help="Disable 8-bit optimizer")
+    parser.add_argument("--enable_quantization", action="store_true",
+                       help="Enable model quantization")
+    parser.add_argument("--quantization_bits", type=int, default=8, choices=[4, 8],
+                       help="Quantization bits (4 or 8)")
+    parser.add_argument("--no_aggressive_cleanup", action="store_true",
+                       help="Disable aggressive memory cleanup")
+    parser.add_argument("--cpu_offload", action="store_true",
+                       help="Enable CPU offloading (requires accelerate)")
+    parser.add_argument("--memory_aggressive", action="store_true", default=True,
+                       help="Use aggressive memory optimization settings")
+    
     return parser
 
-if __name__ == "__main__":
-    # For command-line usage, uncomment the following:
-    # parser = create_finetuning_script_with_args()
-    # args = parser.parse_args()
-    # 
-    # # Override global variables with command line arguments
-    # pretrained_model_path = args.pretrained_model
-    # use_lora = args.use_lora
-    # finetune_data_path = args.data_path
-    # # ... etc
+# Example usage functions for different memory optimization scenarios
+
+def example_memory_optimized_training():
+    """Example of how to use the memory-optimized training."""
     
+    print("🧠 Memory-Optimized Fine-Tuning Examples")
+    print("=" * 50)
+    
+    print("\n1. Ultra Memory Efficient (for 8GB+ VRAM):")
+    print("   - LoRA with rank 4-8")
+    print("   - Mixed precision (FP16)")
+    print("   - Gradient checkpointing")
+    print("   - 8-bit optimizer")
+    print("   - Batch size 1-2")
+    print("   - Aggressive memory cleanup")
+    
+    print("\n2. Balanced Memory/Speed (for 16GB+ VRAM):")
+    print("   - LoRA with rank 16")
+    print("   - Mixed precision")
+    print("   - Gradient checkpointing")
+    print("   - Batch size 4")
+    print("   - Standard memory cleanup")
+    
+    print("\n3. CPU/MPS Optimized:")
+    print("   - LoRA with rank 4")
+    print("   - No mixed precision (not supported)")
+    print("   - Freeze more layers")
+    print("   - Batch size 1")
+    print("   - CPU offloading")
+    
+    print("\n📋 Memory Optimization Checklist:")
+    print("✓ Install optional dependencies:")
+    print("  pip install bitsandbytes peft accelerate")
+    print("✓ Monitor memory usage during training")
+    print("✓ Adjust batch size based on available VRAM")
+    print("✓ Use LoRA for parameter-efficient fine-tuning")
+    print("✓ Enable gradient checkpointing for 30-50% memory savings")
+    print("✓ Use mixed precision for ~50% memory reduction")
+    print("✓ Consider 8-bit quantization for inference")
+
+def estimate_memory_requirements(model_params_millions, batch_size=1, seq_length=512, use_optimizations=True):
+    """Estimate VRAM requirements for fine-tuning."""
+    
+    # Base model memory (parameters + gradients + optimizer states)
+    model_memory_gb = model_params_millions * 4 * 3 / 1024  # 4 bytes per param, 3x for gradients+optimizer
+    
+    # Activation memory (depends on batch size and sequence length)
+    activation_memory_gb = batch_size * seq_length * model_params_millions * 4 / (1024**3)
+    
+    total_memory_gb = model_memory_gb + activation_memory_gb
+    
+    if use_optimizations:
+        # Apply memory optimization reductions
+        if True:  # Mixed precision
+            total_memory_gb *= 0.6
+        if True:  # Gradient checkpointing
+            total_memory_gb *= 0.7
+        if True:  # LoRA (only train 1-5% of parameters)
+            total_memory_gb *= 0.3
+        if True:  # 8-bit optimizer
+            total_memory_gb *= 0.8
+    
+    return total_memory_gb
+
+def print_memory_recommendations():
+    """Print memory usage recommendations for different model sizes."""
+    
+    print("\n🎯 Memory Requirements Estimation (with optimizations)")
+    print("=" * 60)
+    
+    model_sizes = [
+        (125, "Small (125M params)"),
+        (350, "Medium (350M params)"), 
+        (760, "Large (760M params)"),
+        (1300, "XL (1.3B params)"),
+        (2700, "XXL (2.7B params)")
+    ]
+    
+    for params_m, name in model_sizes:
+        memory_needed = estimate_memory_requirements(params_m, batch_size=1, use_optimizations=True)
+        print(f"{name:20} | ~{memory_needed:.1f}GB VRAM (batch_size=1)")
+    
+    print("\n💡 Tips for reducing memory usage:")
+    print("• Use smaller batch sizes (1-2) with higher gradient accumulation")
+    print("• Enable all memory optimizations (LoRA + mixed precision + checkpointing)")
+    print("• Freeze more transformer layers")
+    print("• Use shorter sequence lengths if possible")
+    print("• Consider CPU offloading for very large models")
+
+# Installation check and recommendation function
+def check_and_recommend_installations():
+    """Check optional dependencies and recommend installations."""
+    
+    print("\n📦 Dependency Check and Recommendations")
+    print("=" * 50)
+    
+    # Check PyTorch version
+    print(f"PyTorch: {torch.__version__} ✓")
+    
+    # Check optional memory optimization libraries
+    if HAS_BITSANDBYTES:
+        print("BitsAndBytes: Available ✓")
+        print("  → Enables 8-bit optimizers and quantization")
+    else:
+        print("BitsAndBytes: Not installed ❌")
+        print("  → Install with: pip install bitsandbytes")
+        print("  → Enables 8-bit training and quantization")
+    
+    if HAS_PEFT:
+        print("PEFT: Available ✓") 
+        print("  → Enables LoRA and other parameter-efficient methods")
+    else:
+        print("PEFT: Not installed ❌")
+        print("  → Install with: pip install peft")
+        print("  → Enables LoRA for memory-efficient fine-tuning")
+    
+    if HAS_ACCELERATE:
+        print("Accelerate: Available ✓")
+        print("  → Enables distributed training and CPU offloading")
+    else:
+        print("Accelerate: Not installed ❌") 
+        print("  → Install with: pip install accelerate")
+        print("  → Enables mixed precision and model distribution")
+    
+    print(f"\nCUDA available: {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        print(f"CUDA devices: {torch.cuda.device_count()}")
+        for i in range(torch.cuda.device_count()):
+            props = torch.cuda.get_device_properties(i)
+            print(f"  GPU {i}: {props.name} ({props.total_memory / 1024**3:.1f}GB)")
+    
+    if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        print("MPS (Apple Silicon): Available ✓")
+    
+    print("\n🚀 Recommended installation for optimal memory usage:")
+    print("pip install torch torchvision torchaudio")
+    print("pip install bitsandbytes peft accelerate")
+    
+    print("\n⚡ For maximum memory efficiency, ensure all dependencies are installed!")
+
+if __name__ == "__main__":
+    # Print helpful information
+    print("🧠 Memory-Optimized Fine-Tuning for OASST1")
+    print("=" * 50)
+    
+    # Check dependencies
+    check_and_recommend_installations()
+    
+    # Show memory recommendations  
+    print_memory_recommendations()
+    
+    # Show examples
+    example_memory_optimized_training()
+    
+    print("\n" + "=" * 50)
+    print("🚀 Starting fine-tuning...")
+
     exit(main())
