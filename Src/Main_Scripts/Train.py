@@ -59,7 +59,7 @@ def setup_logging():
 
 logger = setup_logging()
 
-# Configuration classes (enhanced with DeepSpeed options)
+# Configuration classes (enhanced with precision detection)
 @dataclass
 class ModelConfig:
     vocab_size: int = 50000
@@ -88,15 +88,31 @@ class TrainingConfig:
     label_smoothing: float = 0.0
     beta1: float = 0.9
     beta2: float = 0.95
-    # NEW: Mixed precision and memory optimization
+    
+    # Mixed precision and memory optimization
     use_mixed_precision: bool = True
+    precision_type: str = "fp16"  # "fp16", "bf16", or "fp32"
+    use_loss_scaling: bool = True  # Automatically set based on precision_type
     amp_opt_level: str = "O1"  # O0, O1, O2, O3
+    
+    # DataLoader settings
     dataloader_num_workers: int = 0
     pin_memory: bool = False
-    # NEW: DeepSpeed options
+    
+    # DeepSpeed options
     use_deepspeed: bool = True
     deepspeed_config: str = "deepspeed_config.json"
     zero_stage: int = 2  # ZeRO stage (1, 2, or 3)
+    
+    def __post_init__(self):
+        """Automatically adjust settings based on precision type."""
+        if self.precision_type == "bf16":
+            self.use_loss_scaling = False  # BF16 doesn't need loss scaling
+        elif self.precision_type == "fp16":
+            self.use_loss_scaling = True   # FP16 needs loss scaling
+        else:  # fp32
+            self.use_mixed_precision = False
+            self.use_loss_scaling = False
 
 @dataclass
 class ModelMetadata:
@@ -121,15 +137,47 @@ class ModelMetadata:
     notes: str = ""
     tags: list = None
 
-# DeepSpeed configuration generation
-def create_deepspeed_config(training_config: TrainingConfig):
-    """Create DeepSpeed configuration dynamically."""
+def get_optimal_precision_config(device):
+    """Determine optimal precision based on hardware capabilities."""
+    
+    # Check for BF16 support (newer GPUs)
+    supports_bf16 = False
+    precision_type = "fp16"  # Default fallback
+    
+    if device.type == 'cuda' and torch.cuda.is_available():
+        # Check GPU compute capability for BF16 support
+        major, minor = torch.cuda.get_device_capability()
+        
+        # Ampere (8.0+) and newer support BF16 natively
+        # Some Turing (7.5) cards also support it
+        if major >= 8 or (major == 7 and minor >= 5):
+            supports_bf16 = True
+            precision_type = "bf16"
+            
+        # Check if PyTorch has BF16 support compiled
+        if supports_bf16:
+            try:
+                # Test BF16 tensor creation
+                test_tensor = torch.tensor([1.0], dtype=torch.bfloat16, device=device)
+                del test_tensor
+                logger.info("✅ BF16 support detected and verified")
+            except:
+                supports_bf16 = False
+                precision_type = "fp16"
+                logger.info("⚠️ BF16 hardware detected but PyTorch support unavailable, using FP16")
+    
+    return supports_bf16, precision_type
+
+# DeepSpeed configuration generation with precision awareness
+def create_precision_aware_deepspeed_config(training_config: TrainingConfig):
+    """Create DeepSpeed config with precision-specific optimizations."""
+    
     config = {
         "train_batch_size": training_config.batch_size * training_config.gradient_accumulation_steps,
         "train_micro_batch_size_per_gpu": training_config.batch_size,
         "gradient_accumulation_steps": training_config.gradient_accumulation_steps,
         "optimizer": {
-            "type": "Adam",
+            "type": "AdamW",
             "params": {
                 "lr": training_config.learning_rate,
                 "betas": [training_config.beta1, training_config.beta2],
@@ -138,34 +186,46 @@ def create_deepspeed_config(training_config: TrainingConfig):
             }
         },
         "scheduler": {
-            "type": "WarmupLR",
+            "type": "WarmupDecayLR",
             "params": {
                 "warmup_min_lr": 0,
                 "warmup_max_lr": training_config.learning_rate,
-                "warmup_num_steps": "auto"
+                "warmup_num_steps": "auto",
+                "total_num_steps": "auto"
             }
         },
         "gradient_clipping": training_config.max_grad_norm,
-        "fp16": {
-            "enabled": training_config.use_mixed_precision,
-            "loss_scale": 0,
-            "loss_scale_window": 1000,
-            "initial_scale_power": 16,
-            "hysteresis": 2,
-            "min_loss_scale": 1
-        },
-        "activation_checkpointing": {
-            "partition_activations": True,
-            "cpu_checkpointing": True,
-            "contiguous_memory_optimization": False,
-            "number_checkpoints": 4,
-            "synchronize_checkpoint_boundary": False,
-            "profile": False
-        },
+        "steps_per_print": 5,
         "wall_clock_breakdown": False
     }
     
-    # Add ZeRO configuration based on stage
+    # Precision-specific configuration
+    if hasattr(training_config, 'precision_type'):
+        if training_config.precision_type == "bf16":
+            config["bf16"] = {"enabled": True}
+            config["fp16"] = {"enabled": False}
+            # BF16 doesn't need loss scaling
+            logger.info("DeepSpeed: BF16 enabled, no loss scaling")
+            
+        elif training_config.precision_type == "fp16":
+            config["fp16"] = {
+                "enabled": True,
+                "loss_scale": 0,  # Dynamic loss scaling
+                "loss_scale_window": 1000,
+                "initial_scale_power": 16,
+                "hysteresis": 2,
+                "min_loss_scale": 1,
+                "auto_cast": False
+            }
+            config["bf16"] = {"enabled": False}
+            logger.info("DeepSpeed: FP16 enabled with dynamic loss scaling")
+            
+        else:  # fp32
+            config["fp16"] = {"enabled": False}
+            config["bf16"] = {"enabled": False}
+            logger.info("DeepSpeed: FP32 mode (no mixed precision)")
+    
+    # ZeRO configuration
     if training_config.zero_stage >= 1:
         config["zero_optimization"] = {
             "stage": training_config.zero_stage,
@@ -181,13 +241,26 @@ def create_deepspeed_config(training_config: TrainingConfig):
             "contiguous_gradients": True,
             "sub_group_size": 1e9,
             "reduce_bucket_size": "auto",
-            "stage3_prefetch_bucket_size": "auto",
-            "stage3_param_persistence_threshold": "auto",
-            "stage3_max_live_parameters": 1e9,
-            "stage3_max_reuse_distance": 1e9,
-            "stage3_gather_16bit_weights_on_model_save": True,
+            "stage3_prefetch_bucket_size": "auto" if training_config.zero_stage >= 3 else None,
+            "stage3_param_persistence_threshold": "auto" if training_config.zero_stage >= 3 else None,
+            "stage3_max_live_parameters": 1e9 if training_config.zero_stage >= 3 else None,
+            "stage3_max_reuse_distance": 1e9 if training_config.zero_stage >= 3 else None,
+            "stage3_gather_16bit_weights_on_model_save": True if training_config.zero_stage >= 3 else None,
             "memory_efficient_linear": False
         }
+        
+        # Remove None values for cleaner config
+        config["zero_optimization"] = {k: v for k, v in config["zero_optimization"].items() if v is not None}
+    
+    # Activation checkpointing (always beneficial for memory)
+    config["activation_checkpointing"] = {
+        "partition_activations": True,
+        "cpu_checkpointing": True,
+        "contiguous_memory_optimization": False,
+        "number_checkpoints": 4,
+        "synchronize_checkpoint_boundary": False,
+        "profile": False
+    }
     
     return config
 
@@ -658,7 +731,11 @@ class ModelManager:
             return None
 
 def get_ultra_low_vram_config():
-    """Ultra-conservative configuration for minimal VRAM usage with DeepSpeed optimizations."""
+    """Ultra-conservative configuration for minimal VRAM usage with precision detection."""
+    
+    # Get precision configuration
+    supports_bf16, precision_type = get_optimal_precision_config(device)
+    
     if device.type == 'cuda':
         model_config = ModelConfig(
             vocab_size=15000,   # Smaller vocabulary for DeepSpeed
@@ -683,6 +760,7 @@ def get_ultra_low_vram_config():
         )
         batch_size = 1
         max_samples = 1000
+        precision_type = "fp32"  # MPS doesn't support mixed precision reliably
     else:  # CPU
         model_config = ModelConfig(
             vocab_size=1000,
@@ -695,22 +773,77 @@ def get_ultra_low_vram_config():
         )
         batch_size = 2
         max_samples = 500
+        precision_type = "fp32"  # CPU only supports fp32
     
-    training_config = TrainingConfig(
-        learning_rate=2e-4,  # Slightly higher LR for DeepSpeed
-        weight_decay=0.01,
-        batch_size=batch_size,
-        gradient_accumulation_steps=32,  # Larger accumulation for DeepSpeed
-        max_epochs=25,  # More epochs with DeepSpeed efficiency
-        warmup_ratio=0.03,  # Less warmup
-        max_grad_norm=0.5,
-        use_mixed_precision=AMP_AVAILABLE and device.type == 'cuda',
-        dataloader_num_workers=0,
-        pin_memory=False,
-        # DeepSpeed options
-        use_deepspeed=DEEPSPEED_AVAILABLE and device.type == 'cuda',
-        zero_stage=2,  # ZeRO stage 2 for good memory savings
-    )
+    # Enhanced training configuration with precision detection
+    if precision_type == "bf16" and supports_bf16:
+        # BF16 Configuration - More stable, no loss scaling needed
+        training_config = TrainingConfig(
+            learning_rate=3e-4,  # Can use slightly higher LR with BF16 stability
+            weight_decay=0.01,
+            batch_size=batch_size,
+            gradient_accumulation_steps=32,
+            max_epochs=25,
+            warmup_ratio=0.05,  # Can use more warmup with BF16 stability
+            max_grad_norm=1.0,  # Can be less conservative
+            use_mixed_precision=AMP_AVAILABLE and device.type == 'cuda',
+            precision_type="bf16",
+            dataloader_num_workers=0,
+            pin_memory=False,
+            # DeepSpeed options
+            use_deepspeed=DEEPSPEED_AVAILABLE and device.type == 'cuda',
+            zero_stage=2,
+            # BF16 specific settings
+            use_loss_scaling=False,  # Not needed for BF16
+            amp_opt_level="O1"
+        )
+        logger.info("🔥 Using BF16 precision - more stable training")
+        
+    elif device.type == 'cuda' and AMP_AVAILABLE:
+        # FP16 Configuration - Memory efficient but needs careful tuning
+        training_config = TrainingConfig(
+            learning_rate=2e-4,  # Conservative LR for FP16 stability
+            weight_decay=0.01,
+            batch_size=batch_size,
+            gradient_accumulation_steps=32,
+            max_epochs=25,
+            warmup_ratio=0.03,  # Less warmup to avoid small gradient issues
+            max_grad_norm=0.5,  # More conservative clipping
+            use_mixed_precision=True,
+            precision_type="fp16",
+            dataloader_num_workers=0,
+            pin_memory=False,
+            # DeepSpeed options
+            use_deepspeed=DEEPSPEED_AVAILABLE and device.type == 'cuda',
+            zero_stage=2,
+            # FP16 specific settings
+            use_loss_scaling=True,  # Essential for FP16
+            amp_opt_level="O1"
+        )
+        logger.info("⚡ Using FP16 precision - maximum memory efficiency")
+        
+    else:
+        # FP32 Configuration - Most stable but memory intensive
+        training_config = TrainingConfig(
+            learning_rate=1e-4,  # Lower LR for FP32
+            weight_decay=0.01,
+            batch_size=max(1, batch_size // 2),  # Reduce batch size for FP32
+            gradient_accumulation_steps=64,  # Increase accumulation
+            max_epochs=30,  # More epochs needed with lower LR
+            warmup_ratio=0.1,  # More warmup for stability
+            max_grad_norm=1.0,
+            use_mixed_precision=False,
+            precision_type="fp32",
+            dataloader_num_workers=0,
+            pin_memory=False,
+            # DeepSpeed options (still beneficial even without mixed precision)
+            use_deepspeed=DEEPSPEED_AVAILABLE and device.type == 'cuda',
+            zero_stage=1,  # Less aggressive ZeRO for FP32
+            # FP32 specific settings
+            use_loss_scaling=False,
+            amp_opt_level="O0"  # No mixed precision
+        )
+        logger.info("🐌 Using FP32 precision - maximum stability, higher memory usage")
     
     return model_config, training_config, max_samples
 
@@ -774,16 +907,16 @@ def load_and_process_data(data_path: str, max_samples: Optional[int] = None) -> 
     logger.info(f"Loaded {len(texts):,} texts")
     return texts
 
-# NEW: DeepSpeed training loop
-def train_epoch_with_deepspeed(deepspeed_engine, dataloader, epoch):
-    """Training loop optimized for DeepSpeed."""
+# NEW: DeepSpeed training loop with precision awareness
+def train_epoch_with_deepspeed(deepspeed_engine, dataloader, epoch, precision_type="fp16"):
+    """Training loop optimized for DeepSpeed with precision awareness."""
     deepspeed_engine.train()
     total_loss = 0.0
     total_correct = 0
     total_tokens = 0
     num_batches = 0
     
-    logger.info(f"Starting DeepSpeed epoch {epoch} with {len(dataloader)} batches")
+    logger.info(f"Starting DeepSpeed epoch {epoch} with {len(dataloader)} batches ({precision_type})")
     
     for batch_idx, (inputs, targets) in enumerate(dataloader):
         try:
@@ -805,7 +938,7 @@ def train_epoch_with_deepspeed(deepspeed_engine, dataloader, epoch):
                 del inputs, targets
                 continue
             
-            # DeepSpeed forward pass
+            # DeepSpeed forward pass (precision handled by DeepSpeed config)
             logits = deepspeed_engine(inputs)
             
             # Compute loss
@@ -844,7 +977,7 @@ def train_epoch_with_deepspeed(deepspeed_engine, dataloader, epoch):
                 
                 logger.info(f"Epoch {epoch} | Batch {batch_idx} | "
                            f"Loss: {current_loss:.4f} | Acc: {current_acc:.3f} | "
-                           f"LR: {current_lr:.6f}")
+                           f"LR: {current_lr:.6f} | Precision: {precision_type}")
             
         except RuntimeError as e:
             if "out of memory" in str(e).lower():
@@ -872,11 +1005,11 @@ def train_epoch_with_deepspeed(deepspeed_engine, dataloader, epoch):
     
     return avg_loss, avg_acc
 
-# Enhanced training loop with mixed precision (fallback when DeepSpeed unavailable)
+# Enhanced training loop with precision awareness
 def train_epoch_ultra_efficient(model, dataloader, criterion, optimizer, scheduler, epoch, 
                                gradient_accumulation_steps=1, max_grad_norm=1.0, 
-                               use_mixed_precision=False, scaler=None):
-    """Ultra-efficient training loop with mixed precision and aggressive memory management."""
+                               use_mixed_precision=False, scaler=None, precision_type="fp16"):
+    """Ultra-efficient training loop with precision awareness."""
     model.train()
     total_loss = 0.0
     total_correct = 0
@@ -886,7 +1019,7 @@ def train_epoch_ultra_efficient(model, dataloader, criterion, optimizer, schedul
     
     optimizer.zero_grad()
     
-    logger.info(f"Starting ultra-efficient epoch {epoch} with {len(dataloader)} batches")
+    logger.info(f"Starting ultra-efficient epoch {epoch} with {len(dataloader)} batches ({precision_type})")
     logger.info(f"Mixed precision: {use_mixed_precision}")
     
     for batch_idx, (inputs, targets) in enumerate(dataloader):
@@ -908,11 +1041,16 @@ def train_epoch_ultra_efficient(model, dataloader, criterion, optimizer, schedul
                 del inputs, targets
                 continue
             
-            # Forward pass with optional mixed precision
+            # Forward pass with precision-aware autocast
             if use_mixed_precision and scaler is not None:
-                with autocast():
-                    logits = model(inputs)
-                    loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
+                if precision_type == "bf16":
+                    with autocast(dtype=torch.bfloat16):
+                        logits = model(inputs)
+                        loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
+                else:  # fp16
+                    with autocast(dtype=torch.float16):
+                        logits = model(inputs)
+                        loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
             else:
                 logits = model(inputs)
                 loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
@@ -978,7 +1116,7 @@ def train_epoch_ultra_efficient(model, dataloader, criterion, optimizer, schedul
                 
                 logger.info(f"Epoch {epoch} | Batch {batch_idx} | "
                            f"Loss: {current_loss:.4f} | Acc: {current_acc:.3f} | "
-                           f"LR: {current_lr:.6f}")
+                           f"LR: {current_lr:.6f} | Precision: {precision_type}")
             
             del loss  # Final cleanup
             
@@ -1068,8 +1206,9 @@ def count_parameters(model):
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     return total, trainable
 
-def evaluate_model_minimal(model, dataloader, criterion, max_batches=3, use_mixed_precision=False, deepspeed_engine=None):
-    """Ultra-minimal evaluation with optional mixed precision and DeepSpeed support."""
+def evaluate_model_minimal(model, dataloader, criterion, max_batches=3, use_mixed_precision=False, 
+                          deepspeed_engine=None, precision_type="fp16"):
+    """Ultra-minimal evaluation with precision awareness."""
     if deepspeed_engine is not None:
         deepspeed_engine.eval()
         model = deepspeed_engine
@@ -1095,11 +1234,16 @@ def evaluate_model_minimal(model, dataloader, criterion, max_batches=3, use_mixe
                         inputs = inputs.to(device)
                         targets = targets.to(device)
                     
-                    # Forward pass with optional mixed precision
+                    # Forward pass with precision-aware autocast
                     if use_mixed_precision and AMP_AVAILABLE and deepspeed_engine is None:
-                        with autocast():
-                            logits = model(inputs)
-                            loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
+                        if precision_type == "bf16":
+                            with autocast(dtype=torch.bfloat16):
+                                logits = model(inputs)
+                                loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
+                        else:  # fp16
+                            with autocast(dtype=torch.float16):
+                                logits = model(inputs)
+                                loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
                     else:
                         logits = model(inputs)
                         loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
@@ -1144,8 +1288,9 @@ def evaluate_model_minimal(model, dataloader, criterion, max_batches=3, use_mixe
         'perplexity': perplexity
     }
 
-def generate_sample_text_minimal(model, tokenizer, prompt="<user> Hello", max_length=20, use_mixed_precision=False, deepspeed_engine=None):
-    """Minimal text generation with optional mixed precision and DeepSpeed support."""
+def generate_sample_text_minimal(model, tokenizer, prompt="<user> Hello", max_length=20, 
+                                use_mixed_precision=False, deepspeed_engine=None, precision_type="fp16"):
+    """Minimal text generation with precision awareness."""
     if deepspeed_engine is not None:
         deepspeed_engine.eval()
         model = deepspeed_engine
@@ -1168,8 +1313,12 @@ def generate_sample_text_minimal(model, tokenizer, prompt="<user> Hello", max_le
                     break
                 
                 if use_mixed_precision and AMP_AVAILABLE and deepspeed_engine is None:
-                    with autocast():
-                        logits = model(generated)
+                    if precision_type == "bf16":
+                        with autocast(dtype=torch.bfloat16):
+                            logits = model(generated)
+                    else:  # fp16
+                        with autocast(dtype=torch.float16):
+                            logits = model(generated)
                 else:
                     logits = model(generated)
                 
@@ -1222,6 +1371,10 @@ def check_environment():
             major, minor = props.major, props.minor
             if major >= 7 or (major == 6 and minor >= 0):
                 logger.info("✅ Tensor Cores supported (good for mixed precision)")
+                if major >= 8:
+                    logger.info("✅ BF16 hardware support detected")
+                elif major == 7 and minor >= 5:
+                    logger.info("✅ Limited BF16 hardware support detected")
             else:
                 logger.info("⚠️ Limited Tensor Core support")
         
@@ -1276,13 +1429,13 @@ def create_optimized_dataloader(dataset, batch_size, training_config, shuffle=Tr
     )
 
 def initialize_deepspeed(model, training_config):
-    """Initialize DeepSpeed engine."""
+    """Initialize DeepSpeed engine with precision-aware config."""
     if not DEEPSPEED_AVAILABLE:
         logger.warning("DeepSpeed not available, falling back to regular training")
         return None
     
-    # Create DeepSpeed config
-    ds_config = create_deepspeed_config(training_config)
+    # Create precision-aware DeepSpeed config
+    ds_config = create_precision_aware_deepspeed_config(training_config)
     
     # Write config to file
     config_path = "deepspeed_config.json"
@@ -1291,6 +1444,7 @@ def initialize_deepspeed(model, training_config):
     
     logger.info(f"DeepSpeed config written to {config_path}")
     logger.info(f"ZeRO Stage: {training_config.zero_stage}")
+    logger.info(f"Precision: {training_config.precision_type}")
     
     try:
         # Initialize DeepSpeed
@@ -1307,9 +1461,28 @@ def initialize_deepspeed(model, training_config):
         logger.error(f"Failed to initialize DeepSpeed: {e}")
         return None
 
+def create_precision_aware_scaler(training_config):
+    """Create appropriate scaler based on precision type."""
+    if not training_config.use_mixed_precision or not AMP_AVAILABLE:
+        return None
+    
+    if training_config.precision_type == "bf16":
+        # BF16 doesn't need loss scaling, but we still create a scaler for compatibility
+        return GradScaler(enabled=False)
+    elif training_config.precision_type == "fp16":
+        # FP16 needs proper loss scaling
+        return GradScaler(
+            init_scale=2.**16,
+            growth_factor=2.0,
+            backoff_factor=0.5,
+            growth_interval=2000
+        )
+    else:
+        return None
+
 def main():
-    """Ultra-low VRAM training main function with DeepSpeed support."""
-    logger.info("🚀 Starting ULTRA LOW VRAM Training with DeepSpeed Support")
+    """Ultra-low VRAM training main function with precision detection."""
+    logger.info("🚀 Starting ULTRA LOW VRAM Training with Precision Detection")
     logger.info("=" * 60)
     
     # Environment check
@@ -1319,16 +1492,18 @@ def main():
     # Apply CUDA optimizations
     optimize_cuda_settings()
     
-    # Ultra-conservative configuration
+    # Ultra-conservative configuration with precision detection
     model_config, training_config, max_samples = get_ultra_low_vram_config()
     
-    logger.info(f"Ultra-low VRAM Configuration with DeepSpeed:")
+    logger.info(f"Ultra-low VRAM Configuration:")
     logger.info(f"  Model: {model_config.hidden_size}x{model_config.num_layers}")
     logger.info(f"  Vocab size: {model_config.vocab_size}")
     logger.info(f"  Sequence length: {model_config.seq_length}")
     logger.info(f"  Batch size: {training_config.batch_size}")
     logger.info(f"  Gradient accumulation: {training_config.gradient_accumulation_steps}")
+    logger.info(f"  Precision type: {training_config.precision_type}")
     logger.info(f"  Mixed precision: {training_config.use_mixed_precision}")
+    logger.info(f"  Loss scaling: {training_config.use_loss_scaling}")
     logger.info(f"  Gradient checkpointing: {model_config.gradient_checkpointing}")
     logger.info(f"  Use DeepSpeed: {training_config.use_deepspeed}")
     logger.info(f"  ZeRO Stage: {training_config.zero_stage}")
@@ -1337,11 +1512,10 @@ def main():
     model_manager = ModelManager("models")
     deepspeed_engine = None
     
-    # Initialize mixed precision scaler (for non-DeepSpeed training)
-    scaler = None
-    if training_config.use_mixed_precision and AMP_AVAILABLE and not training_config.use_deepspeed:
-        scaler = GradScaler()
-        logger.info("Mixed precision scaler initialized")
+    # Initialize precision-aware scaler
+    scaler = create_precision_aware_scaler(training_config)
+    if scaler is not None:
+        logger.info(f"Mixed precision scaler initialized for {training_config.precision_type}")
     
     try:
         # Load minimal data
@@ -1442,7 +1616,7 @@ def main():
         logger.info(f"Memory before training: {get_memory_usage()}")
         
         # Ultra-efficient training loop
-        logger.info("🚀 Starting ultra-efficient training with DeepSpeed...")
+        logger.info("🚀 Starting ultra-efficient training with precision detection...")
         training_start = time.time()
         best_loss = float('inf')
         models_saved = 0
@@ -1456,7 +1630,7 @@ def main():
                 # Choose training method based on DeepSpeed availability
                 if training_config.use_deepspeed and deepspeed_engine is not None:
                     train_loss, train_acc = train_epoch_with_deepspeed(
-                        deepspeed_engine, train_dataloader, epoch
+                        deepspeed_engine, train_dataloader, epoch, training_config.precision_type
                     )
                 else:
                     train_loss, train_acc = train_epoch_ultra_efficient(
@@ -1464,7 +1638,8 @@ def main():
                         training_config.gradient_accumulation_steps,
                         training_config.max_grad_norm,
                         training_config.use_mixed_precision,
-                        scaler
+                        scaler,
+                        training_config.precision_type
                     )
                 
                 # Check for invalid loss
@@ -1485,7 +1660,8 @@ def main():
                         eval_results = evaluate_model_minimal(
                             model, eval_dataloader, eval_criterion, max_batches=3,
                             use_mixed_precision=training_config.use_mixed_precision and not training_config.use_deepspeed,
-                            deepspeed_engine=deepspeed_engine if training_config.use_deepspeed else None
+                            deepspeed_engine=deepspeed_engine if training_config.use_deepspeed else None,
+                            precision_type=training_config.precision_type
                         )
                     logger.info(f"Eval - Loss: {eval_results['avg_loss']:.4f}, Acc: {eval_results['accuracy']:.3f}")
                 
@@ -1495,7 +1671,8 @@ def main():
                         sample = generate_sample_text_minimal(
                             model, tokenizer,
                             use_mixed_precision=training_config.use_mixed_precision and not training_config.use_deepspeed,
-                            deepspeed_engine=deepspeed_engine if training_config.use_deepspeed else None
+                            deepspeed_engine=deepspeed_engine if training_config.use_deepspeed else None,
+                            precision_type=training_config.precision_type
                         )
                         logger.info(f"Sample: {sample}")
                 
@@ -1512,7 +1689,9 @@ def main():
                         "train_accuracy": float(train_acc),
                         "epoch": int(epoch),
                         "is_best": is_best,
+                        "precision_type": training_config.precision_type,
                         "mixed_precision_used": training_config.use_mixed_precision,
+                        "loss_scaling_used": training_config.use_loss_scaling,
                         "gradient_checkpointing_used": model_config.gradient_checkpointing,
                         "deepspeed_used": training_config.use_deepspeed,
                         "zero_stage": training_config.zero_stage if training_config.use_deepspeed else None,
@@ -1525,8 +1704,8 @@ def main():
                         })
                     
                     metadata = ModelMetadata(
-                        model_name="Ultra_Low_VRAM_Model_DeepSpeed",
-                        version=f"v3.0_epoch_{epoch}",
+                        model_name=f"Ultra_Low_VRAM_Model_{training_config.precision_type.upper()}",
+                        version=f"v4.0_epoch_{epoch}",
                         created_at=datetime.now().isoformat(),
                         model_config=model_config,
                         training_config=training_config,
@@ -1537,10 +1716,12 @@ def main():
                         best_loss=float(best_loss),
                         hardware_used=device.type.upper(),
                         pytorch_version=torch.__version__,
-                        notes=f"Ultra-low VRAM training epoch {epoch} with DeepSpeed ZeRO-{training_config.zero_stage if training_config.use_deepspeed else 'disabled'}",
-                        tags=["ultra_low_vram", "deepspeed", f"epoch_{epoch}"] + (["best"] if is_best else []) + 
+                        notes=f"Ultra-low VRAM training epoch {epoch} with {training_config.precision_type.upper()} precision and DeepSpeed ZeRO-{training_config.zero_stage if training_config.use_deepspeed else 'disabled'}",
+                        tags=["ultra_low_vram", f"{training_config.precision_type}_precision", f"epoch_{epoch}"] + 
+                             (["best"] if is_best else []) + 
                              (["mixed_precision"] if training_config.use_mixed_precision else []) +
                              (["gradient_checkpointing"] if model_config.gradient_checkpointing else []) +
+                             (["deepspeed"] if training_config.use_deepspeed else []) +
                              ([f"zero_stage_{training_config.zero_stage}"] if training_config.use_deepspeed else [])
                     )
                     
@@ -1577,7 +1758,7 @@ def main():
                         # Regular training recovery
                         optimizer.zero_grad()
                         if scaler is not None:
-                            scaler = GradScaler()  # Reset scaler
+                            scaler = create_precision_aware_scaler(training_config)  # Reset scaler
                         
                         with ultra_memory_cleanup():
                             pass
@@ -1601,7 +1782,8 @@ def main():
         total_time = time.time() - training_start
         
         logger.info("=" * 60)
-        logger.info("✅ Ultra-low VRAM training with DeepSpeed completed!")
+        logger.info("✅ Ultra-low VRAM training with precision detection completed!")
+        logger.info(f"Precision used: {training_config.precision_type.upper()}")
         logger.info(f"Best loss: {best_loss:.4f}")
         logger.info(f"Models saved: {models_saved}")
         logger.info(f"Training time: {total_time/60:.1f} minutes")
@@ -1610,6 +1792,7 @@ def main():
         if training_config.use_deepspeed:
             logger.info(f"ZeRO Stage: {training_config.zero_stage}")
         logger.info(f"Mixed precision used: {training_config.use_mixed_precision}")
+        logger.info(f"Loss scaling used: {training_config.use_loss_scaling}")
         logger.info(f"Gradient checkpointing used: {model_config.gradient_checkpointing}")
         
         return 0 if models_saved > 0 else 1
