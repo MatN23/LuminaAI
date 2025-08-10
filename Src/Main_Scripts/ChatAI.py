@@ -13,12 +13,10 @@ import requests
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any, Callable
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from abc import ABC, abstractmethod
-
-# Import shared components - Updated for subword tokenization
-from model_manager import ModelManager, ModelMetadata
-from subword_transformer import SubwordTransformer, SubwordTokenizer  # Changed import
+import math
+from contextlib import contextmanager
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -38,22 +36,47 @@ class GenerationConfig:
     min_length: int = 1
     do_sample: bool = True
 
-def setup_device():
-    """Setup the best available device with proper error handling."""
+# ULTRA-AGGRESSIVE memory management (from Train.py)
+@contextmanager
+def ultra_memory_cleanup():
+    """Ultra-aggressive memory cleanup."""
     try:
-        if torch.backends.mps.is_available() and torch.backends.mps.is_built():
-            device = torch.device("mps")
-            logger.info("Using device: MPS (Apple Silicon)")
-        elif torch.cuda.is_available():
-            device = torch.device("cuda")
-            logger.info(f"Using device: CUDA ({torch.cuda.get_device_name()})")
-        else:
-            device = torch.device("cpu")
-            logger.info("Using device: CPU")
-        return device
-    except Exception as e:
-        logger.warning(f"Error setting up device: {e}. Falling back to CPU.")
-        return torch.device("cpu")
+        yield
+    finally:
+        # Force Python garbage collection multiple times
+        for _ in range(3):
+            gc.collect()
+        
+        # CUDA cleanup
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+            torch.cuda.ipc_collect()
+            if hasattr(torch.cuda, 'reset_peak_memory_stats'):
+                torch.cuda.reset_peak_memory_stats()
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            torch.mps.empty_cache()
+
+def setup_device():
+    """Setup device with ultra-conservative memory management (from Train.py)."""
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        logger.info(f"Using device: CUDA ({torch.cuda.get_device_name()})")
+        logger.info(f"CUDA Capability: {torch.cuda.get_device_capability()}")
+        
+        # Much more conservative memory fraction
+        torch.cuda.set_per_process_memory_fraction(0.70)  # Only use 70% of GPU memory
+        torch.cuda.empty_cache()
+    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        device = torch.device("mps")
+        logger.info("Using device: MPS (Apple Silicon)")
+        torch.mps.empty_cache()
+    else:
+        device = torch.device("cpu")
+        logger.info("Using device: CPU")
+        torch.set_num_threads(min(4, os.cpu_count() or 1))
+    
+    return device
 
 device = setup_device()
 
@@ -64,39 +87,36 @@ def ensure_tensor_device(tensor, target_device):
     return tensor
 
 def validate_tokenizer(tokenizer):
-    """Validate that the subword tokenizer is working correctly."""
+    """Validate that the tokenizer is working correctly."""
     test_text = "Hello, how are you?"
     try:
         # Test required methods exist
-        required_methods = ['tokenize', 'encode', 'decode', 'vocab_size']
+        required_methods = ['encode', 'decode', 'vocab_size']
         for method in required_methods:
             if not hasattr(tokenizer, method):
                 print(f"❌ Missing required method: {method}")
                 return False
         
         # Test required attributes
-        required_attrs = ['vocab', 'merges']
+        required_attrs = ['vocab', 'id_to_token']
         for attr in required_attrs:
             if not hasattr(tokenizer, attr):
                 print(f"❌ Missing required attribute: {attr}")
                 return False
         
-        # Test subword tokenization methods
-        subwords = tokenizer.tokenize(test_text)
+        # Test tokenization methods
         encoded = tokenizer.encode(test_text)
         decoded = tokenizer.decode(encoded)
         
-        print(f"🔍 Subword Tokenizer test:")
+        print(f"🔍 Tokenizer test:")
         print(f"   Original: {test_text}")
-        print(f"   Subwords: {subwords[:10]}..." if len(subwords) > 10 else f"   Subwords: {subwords}")
         print(f"   Encoded: {encoded[:10]}..." if len(encoded) > 10 else f"   Encoded: {encoded}")
         print(f"   Decoded: {decoded}")
         print(f"   Vocab size: {tokenizer.vocab_size()}")
-        print(f"   BPE merges: {len(tokenizer.merges)}")
         
         return len(encoded) > 0 and decoded.strip()
     except Exception as e:
-        print(f"❌ Subword tokenizer validation failed: {e}")
+        print(f"❌ Tokenizer validation failed: {e}")
         return False
 
 def apply_repetition_penalty(logits: torch.Tensor, input_ids: torch.Tensor, penalty: float = 1.1) -> torch.Tensor:
@@ -351,20 +371,21 @@ class Task:
 class TaskPlanner:
     """Plans and decomposes tasks into actionable steps."""
     
-    def __init__(self, model: SubwordTransformer, tokenizer: SubwordTokenizer):  # Updated type hints
+    def __init__(self, model, tokenizer):
         self.model = model
         self.tokenizer = tokenizer
         # Ensure model is on correct device
         self.model = self.model.to(device)
         
-        # Default generation config for planning
+        # Default generation config for planning (more conservative)
         self.generation_config = GenerationConfig(
-            max_tokens=100,
+            max_tokens=30,  # Reduced for planning
             temperature=0.3,  # Lower temperature for more focused planning
             top_p=0.8,
             top_k=30,
             use_greedy=False,
-            do_sample=True
+            do_sample=True,
+            repetition_penalty=1.2  # Higher penalty for planning
         )
     
     def plan_task(self, task_description: str, available_tools: List[str]) -> List[str]:
@@ -393,7 +414,7 @@ Plan:
             return [f"Execute task: {task_description}"]
     
     def _generate_with_model(self, prompt: str, config: GenerationConfig) -> str:
-        """Generate text using the subword model with advanced sampling."""
+        """Generate text using the model with memory-efficient sampling."""
         try:
             self.model.eval()
             with torch.no_grad():
@@ -467,8 +488,8 @@ Plan:
             return ""
         finally:
             # Clean up GPU memory
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            with ultra_memory_cleanup():
+                pass
     
     def _parse_plan_response(self, response: str) -> List[str]:
         """Parse the model's response into actionable steps."""
@@ -494,27 +515,28 @@ Plan:
 # CORE AGENT CLASS
 # =====================================================================
 
-class WordLevelAgent:  # Keeping the class name for compatibility
-    """Core agentic AI that can autonomously execute tasks using subword tokenization."""
+class WordLevelAgent:
+    """Core agentic AI that can autonomously execute tasks."""
     
-    def __init__(self, model: SubwordTransformer, tokenizer: SubwordTokenizer, metadata: ModelMetadata):  # Updated type hints
+    def __init__(self, model, tokenizer, metadata):
         self.model = model.to(device)  # Ensure model is on correct device
         self.tokenizer = tokenizer
         self.metadata = metadata
         
-        # Default generation config
+        # Default generation config (aligned with Train.py conservative approach)
         self.generation_config = GenerationConfig(
-            max_tokens=50,
+            max_tokens=30,  # Reduced for memory efficiency
             temperature=0.7,
             top_p=0.9,
             top_k=50,
             use_greedy=False,
-            do_sample=True
+            do_sample=True,
+            repetition_penalty=1.1
         )
         
         # Validate tokenizer
         if not validate_tokenizer(tokenizer):
-            logger.warning("⚠️ Subword tokenizer validation failed - responses may be poor quality")
+            logger.warning("⚠️ Tokenizer validation failed - responses may be poor quality")
         
         # Initialize tools
         self.tools = {
@@ -531,7 +553,7 @@ class WordLevelAgent:  # Keeping the class name for compatibility
         self.active_tasks = {}
         self.completed_tasks = []
         
-        logger.info(f"🤖 Agent initialized with {len(self.tools)} tools (subword tokenization)")
+        logger.info(f"🤖 Agent initialized with {len(self.tools)} tools")
     
     def update_generation_config(self, **kwargs):
         """Update generation configuration parameters."""
@@ -615,7 +637,7 @@ class WordLevelAgent:  # Keeping the class name for compatibility
         step_lower = step.lower()
         
         # Simple pattern matching to determine which tool to use
-        if any(word in step_lower for word in ["calculate", "math", "compute", "+"  , "-", "*", "/"]):
+        if any(word in step_lower for word in ["calculate", "math", "compute", "+", "-", "*", "/"]):
             # Extract mathematical expression
             math_pattern = r'[\d+\-*/().\s]+'
             matches = re.findall(math_pattern, step)
@@ -675,11 +697,453 @@ class WordLevelAgent:  # Keeping the class name for compatibility
         }
 
 # =====================================================================
-# AGENTIC CHAT INTERFACE
+# MODEL MANAGER FOR LOADING MODELS (Updated from Train.py)
 # =====================================================================
 
-class AgenticWordAIChat:  # Keeping class name for compatibility
-    """Agentic chat interface that can autonomously execute tasks using subword tokenization."""
+@dataclass
+class ModelMetadata:
+    """Model metadata structure (from Train.py)."""
+    model_name: str = ""
+    version: str = ""
+    created_at: str = ""
+    last_modified: str = ""
+    model_config: dict = None
+    training_config: dict = None
+    dataset_info: dict = None
+    performance_metrics: dict = None
+    model_size_mb: float = 0.0
+    total_parameters: int = 0
+    trainable_parameters: int = 0
+    training_time_hours: float = 0.0
+    epochs_trained: int = 0
+    best_loss: float = float('inf')
+    best_perplexity: float = float('inf')
+    hardware_used: str = ""
+    pytorch_version: str = ""
+    cuda_version: str = None
+    notes: str = ""
+    tags: list = None
+
+class ModelManager:
+    """Lightweight model manager for loading trained models."""
+    
+    def __init__(self, save_dir):
+        self.save_dir = Path(save_dir)
+        self.save_dir.mkdir(exist_ok=True)
+    
+    def list_models(self) -> List[Dict]:
+        """List all available models."""
+        models = []
+        
+        for model_dir in self.save_dir.iterdir():
+            if model_dir.is_dir():
+                try:
+                    metadata_file = model_dir / "metadata.json"
+                    if metadata_file.exists():
+                        with open(metadata_file, 'r') as f:
+                            metadata = json.load(f)
+                        
+                        models.append({
+                            'id': model_dir.name,
+                            'model_name': metadata.get('model_name', 'Unknown'),
+                            'version': metadata.get('version', 'v1.0'),
+                            'created_at': metadata.get('created_at', ''),
+                            'best_loss': metadata.get('best_loss', float('inf')),
+                            'epochs_trained': metadata.get('epochs_trained', 0),
+                            'total_parameters': metadata.get('total_parameters', 0),
+                            'precision_type': metadata.get('performance_metrics', {}).get('precision_type', 'unknown'),
+                            'mixed_precision_used': metadata.get('performance_metrics', {}).get('mixed_precision_used', False),
+                            'deepspeed_used': metadata.get('performance_metrics', {}).get('deepspeed_used', False),
+                            'zero_stage': metadata.get('performance_metrics', {}).get('zero_stage', 'N/A')
+                        })
+                except Exception as e:
+                    logger.warning(f"Could not load metadata for {model_dir.name}: {e}")
+                    continue
+        
+        # Sort by best loss
+        models.sort(key=lambda x: x.get('best_loss', float('inf')))
+        return models
+    
+    def load_model(self, model_id: str):
+        """Load a model by ID."""
+        model_path = self.save_dir / model_id
+        
+        if not model_path.exists():
+            raise FileNotFoundError(f"Model not found: {model_id}")
+        
+        # Load metadata
+        metadata_file = model_path / "metadata.json"
+        if not metadata_file.exists():
+            raise FileNotFoundError(f"Model metadata not found: {model_id}")
+        
+        with open(metadata_file, 'r') as f:
+            metadata_dict = json.load(f)
+        
+        # Load tokenizer
+        tokenizer_file = model_path / "tokenizer.json"
+        if not tokenizer_file.exists():
+            raise FileNotFoundError(f"Tokenizer not found: {model_id}")
+        
+        with open(tokenizer_file, 'r') as f:
+            tokenizer_data = json.load(f)
+        
+        # Recreate tokenizer
+        tokenizer = ImprovedTokenizer()
+        tokenizer.vocab = tokenizer_data['vocab']
+        tokenizer.id_to_token = tokenizer_data['id_to_token']
+        tokenizer.trained = True
+        
+        # Load model config
+        model_config_dict = metadata_dict.get('model_config', {})
+        model_config = ModelConfig(**model_config_dict) if model_config_dict else ModelConfig()
+        
+        # Create model
+        model = MiniTransformer(model_config)
+        
+        # Load model weights (handle both regular and DeepSpeed checkpoints)
+        model_file = model_path / "model.pth"
+        checkpoint_dir = model_path / "checkpoint"
+        
+        if model_file.exists():
+            # Regular PyTorch model
+            with ultra_memory_cleanup():
+                state_dict = torch.load(model_file, map_location='cpu')
+                model.load_state_dict(state_dict)
+                del state_dict
+        elif checkpoint_dir.exists():
+            # DeepSpeed checkpoint
+            logger.warning("DeepSpeed checkpoint detected, loading as regular model")
+            pytorch_model = checkpoint_dir / "pytorch_model.bin"
+            if pytorch_model.exists():
+                with ultra_memory_cleanup():
+                    state_dict = torch.load(pytorch_model, map_location='cpu')
+                    model.load_state_dict(state_dict)
+                    del state_dict
+            else:
+                raise FileNotFoundError(f"Model weights not found in DeepSpeed checkpoint: {model_id}")
+        else:
+            raise FileNotFoundError(f"Model weights not found: {model_id}")
+        
+        # Create metadata object
+        metadata = ModelMetadata(**metadata_dict)
+        
+        logger.info(f"✅ Loaded model: {model_id}")
+        logger.info(f"   Model: {metadata.model_name} {metadata.version}")
+        logger.info(f"   Parameters: {metadata.total_parameters:,}")
+        logger.info(f"   Best loss: {metadata.best_loss:.4f}")
+        logger.info(f"   Vocab size: {tokenizer.vocab_size()}")
+        
+        # Log training details if available
+        if hasattr(metadata, 'performance_metrics') and metadata.performance_metrics:
+            pm = metadata.performance_metrics
+            logger.info(f"   Precision: {pm.get('precision_type', 'unknown')}")
+            logger.info(f"   Mixed Precision: {pm.get('mixed_precision_used', False)}")
+            logger.info(f"   DeepSpeed: {pm.get('deepspeed_used', False)}")
+            if pm.get('deepspeed_used'):
+                logger.info(f"   ZeRO Stage: {pm.get('zero_stage', 'N/A')}")
+        
+        return model, tokenizer, metadata
+
+# =====================================================================
+# IMPROVED TOKENIZER (FROM TRAIN.PY)
+# =====================================================================
+
+class ImprovedTokenizer:
+    """Improved tokenizer with better stability (from Train.py)."""
+    
+    def __init__(self):
+        self.vocab = {
+            "<pad>": 0, "<unk>": 1, "<bos>": 2, "<eos>": 3, 
+            "<user>": 4, "<assistant>": 5, "\n": 6, " ": 7
+        }
+        self.id_to_token = {v: k for k, v in self.vocab.items()}
+        self.target_vocab_size = 5000  # Aligned with Train.py
+        self.trained = False
+    
+    def train_from_text(self, text, vocab_size=None, min_freq=2):
+        """Train tokenizer with smaller vocabulary."""
+        if vocab_size:
+            self.target_vocab_size = min(vocab_size, 5000)
+        
+        # Character and word frequency counting
+        char_freq = {}
+        word_freq = {}
+        
+        for line in text.split('\n'):
+            for char in line:
+                if char.isprintable() and char not in self.vocab:
+                    char_freq[char] = char_freq.get(char, 0) + 1
+            
+            words = line.lower().split()
+            for word in words:
+                if word not in self.vocab:
+                    word_freq[word] = word_freq.get(word, 0) + 1
+        
+        # Add frequent characters first
+        current_id = len(self.vocab)
+        sorted_chars = sorted(char_freq.items(), key=lambda x: x[1], reverse=True)
+        
+        for char, freq in sorted_chars:
+            if freq >= min_freq and current_id < self.target_vocab_size // 2:
+                self.vocab[char] = current_id
+                self.id_to_token[current_id] = char
+                current_id += 1
+        
+        # Add frequent words
+        sorted_words = sorted(word_freq.items(), key=lambda x: x[1], reverse=True)
+        
+        for word, freq in sorted_words:
+            if freq >= min_freq and current_id < self.target_vocab_size:
+                self.vocab[word] = current_id
+                self.id_to_token[current_id] = word
+                current_id += 1
+        
+        self.trained = True
+        logger.info(f"Tokenizer trained with {len(self.vocab)} tokens")
+    
+    def encode(self, text):
+        """Encode text with fallback to character-level."""
+        if not self.trained:
+            raise ValueError("Tokenizer not trained")
+        
+        tokens = []
+        words = text.split()
+        
+        for word in words:
+            if word.lower() in self.vocab:
+                tokens.append(self.vocab[word.lower()])
+            else:
+                for char in word:
+                    if char in self.vocab:
+                        tokens.append(self.vocab[char])
+                    else:
+                        tokens.append(self.vocab["<unk>"])
+            
+            if " " in self.vocab:
+                tokens.append(self.vocab[" "])
+        
+        if tokens and tokens[-1] == self.vocab.get(" ", -1):
+            tokens.pop()
+        
+        return tokens
+    
+    def decode(self, token_ids):
+        """Decode with better text reconstruction."""
+        tokens = []
+        for token_id in token_ids:
+            if token_id in self.id_to_token:
+                token = self.id_to_token[token_id]
+                if token not in ["<pad>", "<bos>", "<eos>"]:
+                    tokens.append(token)
+        
+        text = ""
+        for token in tokens:
+            if token == " ":
+                text += " "
+            elif len(token) == 1:
+                text += token
+            else:
+                if text and not text.endswith(" "):
+                    text += " "
+                text += token
+        
+        return text.strip()
+    
+    def vocab_size(self):
+        return len(self.vocab)
+
+# =====================================================================
+# MODEL CONFIG AND ARCHITECTURE CLASSES (FROM TRAIN.PY)
+# =====================================================================
+
+@dataclass
+class ModelConfig:
+    """Model configuration (from Train.py)."""
+    vocab_size: int = 50000
+    hidden_size: int = 2048
+    num_layers: int = 24
+    num_heads: int = 16
+    seq_length: int = 1024
+    dropout: float = 0.1
+    model_type: str = "transformer"
+    tokenizer_type: str = "improved"
+    gradient_checkpointing: bool = True
+    use_flash_attention: bool = False
+
+# Import model architecture from Train.py concepts
+class MiniTransformer(torch.nn.Module):
+    """Simplified transformer for ultra-low VRAM (architecture from Train.py)."""
+    
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        
+        # Embeddings
+        self.embeddings = torch.nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=0)
+        self.pos_embeddings = torch.nn.Parameter(torch.zeros(config.seq_length, config.hidden_size))
+        
+        # Transformer layers
+        self.layers = torch.nn.ModuleList()
+        for _ in range(config.num_layers):
+            self.layers.append(MiniTransformerBlock(config))
+        
+        # Output layers
+        self.ln_final = torch.nn.LayerNorm(config.hidden_size, eps=1e-6)
+        self.lm_head = torch.nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        
+        # Tie embeddings to reduce parameters
+        self.lm_head.weight = self.embeddings.weight
+        
+        # Initialize weights
+        self._init_weights()
+    
+    def _init_weights(self):
+        """Conservative weight initialization."""
+        torch.nn.init.normal_(self.embeddings.weight, mean=0.0, std=0.01)
+        torch.nn.init.normal_(self.pos_embeddings, mean=0.0, std=0.01)
+        
+        for module in self.modules():
+            if isinstance(module, torch.nn.Linear):
+                torch.nn.init.normal_(module.weight, mean=0.0, std=0.01)
+                if module.bias is not None:
+                    torch.nn.init.zeros_(module.bias)
+            elif isinstance(module, torch.nn.LayerNorm):
+                torch.nn.init.zeros_(module.bias)
+                torch.nn.init.ones_(module.weight)
+    
+    def forward(self, input_ids):
+        batch_size, seq_len = input_ids.shape
+        
+        # Embeddings
+        token_embeddings = self.embeddings(input_ids)
+        pos_embeddings = self.pos_embeddings[:seq_len].unsqueeze(0).expand(batch_size, -1, -1)
+        
+        hidden_states = token_embeddings + pos_embeddings
+        
+        # Apply layers with memory cleanup
+        for i, layer in enumerate(self.layers):
+            hidden_states = layer(hidden_states)
+            # Periodic cleanup for memory efficiency
+            if i % 2 == 1 and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        
+        hidden_states = self.ln_final(hidden_states)
+        logits = self.lm_head(hidden_states)
+        
+        return logits
+
+class MiniTransformerBlock(torch.nn.Module):
+    """Ultra-simplified transformer block."""
+    
+    def __init__(self, config):
+        super().__init__()
+        self.ln1 = torch.nn.LayerNorm(config.hidden_size, eps=1e-6)
+        self.ln2 = torch.nn.LayerNorm(config.hidden_size, eps=1e-6)
+        
+        self.attn = MiniAttention(config)
+        self.mlp = MiniMLP(config)
+        
+        self.dropout = torch.nn.Dropout(config.dropout)
+    
+    def forward(self, x):
+        # Pre-norm with immediate cleanup
+        residual = x
+        x_norm = self.ln1(x)
+        attn_out = self.attn(x_norm)
+        del x_norm
+        x = residual + self.dropout(attn_out)
+        del residual, attn_out
+        
+        # MLP block
+        residual = x
+        x_norm = self.ln2(x)
+        mlp_out = self.mlp(x_norm)
+        del x_norm
+        x = residual + self.dropout(mlp_out)
+        del residual, mlp_out
+        
+        return x
+
+class MiniAttention(torch.nn.Module):
+    """Memory-efficient attention."""
+    
+    def __init__(self, config):
+        super().__init__()
+        self.num_heads = config.num_heads
+        self.head_dim = config.hidden_size // config.num_heads
+        self.scale = self.head_dim ** -0.5
+        
+        self.qkv = torch.nn.Linear(config.hidden_size, 3 * config.hidden_size, bias=False)
+        self.out_proj = torch.nn.Linear(config.hidden_size, config.hidden_size, bias=False)
+        self.dropout = torch.nn.Dropout(config.dropout)
+        
+        # Register causal mask
+        self.register_buffer(
+            "causal_mask",
+            torch.triu(torch.ones(config.seq_length, config.seq_length), diagonal=1).bool()
+        )
+    
+    def forward(self, x):
+        batch_size, seq_len, hidden_size = x.shape
+        
+        # Compute Q, K, V
+        qkv = self.qkv(x)
+        q, k, v = qkv.chunk(3, dim=-1)
+        
+        # Reshape for multi-head
+        q = q.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        k = k.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        v = v.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        
+        del qkv
+        
+        # Attention scores
+        scores = torch.matmul(q, k.transpose(-2, -1)) * self.scale
+        del q, k
+        
+        # Apply causal mask
+        scores.masked_fill_(self.causal_mask[:seq_len, :seq_len], float('-inf'))
+        
+        # Softmax
+        attn_weights = F.softmax(scores, dim=-1)
+        del scores
+        attn_weights = self.dropout(attn_weights)
+        
+        # Apply attention
+        attn_output = torch.matmul(attn_weights, v)
+        del attn_weights, v
+        
+        # Reshape and project
+        attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, hidden_size)
+        output = self.out_proj(attn_output)
+        del attn_output
+        
+        return output
+
+class MiniMLP(torch.nn.Module):
+    """Smaller MLP block."""
+    
+    def __init__(self, config):
+        super().__init__()
+        intermediate_size = max(config.hidden_size * 2, 128)  # Smaller for memory
+        
+        self.fc1 = torch.nn.Linear(config.hidden_size, intermediate_size)
+        self.fc2 = torch.nn.Linear(intermediate_size, config.hidden_size)
+        self.dropout = torch.nn.Dropout(config.dropout)
+    
+    def forward(self, x):
+        x = self.fc1(x)
+        x = F.gelu(x)
+        x = self.dropout(x)
+        x = self.fc2(x)
+        return x
+
+# =====================================================================
+# AGENTIC CHAT INTERFACE (Updated with Train.py settings)
+# =====================================================================
+
+class AgenticWordAIChat:
+    """Agentic chat interface aligned with Train.py memory efficiency."""
     
     def __init__(self, model_manager: ModelManager):
         self.model_manager = model_manager
@@ -690,35 +1154,40 @@ class AgenticWordAIChat:  # Keeping class name for compatibility
     def load_model(self, model_id: str) -> bool:
         """Load a model and initialize the agent."""
         try:
-            model, tokenizer, metadata = self.model_manager.load_model(model_id)
-            self.agent = WordLevelAgent(model, tokenizer, metadata)
-            logger.info(f"✅ Agentic chat ready with subword model: {metadata.model_name} {metadata.version}")
+            with ultra_memory_cleanup():
+                model, tokenizer, metadata = self.model_manager.load_model(model_id)
+                self.agent = WordLevelAgent(model, tokenizer, metadata)
+            logger.info(f"✅ Agentic chat ready with model: {metadata.model_name} {metadata.version}")
             return True
         except Exception as e:
             logger.error(f"❌ Failed to load model: {e}")
             return False
     
     def _generate_conversational_response(self, user_input: str, debug_mode: bool = False) -> str:
-        """Generate a conversational response with limited context."""
+        """Generate a conversational response with ultra-efficient context."""
         try:
-            # Build minimal context
+            # Minimal context for memory efficiency
             if self.conversation_history:
-                recent_context = " ".join(self.conversation_history[-2:])  # Only last exchange
-                context = f"{recent_context} <user> {user_input}\n<bot>"
+                recent_context = " ".join(self.conversation_history[-1:])  # Only last exchange
+                context = f"{recent_context} <user> {user_input}\n<assistant>"
             else:
-                context = f"<user> {user_input}\n<bot>"
+                context = f"<user> {user_input}\n<assistant>"
+            
+            # Limit context length
+            context = context[-200:] if len(context) > 200 else context
             
             if debug_mode:
                 print(f"🔍 Context: {context[:100]}...")
             
-            # Use conversational config
+            # Ultra-conservative config for memory efficiency
             conv_config = GenerationConfig(
-                max_tokens=50,
+                max_tokens=25,  # Reduced for memory
                 temperature=0.7,
                 top_p=0.9,
                 top_k=50,
                 use_greedy=False,
-                do_sample=True
+                do_sample=True,
+                repetition_penalty=1.1
             )
             
             return self._generate_with_model_safe(context, conv_config, debug_mode)
@@ -728,108 +1197,109 @@ class AgenticWordAIChat:  # Keeping class name for compatibility
             return "Sorry, I encountered an error generating a response."
     
     def _generate_with_model_safe(self, prompt: str, config: GenerationConfig, debug_mode: bool = False) -> str:
-        """Safely generate text with extensive error handling and advanced sampling."""
+        """Ultra-safe generation with Train.py memory management."""
         try:
             self.agent.model.eval()
             
             with torch.no_grad():
-                # Encode input using subword tokenizer
-                input_tokens = self.agent.tokenizer.encode(prompt)
-                if not input_tokens:
-                    return "I couldn't process your input."
-                
-                if debug_mode:
-                    print(f"🔍 Input tokens: {len(input_tokens)}")
-                    print(f"🔍 Input subwords: {self.agent.tokenizer.tokenize(prompt)[:10]}...")
-                    print(f"🔍 Generation config: temp={config.temperature}, top_p={config.top_p}, top_k={config.top_k}, greedy={config.use_greedy}")
-                
-                input_ids = torch.tensor(input_tokens, dtype=torch.long).unsqueeze(0)
-                input_ids = ensure_tensor_device(input_ids, device)
-                
-                # Set up stop tokens
-                eos_tokens = [
-                    config.pad_token_id,
-                    self.agent.tokenizer.vocab.get("</s>", -1),
-                    self.agent.tokenizer.vocab.get("<eos>", -1),
-                    self.agent.tokenizer.vocab.get("<|endoftext|>", -1)
-                ]
-                eos_tokens = [t for t in eos_tokens if t != -1]
-                
-                generated_tokens = []
-                current_input = input_ids
-                
-                for step in range(config.max_tokens):
-                    try:
-                        # Check sequence length limit
-                        max_seq_len = getattr(self.agent.model.config, 'seq_length', 512)
-                        if current_input.size(1) >= max_seq_len:
-                            break
-                        
-                        # Get model output
-                        with torch.no_grad():
-                            output = self.agent.model(current_input)
-                        
-                        # Handle different output formats
-                        if hasattr(output, 'logits'):
-                            logits = output.logits
-                        elif isinstance(output, tuple):
-                            logits = output[0]
-                        else:
-                            logits = output
-                        
-                        next_token_logits = logits[0, -1, :].clone()
-                        
-                        # Apply repetition penalty
-                        if config.repetition_penalty != 1.0:
-                            next_token_logits = apply_repetition_penalty(
-                                next_token_logits.unsqueeze(0), 
-                                current_input, 
-                                config.repetition_penalty
-                            ).squeeze(0)
-                        
-                        # Sample next token using advanced sampling
-                        next_token_id = sample_next_token(next_token_logits, config)
-                        
-                        # Check for stop conditions
-                        if next_token_id in eos_tokens:
-                            break
-                        
-                        # Add token to generated sequence
-                        generated_tokens.append(next_token_id)
-                        
-                        # Update input for next iteration
-                        next_token_tensor = torch.tensor([[next_token_id]], device=device)
-                        current_input = torch.cat([current_input, next_token_tensor], dim=1)
-                    
-                    except Exception as step_error:
-                        if debug_mode:
-                            print(f"🔍 Step {step} error: {step_error}")
-                        break
-                
-                # Decode generated tokens using subword tokenizer
-                if generated_tokens:
-                    response = self.agent.tokenizer.decode(generated_tokens)
-                    
-                    # Clean up response
-                    response = response.strip()
-                    response = re.sub(r'<[^>]*>', '', response)  # Remove any XML tags
-                    response = re.sub(r'\s+', ' ', response)     # Normalize whitespace
-                    
-                    # Filter out obvious gibberish patterns
-                    if self._is_gibberish(response):
-                        if debug_mode:
-                            print(f"🔍 Detected gibberish: {response[:50]}...")
-                        return "I'm having trouble generating a coherent response. The model may need more training."
+                with ultra_memory_cleanup():
+                    # Encode input
+                    input_tokens = self.agent.tokenizer.encode(prompt)
+                    if not input_tokens:
+                        return "I couldn't process your input."
                     
                     if debug_mode:
-                        print(f"🔍 Generated tokens: {generated_tokens}")
-                        if hasattr(self.agent.tokenizer, 'vocab_reverse'):
-                            print(f"🔍 Generated subwords: {[self.agent.tokenizer.vocab_reverse.get(t, f'<unk:{t}>') for t in generated_tokens[:10]]}")
-                        print(f"🔍 Final response: {response}")
+                        print(f"🔍 Input tokens: {len(input_tokens)}")
+                        print(f"🔍 Generation config: temp={config.temperature}, top_p={config.top_p}, top_k={config.top_k}")
                     
-                    return response if response else "I'm not sure how to respond to that."
-                else:
-                    return "I couldn't generate a response."
+                    input_ids = torch.tensor(input_tokens, dtype=torch.long).unsqueeze(0)
+                    input_ids = ensure_tensor_device(input_ids, device)
+                    
+                    # Set up stop tokens
+                    eos_tokens = [
+                        config.pad_token_id,
+                        self.agent.tokenizer.vocab.get("</s>", -1),
+                        self.agent.tokenizer.vocab.get("<eos>", -1),
+                        self.agent.tokenizer.vocab.get("<|endoftext|>", -1)
+                    ]
+                    eos_tokens = [t for t in eos_tokens if t != -1]
+                    
+                    generated_tokens = []
+                    current_input = input_ids
+                    
+                    for step in range(config.max_tokens):
+                        try:
+                            # Check sequence length limit
+                            max_seq_len = getattr(self.agent.model.config, 'seq_length', 512)
+                            if current_input.size(1) >= max_seq_len:
+                                break
+                            
+                            # Get model output
+                            with ultra_memory_cleanup():
+                                output = self.agent.model(current_input)
+                            
+                            # Handle different output formats
+                            if hasattr(output, 'logits'):
+                                logits = output.logits
+                            elif isinstance(output, tuple):
+                                logits = output[0]
+                            else:
+                                logits = output
+                            
+                            next_token_logits = logits[0, -1, :].clone()
+                            
+                            # Apply repetition penalty
+                            if config.repetition_penalty != 1.0:
+                                next_token_logits = apply_repetition_penalty(
+                                    next_token_logits.unsqueeze(0), 
+                                    current_input, 
+                                    config.repetition_penalty
+                                ).squeeze(0)
+                            
+                            # Sample next token
+                            next_token_id = sample_next_token(next_token_logits, config)
+                            
+                            # Check for stop conditions
+                            if next_token_id in eos_tokens:
+                                break
+                            
+                            # Add token to generated sequence
+                            generated_tokens.append(next_token_id)
+                            
+                            # Update input for next iteration
+                            next_token_tensor = torch.tensor([[next_token_id]], device=device)
+                            current_input = torch.cat([current_input, next_token_tensor], dim=1)
+                            
+                            # Cleanup intermediate tensors
+                            del logits, next_token_logits, output
+                        
+                        except Exception as step_error:
+                            if debug_mode:
+                                print(f"🔍 Step {step} error: {step_error}")
+                            break
+                    
+                    # Decode generated tokens
+                    if generated_tokens:
+                        response = self.agent.tokenizer.decode(generated_tokens)
+                        
+                        # Clean up response
+                        response = response.strip()
+                        response = re.sub(r'<[^>]*>', '', response)
+                        response = re.sub(r'\s+', ' ', response)
+                        
+                        # Filter gibberish
+                        if self._is_gibberish(response):
+                            if debug_mode:
+                                print(f"🔍 Detected gibberish: {response[:50]}...")
+                            return "I'm having trouble generating a coherent response."
+                        
+                        if debug_mode:
+                            print(f"🔍 Generated tokens: {generated_tokens}")
+                            print(f"🔍 Final response: {response}")
+                        
+                        return response if response else "I'm not sure how to respond to that."
+                    else:
+                        return "I couldn't generate a response."
         
         except Exception as e:
             if debug_mode:
@@ -838,12 +1308,12 @@ class AgenticWordAIChat:  # Keeping class name for compatibility
             return "Sorry, I encountered an error while thinking."
         
         finally:
-            # Clean up GPU memory
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            # Ultra-aggressive cleanup (from Train.py)
+            with ultra_memory_cleanup():
+                pass
     
     def _is_gibberish(self, text: str) -> bool:
-        """Detect if generated text is likely gibberish - updated for subword tokens."""
+        """Detect if generated text is likely gibberish."""
         if not text or len(text.strip()) < 2:
             return True
         
@@ -851,48 +1321,26 @@ class AgenticWordAIChat:  # Keeping class name for compatibility
         words = text.split()
         if len(words) > 5:
             unique_words = len(set(words))
-            if unique_words / len(words) < 0.5:  # More than 50% repetition
+            if unique_words / len(words) < 0.5:
                 return True
         
         # Check for random character sequences
-        if len(text) > 20 and ' ' not in text:  # Long string without spaces
+        if len(text) > 20 and ' ' not in text:
             return True
         
-        # Check for excessive special characters or numbers
+        # Check for excessive special characters
         special_chars = sum(1 for c in text if not c.isalnum() and c not in ' .,!?-')
         if len(text) > 0 and special_chars / len(text) > 0.3:
             return True
         
-        # Check for subword-specific gibberish patterns
-        gibberish_patterns = [
-            r'encrypted_text',
-            r'predicted_token',
-            r'ondrop',
-            r'setitems\d+',
-            r'_image[a-z]+',
-            r'alignment absorption',
-            r'\b[a-z]{15,}\b',  # Very long nonsense words
-            r'@@\w+@@',  # Malformed subword tokens
-            r'##\w+##',  # Another subword token format
-            r'▁{3,}',    # Excessive subword separators
-        ]
-        
-        for pattern in gibberish_patterns:
-            if re.search(pattern, text, re.IGNORECASE):
-                return True
-        
-        # Check for excessive subword artifacts
-        if text.count('@@') > len(text.split()) // 2:  # Too many subword markers
-            return True
-        
-        # Check for repeated subword patterns
-        if len(re.findall(r'(\w{1,3})\1{3,}', text)) > 0:  # Repeated 1-3 char sequences
+        # Check for repeated patterns
+        if len(re.findall(r'(\w{1,3})\1{3,}', text)) > 0:
             return True
         
         return False
     
     def chat(self):
-        """Interactive agentic chat interface."""
+        """Interactive agentic chat interface with Train.py optimizations."""
         if not self.agent:
             # Auto-load best model
             models = self.model_manager.list_models()
@@ -906,22 +1354,33 @@ class AgenticWordAIChat:  # Keeping class name for compatibility
                 return
         
         print("\n" + "="*70)
-        print("🤖 AGENTIC SUBWORD-LEVEL AI SYSTEM")  # Updated title
+        print("🤖 AGENTIC AI SYSTEM (Train.py Optimized)")
         print("="*70)
         print("🔧 Agent Capabilities:")
         capabilities = self.agent.list_capabilities()
         for name, desc in capabilities.items():
             print(f"   • {name}: {desc}")
         
-        print(f"\n🔤 Tokenization: Subword (BPE) - Vocab: {self.agent.tokenizer.vocab_size():,}")
-        print(f"   BPE Merges: {len(self.agent.tokenizer.merges):,}")
+        print(f"\n🔤 Tokenization: Improved - Vocab: {self.agent.tokenizer.vocab_size():,}")
+        
+        # Show training information from metadata
+        if hasattr(self.agent.metadata, 'performance_metrics') and self.agent.metadata.performance_metrics:
+            pm = self.agent.metadata.performance_metrics
+            print(f"\n📊 Model Training Info:")
+            print(f"   • Precision: {pm.get('precision_type', 'unknown')}")
+            print(f"   • Mixed Precision: {pm.get('mixed_precision_used', False)}")
+            print(f"   • DeepSpeed: {pm.get('deepspeed_used', False)}")
+            if pm.get('deepspeed_used'):
+                print(f"   • ZeRO Stage: {pm.get('zero_stage', 'N/A')}")
+            print(f"   • Gradient Checkpointing: {pm.get('gradient_checkpointing_used', False)}")
         
         # Show current generation settings
         config = self.agent.generation_config
-        print(f"\n⚙️ Generation Settings:")
+        print(f"\n⚙️ Generation Settings (Memory Optimized):")
         print(f"   • Temperature: {config.temperature}")
         print(f"   • Top-p: {config.top_p}")
         print(f"   • Top-k: {config.top_k}")
+        print(f"   • Max tokens: {config.max_tokens}")
         print(f"   • Greedy: {config.use_greedy}")
         print(f"   • Repetition penalty: {config.repetition_penalty}")
         
@@ -932,15 +1391,17 @@ class AgenticWordAIChat:  # Keeping class name for compatibility
         print("   • /tasks - List all tasks")
         print("   • /status <task_id> - Check task status")
         print("   • /capabilities - Show agent capabilities")
-        print("   • /tokenize <text> - Test subword tokenization")
+        print("   • /tokenize <text> - Test tokenization")
         print("   • /generation - Show/modify generation settings")
         print("   • /presets - Load generation presets")
+        print("   • /memory - Show memory usage")
         print("   • /clear - Clear conversation history")
         print("   • /debug - Toggle debug mode")
         print("   • /simple <message> - Simple response without history")
         print("   • /exit - Exit chat")
         print("="*70)
         print(f"🧠 Autonomous mode: {'ON' if self.autonomous_mode else 'OFF'}")
+        print(f"💾 Memory management: Ultra-aggressive (Train.py optimized)")
         print("-"*70)
         
         debug_mode = False
@@ -964,7 +1425,27 @@ class AgenticWordAIChat:  # Keeping class name for compatibility
                 
                 elif user_input.lower() == "/clear":
                     self.conversation_history = []
-                    print("🗑️ Conversation history cleared!")
+                    with ultra_memory_cleanup():
+                        pass
+                    print("🗑️ Conversation history cleared and memory cleaned!")
+                    continue
+                
+                elif user_input.lower() == "/memory":
+                    print(f"\n💾 Memory Status:")
+                    if torch.cuda.is_available():
+                        allocated = torch.cuda.memory_allocated() / 1024**3
+                        cached = torch.cuda.memory_reserved() / 1024**3
+                        max_allocated = torch.cuda.max_memory_allocated() / 1024**3
+                        print(f"   • GPU Allocated: {allocated:.2f}GB")
+                        print(f"   • GPU Cached: {cached:.2f}GB")
+                        print(f"   • GPU Peak: {max_allocated:.2f}GB")
+                    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                        allocated = torch.mps.current_allocated_memory() / 1024**3
+                        print(f"   • MPS Allocated: {allocated:.2f}GB")
+                    else:
+                        print("   • Running on CPU")
+                    
+                    print(f"   • Conversation history: {len(self.conversation_history)} entries")
                     continue
                 
                 elif user_input.lower() == "/capabilities":
@@ -982,19 +1463,17 @@ class AgenticWordAIChat:  # Keeping class name for compatibility
                     continue
                 
                 elif user_input.startswith("/tokenize "):
-                    # Test subword tokenization
+                    # Test tokenization
                     text = user_input[10:].strip()
                     if text:
-                        subwords = self.agent.tokenizer.tokenize(text)
                         encoded = self.agent.tokenizer.encode(text)
                         decoded = self.agent.tokenizer.decode(encoded)
                         
-                        print(f"\n🔤 Subword Tokenization Test:")
+                        print(f"\n🔤 Tokenization Test:")
                         print(f"   Original: {text}")
-                        print(f"   Subwords: {subwords}")
                         print(f"   Token IDs: {encoded}")
                         print(f"   Decoded: {decoded}")
-                        print(f"   Compression ratio: {len(text.split())}/{len(subwords)} = {len(text.split())/len(subwords):.2f}x")
+                        print(f"   Compression ratio: {len(text.split())}/{len(encoded)} = {len(text.split())/len(encoded):.2f}x")
                     else:
                         print("❌ Please provide text to tokenize")
                     continue
@@ -1036,7 +1515,8 @@ class AgenticWordAIChat:  # Keeping class name for compatibility
                 
                 elif user_input.startswith("/simple "):
                     simple_message = user_input[8:].strip()
-                    response = self._generate_simple_response(simple_message, debug_mode)
+                    with ultra_memory_cleanup():
+                        response = self._generate_simple_response(simple_message, debug_mode)
                     print(f"🤖 AI: {response}")
                     continue
                 
@@ -1044,7 +1524,8 @@ class AgenticWordAIChat:  # Keeping class name for compatibility
                     task_description = user_input[6:].strip()
                     if task_description:
                         print(f"🎯 Executing task: {task_description}")
-                        task = self.agent.execute_task(task_description)
+                        with ultra_memory_cleanup():
+                            task = self.agent.execute_task(task_description)
                         print(f"📊 Task {task.id} {task.status}")
                         
                         # Show results
@@ -1060,7 +1541,8 @@ class AgenticWordAIChat:  # Keeping class name for compatibility
                 # Regular conversation or autonomous task detection
                 if self.autonomous_mode and self._is_task_request(user_input):
                     print("🧠 I detect this is a task - executing autonomously...")
-                    task = self.agent.execute_task(user_input)
+                    with ultra_memory_cleanup():
+                        task = self.agent.execute_task(user_input)
                     print(f"📊 Task {task.id} {task.status}")
                     
                     # Provide conversational response about the task
@@ -1072,17 +1554,23 @@ class AgenticWordAIChat:  # Keeping class name for compatibility
                     print(f"🤖 AI: {response}")
                 
                 else:
-                    # Normal conversational response
-                    response = self._generate_conversational_response(user_input, debug_mode)
+                    # Normal conversational response with memory cleanup
+                    with ultra_memory_cleanup():
+                        response = self._generate_conversational_response(user_input, debug_mode)
                     print(f"🤖 AI: {response}")
                 
-                # Add to conversation history
+                # Add to conversation history (keep minimal for memory)
                 self.conversation_history.append(f"<user> {user_input}")
-                self.conversation_history.append(f"<bot> {response if 'response' in locals() else 'Task executed'}")
+                self.conversation_history.append(f"<assistant> {response if 'response' in locals() else 'Task executed'}")
                 
-                # Trim history
-                if len(self.conversation_history) > 10:  # Reduced history size
-                    self.conversation_history = self.conversation_history[-10:]
+                # Trim history aggressively for memory
+                if len(self.conversation_history) > 4:  # Only keep 2 exchanges
+                    self.conversation_history = self.conversation_history[-4:]
+                
+                # Periodic memory cleanup
+                if len(self.conversation_history) % 2 == 0:
+                    with ultra_memory_cleanup():
+                        pass
             
             except KeyboardInterrupt:
                 print("\n\n👋 Chat interrupted!")
@@ -1090,17 +1578,20 @@ class AgenticWordAIChat:  # Keeping class name for compatibility
             except Exception as e:
                 print(f"\n❌ Error: {e}")
                 logger.error(f"Chat error: {e}")
+                # Emergency memory cleanup on error
+                with ultra_memory_cleanup():
+                    pass
     
     def _handle_generation_settings(self):
-        """Handle generation settings modification."""
+        """Handle generation settings modification (memory-conscious)."""
         config = self.agent.generation_config
-        print(f"\n⚙️ Current Generation Settings:")
+        print(f"\n⚙️ Current Generation Settings (Memory Optimized):")
         print(f"   1. Temperature: {config.temperature}")
         print(f"   2. Top-p: {config.top_p}")
         print(f"   3. Top-k: {config.top_k}")
         print(f"   4. Greedy: {config.use_greedy}")
         print(f"   5. Repetition penalty: {config.repetition_penalty}")
-        print(f"   6. Max tokens: {config.max_tokens}")
+        print(f"   6. Max tokens: {config.max_tokens} (memory limited)")
         print(f"   7. Do sample: {config.do_sample}")
         
         try:
@@ -1126,8 +1617,9 @@ class AgenticWordAIChat:  # Keeping class name for compatibility
                 penalty = float(input("Enter repetition penalty (1.0-1.5): "))
                 self.agent.update_generation_config(repetition_penalty=max(1.0, min(1.5, penalty)))
             elif choice == 6:
-                max_tokens = int(input("Enter max tokens (10-200): "))
-                self.agent.update_generation_config(max_tokens=max(10, min(200, max_tokens)))
+                max_tokens = int(input("Enter max tokens (10-50 for memory efficiency): "))
+                self.agent.update_generation_config(max_tokens=max(10, min(50, max_tokens)))
+                print("⚠️ Note: Higher token counts may cause memory issues")
             elif choice == 7:
                 do_sample = input("Enable sampling? (y/n): ").lower().startswith('y')
                 self.agent.update_generation_config(do_sample=do_sample)
@@ -1138,20 +1630,20 @@ class AgenticWordAIChat:  # Keeping class name for compatibility
             print("❌ Invalid input")
     
     def _handle_generation_presets(self):
-        """Handle generation preset selection."""
+        """Handle generation preset selection (memory-optimized)."""
         presets = {
-            "1": ("Creative", {"temperature": 0.9, "top_p": 0.95, "top_k": 40, "use_greedy": False, "repetition_penalty": 1.1}),
-            "2": ("Balanced", {"temperature": 0.7, "top_p": 0.9, "top_k": 50, "use_greedy": False, "repetition_penalty": 1.1}),
-            "3": ("Focused", {"temperature": 0.3, "top_p": 0.8, "top_k": 30, "use_greedy": False, "repetition_penalty": 1.2}),
-            "4": ("Precise", {"temperature": 0.1, "top_p": 0.7, "top_k": 20, "use_greedy": False, "repetition_penalty": 1.3}),
-            "5": ("Greedy", {"temperature": 1.0, "top_p": 1.0, "top_k": 0, "use_greedy": True, "repetition_penalty": 1.0})
+            "1": ("Creative (Low Memory)", {"temperature": 0.9, "top_p": 0.95, "top_k": 40, "use_greedy": False, "repetition_penalty": 1.1, "max_tokens": 25}),
+            "2": ("Balanced (Ultra Memory)", {"temperature": 0.7, "top_p": 0.9, "top_k": 50, "use_greedy": False, "repetition_penalty": 1.1, "max_tokens": 30}),
+            "3": ("Focused (Memory Safe)", {"temperature": 0.3, "top_p": 0.8, "top_k": 30, "use_greedy": False, "repetition_penalty": 1.2, "max_tokens": 20}),
+            "4": ("Precise (Minimal Memory)", {"temperature": 0.1, "top_p": 0.7, "top_k": 20, "use_greedy": False, "repetition_penalty": 1.3, "max_tokens": 15}),
+            "5": ("Greedy (Fastest)", {"temperature": 1.0, "top_p": 1.0, "top_k": 0, "use_greedy": True, "repetition_penalty": 1.0, "max_tokens": 20})
         }
         
-        print("\n🎛️ Generation Presets:")
+        print("\n🎛️ Generation Presets (Memory Optimized):")
         for key, (name, settings) in presets.items():
             print(f"   {key}. {name}")
             print(f"      Temperature: {settings['temperature']}, Top-p: {settings['top_p']}, "
-                  f"Top-k: {settings['top_k']}, Greedy: {settings['use_greedy']}")
+                  f"Top-k: {settings['top_k']}, Max tokens: {settings['max_tokens']}")
         
         try:
             choice = input("\nSelect preset (1-5): ").strip()
@@ -1177,7 +1669,7 @@ class AgenticWordAIChat:  # Keeping class name for compatibility
         return any(indicator in text_lower for indicator in task_indicators)
     
     def _generate_simple_response(self, user_input: str, debug_mode: bool = False) -> str:
-        """Generate a simple response without conversation history."""
+        """Generate a simple response without conversation history (ultra memory-efficient)."""
         try:
             # Very simple prompt
             prompt = f"Human: {user_input}\nAI:"
@@ -1185,14 +1677,15 @@ class AgenticWordAIChat:  # Keeping class name for compatibility
             if debug_mode:
                 print(f"🔍 Simple prompt: {prompt}")
             
-            # Use simple config for basic responses
+            # Ultra-conservative config for memory efficiency
             simple_config = GenerationConfig(
-                max_tokens=30,
+                max_tokens=15,  # Very limited for memory
                 temperature=0.7,
                 top_p=0.9,
                 top_k=50,
                 use_greedy=False,
-                do_sample=True
+                do_sample=True,
+                repetition_penalty=1.1
             )
             
             return self._generate_with_model_safe(prompt, simple_config, debug_mode)
@@ -1202,19 +1695,29 @@ class AgenticWordAIChat:  # Keeping class name for compatibility
             return "I'm having trouble generating a response. Please try again."
 
 # =====================================================================
-# MAIN FUNCTION
+# MAIN FUNCTION (Updated for Train.py compatibility)
 # =====================================================================
 
 def main():
-    """Main function for the agentic AI system with subword tokenization."""
+    """Main function for the agentic AI system (Train.py optimized)."""
     print("\n" + "="*70)
-    print("🤖 AGENTIC SUBWORD-LEVEL AI SYSTEM")
+    print("🤖 AGENTIC AI SYSTEM (Train.py Optimized)")
     print("   Autonomous Task Execution + Conversational AI")
-    print("   🔤 Subword Tokenization (BPE) for Enhanced Efficiency")
+    print("   🔤 Improved Tokenization for Enhanced Efficiency")
     print("   ⚙️ Advanced Sampling: Temperature, Top-p, Top-k, Greedy")
+    print("   💾 Ultra-Aggressive Memory Management")
+    print("   🚀 Compatible with Train.py Models")
     print("="*70)
     print(f"🔧 Device: {device}")
     print(f"🐍 PyTorch: {torch.__version__}")
+    
+    # Apply CUDA optimizations (from Train.py)
+    if torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
+        os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:64'
+        print("🔧 CUDA optimizations applied (Train.py style)")
+    
     print("="*70)
     
     # Initialize model manager
@@ -1222,7 +1725,7 @@ def main():
         model_manager = ModelManager("models")
     except Exception as e:
         print(f"❌ Failed to initialize ModelManager: {e}")
-        print("💡 Make sure you have the model_manager.py file and models directory")
+        print("💡 Make sure you have the models directory")
         return 1
     
     # Check for available models
@@ -1231,40 +1734,48 @@ def main():
         if not models:
             print("❌ No trained models found!")
             print("\n📝 To get started:")
-            print("   1. Run 'python Train.py' to train a subword model")
+            print("   1. Run 'python Train.py' to train a model")
             print("   2. Then run this script to start the agentic AI")
             return 1
         
         print(f"✅ Found {len(models)} trained model(s)")
         
-        # Show model info with subword-specific details
+        # Show model info with Train.py details
         for model in models[:3]:  # Show first 3 models
             print(f"   📁 {model['id']}: {model.get('model_name', 'Unknown')} (loss: {model.get('best_loss', 'N/A'):.4f})")
-            # Check if it's a subword model
-            try:
-                metadata = model_manager._load_metadata(model['id'])
-                if metadata and hasattr(metadata, 'model_config') and hasattr(metadata.model_config, 'tokenizer_type'):
-                    if metadata.model_config.tokenizer_type == "subword":
-                        print(f"      🔤 Subword model - Vocab: {metadata.model_config.vocab_size:,}")
-                        if hasattr(metadata, 'dataset_info') and hasattr(metadata.dataset_info, 'num_merges'):
-                            print(f"      🔀 BPE Merges: {getattr(metadata.dataset_info, 'num_merges', 'Unknown')}")
-            except Exception as e:
-                logger.debug(f"Could not load metadata for {model['id']}: {e}")
+            print(f"      📊 Parameters: {model.get('total_parameters', 0):,} | Epochs: {model.get('epochs_trained', 0)}")
+            
+            # Show training details
+            precision = model.get('precision_type', 'unknown')
+            mixed_precision = model.get('mixed_precision_used', False)
+            deepspeed = model.get('deepspeed_used', False)
+            zero_stage = model.get('zero_stage', 'N/A')
+            
+            print(f"      🔧 Precision: {precision} | Mixed: {mixed_precision} | DeepSpeed: {deepspeed}")
+            if deepspeed and zero_stage != 'N/A':
+                print(f"      🚀 ZeRO Stage: {zero_stage}")
     
     except Exception as e:
         print(f"❌ Error listing models: {e}")
         return 1
     
-    # Initialize agentic chat
-    agentic_chat = AgenticWordAIChat(model_manager)
-    
+    # Initialize agentic chat with ultra memory management
     try:
+        with ultra_memory_cleanup():
+            agentic_chat = AgenticWordAIChat(model_manager)
+        
+        print("\n🧠 Initializing agentic AI system...")
         agentic_chat.chat()
         return 0
+        
     except Exception as e:
         logger.error(f"Agentic chat system error: {e}")
-        print(f"❌ System error: {e}")
+        print(f"❌ Error: {e}")
         return 1
+    finally:
+        # Final cleanup
+        with ultra_memory_cleanup():
+            pass
 
 if __name__ == "__main__":
     exit(main())
