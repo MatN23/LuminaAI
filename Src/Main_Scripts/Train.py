@@ -20,6 +20,14 @@ import torch.nn.functional as F
 import gc
 from contextlib import contextmanager
 
+# NEW: DeepSpeed integration
+try:
+    import deepspeed
+    from deepspeed.ops.adam import FusedAdam
+    DEEPSPEED_AVAILABLE = True
+except ImportError:
+    DEEPSPEED_AVAILABLE = False
+
 # NEW: Mixed Precision Training
 try:
     from torch.cuda.amp import GradScaler, autocast
@@ -51,7 +59,7 @@ def setup_logging():
 
 logger = setup_logging()
 
-# Configuration classes (enhanced with new options)
+# Configuration classes (enhanced with DeepSpeed options)
 @dataclass
 class ModelConfig:
     vocab_size: int = 50000
@@ -85,6 +93,10 @@ class TrainingConfig:
     amp_opt_level: str = "O1"  # O0, O1, O2, O3
     dataloader_num_workers: int = 0
     pin_memory: bool = False
+    # NEW: DeepSpeed options
+    use_deepspeed: bool = True
+    deepspeed_config: str = "deepspeed_config.json"
+    zero_stage: int = 2  # ZeRO stage (1, 2, or 3)
 
 @dataclass
 class ModelMetadata:
@@ -108,6 +120,76 @@ class ModelMetadata:
     cuda_version: str = None
     notes: str = ""
     tags: list = None
+
+# DeepSpeed configuration generation
+def create_deepspeed_config(training_config: TrainingConfig):
+    """Create DeepSpeed configuration dynamically."""
+    config = {
+        "train_batch_size": training_config.batch_size * training_config.gradient_accumulation_steps,
+        "train_micro_batch_size_per_gpu": training_config.batch_size,
+        "gradient_accumulation_steps": training_config.gradient_accumulation_steps,
+        "optimizer": {
+            "type": "Adam",
+            "params": {
+                "lr": training_config.learning_rate,
+                "betas": [training_config.beta1, training_config.beta2],
+                "eps": 1e-8,
+                "weight_decay": training_config.weight_decay
+            }
+        },
+        "scheduler": {
+            "type": "WarmupLR",
+            "params": {
+                "warmup_min_lr": 0,
+                "warmup_max_lr": training_config.learning_rate,
+                "warmup_num_steps": "auto"
+            }
+        },
+        "gradient_clipping": training_config.max_grad_norm,
+        "fp16": {
+            "enabled": training_config.use_mixed_precision,
+            "loss_scale": 0,
+            "loss_scale_window": 1000,
+            "initial_scale_power": 16,
+            "hysteresis": 2,
+            "min_loss_scale": 1
+        },
+        "activation_checkpointing": {
+            "partition_activations": True,
+            "cpu_checkpointing": True,
+            "contiguous_memory_optimization": False,
+            "number_checkpoints": 4,
+            "synchronize_checkpoint_boundary": False,
+            "profile": False
+        },
+        "wall_clock_breakdown": False
+    }
+    
+    # Add ZeRO configuration based on stage
+    if training_config.zero_stage >= 1:
+        config["zero_optimization"] = {
+            "stage": training_config.zero_stage,
+            "offload_optimizer": {
+                "device": "cpu" if training_config.zero_stage >= 2 else "none",
+                "pin_memory": True
+            },
+            "offload_param": {
+                "device": "cpu" if training_config.zero_stage >= 3 else "none",
+                "pin_memory": True
+            },
+            "overlap_comm": True,
+            "contiguous_gradients": True,
+            "sub_group_size": 1e9,
+            "reduce_bucket_size": "auto",
+            "stage3_prefetch_bucket_size": "auto",
+            "stage3_param_persistence_threshold": "auto",
+            "stage3_max_live_parameters": 1e9,
+            "stage3_max_reuse_distance": 1e9,
+            "stage3_gather_16bit_weights_on_model_save": True,
+            "memory_efficient_linear": False
+        }
+    
+    return config
 
 # ULTRA-AGGRESSIVE memory management (enhanced)
 @contextmanager
@@ -138,6 +220,7 @@ def setup_device():
         logger.info(f"Using device: CUDA ({torch.cuda.get_device_name()})")
         logger.info(f"CUDA Capability: {torch.cuda.get_device_capability()}")
         logger.info(f"Mixed Precision Available: {AMP_AVAILABLE}")
+        logger.info(f"DeepSpeed Available: {DEEPSPEED_AVAILABLE}")
         
         # Much more conservative memory fraction
         torch.cuda.set_per_process_memory_fraction(0.70)  # Only use 70% of GPU memory
@@ -525,27 +608,29 @@ class ModelManager:
         self.save_dir = Path(save_dir)
         self.save_dir.mkdir(exist_ok=True)
     
-    def save_model(self, model, tokenizer, metadata, optimizer=None, scheduler=None, force_cpu_save=True):
-        """Save model with ultra-aggressive memory management."""
+    def save_model(self, model, tokenizer, metadata, deepspeed_engine=None, force_cpu_save=True):
+        """Save model with DeepSpeed support and ultra-aggressive memory management."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         model_id = f"model_{timestamp}"
         model_path = self.save_dir / model_id
         model_path.mkdir(exist_ok=True)
         
         try:
-            # ALWAYS move to CPU and clean up GPU memory
             with ultra_memory_cleanup():
-                # Move model to CPU temporarily
-                original_device = next(model.parameters()).device
-                model.cpu()
-                
-                # Save state dict with CPU tensors
-                state_dict = {k: v.cpu().clone() for k, v in model.state_dict().items()}
-                torch.save(state_dict, model_path / "model.pth")
-                del state_dict
-                
-                # Move model back
-                model.to(original_device)
+                if deepspeed_engine is not None and DEEPSPEED_AVAILABLE:
+                    # DeepSpeed model saving
+                    deepspeed_engine.save_checkpoint(str(model_path), tag="checkpoint")
+                    logger.info(f"DeepSpeed checkpoint saved to: {model_path}")
+                else:
+                    # Regular model saving
+                    original_device = next(model.parameters()).device
+                    model.cpu()
+                    
+                    state_dict = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+                    torch.save(state_dict, model_path / "model.pth")
+                    del state_dict
+                    
+                    model.to(original_device)
             
             # Save tokenizer data
             tokenizer_data = {
@@ -573,19 +658,19 @@ class ModelManager:
             return None
 
 def get_ultra_low_vram_config():
-    """Ultra-conservative configuration for minimal VRAM usage with new optimizations."""
+    """Ultra-conservative configuration for minimal VRAM usage with DeepSpeed optimizations."""
     if device.type == 'cuda':
         model_config = ModelConfig(
-            vocab_size=20000,   # Extremely small vocabulary
-            hidden_size=2048,   # Very small hidden size
-            num_layers=24,      # Minimal layers
-            num_heads=16,       # Fewer heads
-            seq_length=1024,     # Much shorter sequences
+            vocab_size=15000,   # Smaller vocabulary for DeepSpeed
+            hidden_size=1536,   # Reduced size
+            num_layers=20,      # Fewer layers
+            num_heads=12,       # Fewer heads
+            seq_length=768,     # Shorter sequences
             dropout=0.1,
-            gradient_checkpointing=True  # NEW: Enable gradient checkpointing
+            gradient_checkpointing=True
         )
         batch_size = 1      # Single batch
-        max_samples = 80000  # Very small dataset
+        max_samples = 60000  # Smaller dataset
     elif device.type == 'mps':
         model_config = ModelConfig(
             vocab_size=1500,
@@ -606,22 +691,25 @@ def get_ultra_low_vram_config():
             num_heads=2,
             seq_length=32,
             dropout=0.1,
-            gradient_checkpointing=False  # Don't use on CPU
+            gradient_checkpointing=False
         )
         batch_size = 2
         max_samples = 500
     
     training_config = TrainingConfig(
-        learning_rate=1e-3,  # Higher LR for faster convergence
+        learning_rate=2e-4,  # Slightly higher LR for DeepSpeed
         weight_decay=0.01,
         batch_size=batch_size,
-        gradient_accumulation_steps=16,  # Large accumulation to maintain effective batch size
-        max_epochs=20,  # Fewer epochs
-        warmup_ratio=0.05,  # Less warmup
-        max_grad_norm=0.5,   # Smaller gradient norm
-        use_mixed_precision=AMP_AVAILABLE and device.type == 'cuda',  # NEW: Enable mixed precision
-        dataloader_num_workers=0,  # NEW: No multiprocessing
-        pin_memory=False  # NEW: Don't pin memory
+        gradient_accumulation_steps=32,  # Larger accumulation for DeepSpeed
+        max_epochs=25,  # More epochs with DeepSpeed efficiency
+        warmup_ratio=0.03,  # Less warmup
+        max_grad_norm=0.5,
+        use_mixed_precision=AMP_AVAILABLE and device.type == 'cuda',
+        dataloader_num_workers=0,
+        pin_memory=False,
+        # DeepSpeed options
+        use_deepspeed=DEEPSPEED_AVAILABLE and device.type == 'cuda',
+        zero_stage=2,  # ZeRO stage 2 for good memory savings
     )
     
     return model_config, training_config, max_samples
@@ -686,7 +774,105 @@ def load_and_process_data(data_path: str, max_samples: Optional[int] = None) -> 
     logger.info(f"Loaded {len(texts):,} texts")
     return texts
 
-# NEW: Enhanced training loop with mixed precision
+# NEW: DeepSpeed training loop
+def train_epoch_with_deepspeed(deepspeed_engine, dataloader, epoch):
+    """Training loop optimized for DeepSpeed."""
+    deepspeed_engine.train()
+    total_loss = 0.0
+    total_correct = 0
+    total_tokens = 0
+    num_batches = 0
+    
+    logger.info(f"Starting DeepSpeed epoch {epoch} with {len(dataloader)} batches")
+    
+    for batch_idx, (inputs, targets) in enumerate(dataloader):
+        try:
+            # Ultra-aggressive memory cleanup every 3 batches
+            if batch_idx > 0 and batch_idx % 3 == 0:
+                with ultra_memory_cleanup():
+                    pass
+            
+            # Skip empty batches
+            if inputs.numel() == 0 or targets.numel() == 0:
+                continue
+            
+            # DeepSpeed handles device placement
+            inputs = inputs.to(deepspeed_engine.local_rank)
+            targets = targets.to(deepspeed_engine.local_rank)
+            
+            # Validate inputs
+            if torch.isnan(inputs).any() or torch.isinf(inputs).any():
+                del inputs, targets
+                continue
+            
+            # DeepSpeed forward pass
+            logits = deepspeed_engine(inputs)
+            
+            # Compute loss
+            criterion = nn.CrossEntropyLoss(ignore_index=0)  # pad token
+            loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
+            
+            # Check for invalid loss
+            if torch.isnan(loss) or torch.isinf(loss):
+                del inputs, targets, logits, loss
+                continue
+            
+            # DeepSpeed backward and step
+            deepspeed_engine.backward(loss)
+            deepspeed_engine.step()
+            
+            # Calculate accuracy
+            with torch.no_grad():
+                predictions = torch.argmax(logits, dim=-1)
+                pad_mask = (targets != 0)  # pad token
+                correct = ((predictions == targets) & pad_mask).sum().item()
+                valid_tokens = pad_mask.sum().item()
+                
+                total_correct += correct
+                total_tokens += valid_tokens
+                total_loss += loss.item()
+                num_batches += 1
+            
+            # Clean up tensors
+            del logits, predictions, pad_mask, inputs, targets, loss
+            
+            # Logging every 5 batches
+            if batch_idx % 5 == 0 and num_batches > 0:
+                current_loss = total_loss / num_batches
+                current_acc = total_correct / max(total_tokens, 1)
+                current_lr = deepspeed_engine.get_lr()[0]
+                
+                logger.info(f"Epoch {epoch} | Batch {batch_idx} | "
+                           f"Loss: {current_loss:.4f} | Acc: {current_acc:.3f} | "
+                           f"LR: {current_lr:.6f}")
+            
+        except RuntimeError as e:
+            if "out of memory" in str(e).lower():
+                logger.warning(f"OOM at batch {batch_idx}, skipping...")
+                
+                # Ultra-aggressive cleanup
+                for var_name in ['inputs', 'targets', 'logits', 'loss', 'predictions']:
+                    if var_name in locals():
+                        del locals()[var_name]
+                
+                with ultra_memory_cleanup():
+                    pass
+                continue
+            else:
+                raise e
+        except Exception as e:
+            logger.warning(f"Error at batch {batch_idx}: {e}")
+            continue
+    
+    if num_batches == 0:
+        return float('inf'), 0.0
+    
+    avg_loss = total_loss / num_batches
+    avg_acc = total_correct / max(total_tokens, 1)
+    
+    return avg_loss, avg_acc
+
+# Enhanced training loop with mixed precision (fallback when DeepSpeed unavailable)
 def train_epoch_ultra_efficient(model, dataloader, criterion, optimizer, scheduler, epoch, 
                                gradient_accumulation_steps=1, max_grad_norm=1.0, 
                                use_mixed_precision=False, scaler=None):
@@ -882,9 +1068,14 @@ def count_parameters(model):
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     return total, trainable
 
-def evaluate_model_minimal(model, dataloader, criterion, max_batches=3, use_mixed_precision=False):
-    """Ultra-minimal evaluation with optional mixed precision."""
-    model.eval()
+def evaluate_model_minimal(model, dataloader, criterion, max_batches=3, use_mixed_precision=False, deepspeed_engine=None):
+    """Ultra-minimal evaluation with optional mixed precision and DeepSpeed support."""
+    if deepspeed_engine is not None:
+        deepspeed_engine.eval()
+        model = deepspeed_engine
+    else:
+        model.eval()
+    
     total_loss = 0.0
     total_correct = 0
     total_tokens = 0
@@ -897,11 +1088,15 @@ def evaluate_model_minimal(model, dataloader, criterion, max_batches=3, use_mixe
                     break
                 
                 try:
-                    inputs = inputs.to(device)
-                    targets = targets.to(device)
+                    if deepspeed_engine is not None:
+                        inputs = inputs.to(deepspeed_engine.local_rank)
+                        targets = targets.to(deepspeed_engine.local_rank)
+                    else:
+                        inputs = inputs.to(device)
+                        targets = targets.to(device)
                     
                     # Forward pass with optional mixed precision
-                    if use_mixed_precision and AMP_AVAILABLE:
+                    if use_mixed_precision and AMP_AVAILABLE and deepspeed_engine is None:
                         with autocast():
                             logits = model(inputs)
                             loss = criterion(logits.view(-1, logits.size(-1)), targets.view(-1))
@@ -931,7 +1126,10 @@ def evaluate_model_minimal(model, dataloader, criterion, max_batches=3, use_mixe
                     pass
     
     finally:
-        model.train()
+        if deepspeed_engine is not None:
+            deepspeed_engine.train()
+        else:
+            model.train()
     
     if num_batches == 0:
         return {'avg_loss': float('inf'), 'accuracy': 0.0, 'perplexity': float('inf')}
@@ -946,20 +1144,30 @@ def evaluate_model_minimal(model, dataloader, criterion, max_batches=3, use_mixe
         'perplexity': perplexity
     }
 
-def generate_sample_text_minimal(model, tokenizer, prompt="<user> Hello", max_length=20, use_mixed_precision=False):
-    """Minimal text generation with optional mixed precision."""
-    model.eval()
+def generate_sample_text_minimal(model, tokenizer, prompt="<user> Hello", max_length=20, use_mixed_precision=False, deepspeed_engine=None):
+    """Minimal text generation with optional mixed precision and DeepSpeed support."""
+    if deepspeed_engine is not None:
+        deepspeed_engine.eval()
+        model = deepspeed_engine
+    else:
+        model.eval()
     
     try:
         with torch.no_grad():
-            input_ids = torch.tensor(tokenizer.encode(prompt), dtype=torch.long).unsqueeze(0).to(device)
+            input_ids = torch.tensor(tokenizer.encode(prompt), dtype=torch.long).unsqueeze(0)
+            
+            if deepspeed_engine is not None:
+                input_ids = input_ids.to(deepspeed_engine.local_rank)
+            else:
+                input_ids = input_ids.to(device)
+            
             generated = input_ids.clone()
             
             for _ in range(max_length):
                 if generated.size(1) >= model.config.seq_length:
                     break
                 
-                if use_mixed_precision and AMP_AVAILABLE:
+                if use_mixed_precision and AMP_AVAILABLE and deepspeed_engine is None:
                     with autocast():
                         logits = model(generated)
                 else:
@@ -988,7 +1196,10 @@ def generate_sample_text_minimal(model, tokenizer, prompt="<user> Hello", max_le
     except Exception as e:
         return "Generation failed"
     finally:
-        model.train()
+        if deepspeed_engine is not None:
+            deepspeed_engine.train()
+        else:
+            model.train()
 
 def check_environment():
     """Enhanced environment check with optimization features."""
@@ -1000,6 +1211,7 @@ def check_environment():
         logger.info(f"CUDA available: {torch.cuda.is_available()}")
         logger.info(f"Mixed Precision available: {AMP_AVAILABLE}")
         logger.info(f"Gradient Checkpointing available: {CHECKPOINT_AVAILABLE}")
+        logger.info(f"DeepSpeed available: {DEEPSPEED_AVAILABLE}")
         
         if torch.cuda.is_available():
             logger.info(f"CUDA device count: {torch.cuda.device_count()}")
@@ -1037,7 +1249,7 @@ def validate_training_setup():
     
     return True
 
-# NEW: Additional memory optimization utilities
+# Additional memory optimization utilities
 def optimize_cuda_settings():
     """Apply additional CUDA optimizations."""
     if torch.cuda.is_available():
@@ -1046,7 +1258,7 @@ def optimize_cuda_settings():
         torch.backends.cudnn.deterministic = True  # For reproducibility
         
         # Set memory growth to avoid fragmentation
-        os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:128'
+        os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:64'  # Smaller for DeepSpeed
         
         logger.info("CUDA optimizations applied")
 
@@ -1063,9 +1275,41 @@ def create_optimized_dataloader(dataset, batch_size, training_config, shuffle=Tr
         prefetch_factor=2 if training_config.dataloader_num_workers > 0 else 2
     )
 
+def initialize_deepspeed(model, training_config):
+    """Initialize DeepSpeed engine."""
+    if not DEEPSPEED_AVAILABLE:
+        logger.warning("DeepSpeed not available, falling back to regular training")
+        return None
+    
+    # Create DeepSpeed config
+    ds_config = create_deepspeed_config(training_config)
+    
+    # Write config to file
+    config_path = "deepspeed_config.json"
+    with open(config_path, 'w') as f:
+        json.dump(ds_config, f, indent=2)
+    
+    logger.info(f"DeepSpeed config written to {config_path}")
+    logger.info(f"ZeRO Stage: {training_config.zero_stage}")
+    
+    try:
+        # Initialize DeepSpeed
+        deepspeed_engine, optimizer, _, scheduler = deepspeed.initialize(
+            model=model,
+            config=config_path,
+            model_parameters=model.parameters()
+        )
+        
+        logger.info("DeepSpeed engine initialized successfully")
+        return deepspeed_engine
+    
+    except Exception as e:
+        logger.error(f"Failed to initialize DeepSpeed: {e}")
+        return None
+
 def main():
-    """Ultra-low VRAM training main function with enhanced optimizations."""
-    logger.info("🚀 Starting ULTRA LOW VRAM Training with Enhanced Optimizations")
+    """Ultra-low VRAM training main function with DeepSpeed support."""
+    logger.info("🚀 Starting ULTRA LOW VRAM Training with DeepSpeed Support")
     logger.info("=" * 60)
     
     # Environment check
@@ -1078,7 +1322,7 @@ def main():
     # Ultra-conservative configuration
     model_config, training_config, max_samples = get_ultra_low_vram_config()
     
-    logger.info(f"Ultra-low VRAM Configuration:")
+    logger.info(f"Ultra-low VRAM Configuration with DeepSpeed:")
     logger.info(f"  Model: {model_config.hidden_size}x{model_config.num_layers}")
     logger.info(f"  Vocab size: {model_config.vocab_size}")
     logger.info(f"  Sequence length: {model_config.seq_length}")
@@ -1086,13 +1330,16 @@ def main():
     logger.info(f"  Gradient accumulation: {training_config.gradient_accumulation_steps}")
     logger.info(f"  Mixed precision: {training_config.use_mixed_precision}")
     logger.info(f"  Gradient checkpointing: {model_config.gradient_checkpointing}")
+    logger.info(f"  Use DeepSpeed: {training_config.use_deepspeed}")
+    logger.info(f"  ZeRO Stage: {training_config.zero_stage}")
     logger.info(f"  Max samples: {max_samples}")
     
     model_manager = ModelManager("models")
+    deepspeed_engine = None
     
-    # Initialize mixed precision scaler
+    # Initialize mixed precision scaler (for non-DeepSpeed training)
     scaler = None
-    if training_config.use_mixed_precision and AMP_AVAILABLE:
+    if training_config.use_mixed_precision and AMP_AVAILABLE and not training_config.use_deepspeed:
         scaler = GradScaler()
         logger.info("Mixed precision scaler initialized")
     
@@ -1154,29 +1401,48 @@ def main():
         logger.info(f"Model parameters: {total_params:,} (~{model_size_mb:.1f}MB)")
         logger.info(f"Gradient checkpointing: {model_config.gradient_checkpointing}")
         
-        # Ultra-efficient optimizer
-        optimizer = optim.AdamW(
-            model.parameters(),
-            lr=training_config.learning_rate,
-            weight_decay=training_config.weight_decay,
-            eps=1e-8,
-            betas=(training_config.beta1, training_config.beta2)
-        )
+        # Initialize DeepSpeed if available
+        if training_config.use_deepspeed and DEEPSPEED_AVAILABLE:
+            logger.info("🔧 Initializing DeepSpeed...")
+            deepspeed_engine = initialize_deepspeed(model, training_config)
+            
+            if deepspeed_engine is not None:
+                logger.info("DeepSpeed initialized successfully")
+                model = deepspeed_engine  # Use DeepSpeed engine for training
+            else:
+                logger.warning("DeepSpeed initialization failed, falling back to regular training")
+                training_config.use_deepspeed = False
         
-        pad_token_id = tokenizer.vocab.get("<pad>", 0)
-        criterion = nn.CrossEntropyLoss(ignore_index=pad_token_id, label_smoothing=training_config.label_smoothing)
+        # Setup optimizer and scheduler for non-DeepSpeed training
+        optimizer = None
+        scheduler = None
+        criterion = None
         
-        total_steps = len(train_dataloader) * training_config.max_epochs // training_config.gradient_accumulation_steps
-        warmup_steps = int(total_steps * training_config.warmup_ratio)
+        if not training_config.use_deepspeed:
+            # Ultra-efficient optimizer
+            optimizer = optim.AdamW(
+                model.parameters(),
+                lr=training_config.learning_rate,
+                weight_decay=training_config.weight_decay,
+                eps=1e-8,
+                betas=(training_config.beta1, training_config.beta2)
+            )
+            
+            pad_token_id = tokenizer.vocab.get("<pad>", 0)
+            criterion = nn.CrossEntropyLoss(ignore_index=pad_token_id, label_smoothing=training_config.label_smoothing)
+            
+            total_steps = len(train_dataloader) * training_config.max_epochs // training_config.gradient_accumulation_steps
+            warmup_steps = int(total_steps * training_config.warmup_ratio)
+            
+            scheduler = ImprovedScheduler(optimizer, warmup_steps, total_steps)
+            
+            logger.info(f"Training steps: {total_steps:,}")
+            logger.info(f"Warmup steps: {warmup_steps:,}")
         
-        scheduler = ImprovedScheduler(optimizer, warmup_steps, total_steps)
-        
-        logger.info(f"Training steps: {total_steps:,}")
-        logger.info(f"Warmup steps: {warmup_steps:,}")
         logger.info(f"Memory before training: {get_memory_usage()}")
         
         # Ultra-efficient training loop
-        logger.info("🚀 Starting ultra-efficient training with enhanced optimizations...")
+        logger.info("🚀 Starting ultra-efficient training with DeepSpeed...")
         training_start = time.time()
         best_loss = float('inf')
         models_saved = 0
@@ -1187,14 +1453,19 @@ def main():
             logger.info(f"=== Epoch {epoch}/{training_config.max_epochs} ===")
             
             try:
-                # Ultra-efficient training with enhanced features
-                train_loss, train_acc = train_epoch_ultra_efficient(
-                    model, train_dataloader, criterion, optimizer, scheduler, epoch,
-                    training_config.gradient_accumulation_steps,
-                    training_config.max_grad_norm,
-                    training_config.use_mixed_precision,
-                    scaler
-                )
+                # Choose training method based on DeepSpeed availability
+                if training_config.use_deepspeed and deepspeed_engine is not None:
+                    train_loss, train_acc = train_epoch_with_deepspeed(
+                        deepspeed_engine, train_dataloader, epoch
+                    )
+                else:
+                    train_loss, train_acc = train_epoch_ultra_efficient(
+                        model, train_dataloader, criterion, optimizer, scheduler, epoch,
+                        training_config.gradient_accumulation_steps,
+                        training_config.max_grad_norm,
+                        training_config.use_mixed_precision,
+                        scaler
+                    )
                 
                 # Check for invalid loss
                 if math.isnan(train_loss) or math.isinf(train_loss):
@@ -1210,9 +1481,11 @@ def main():
                 eval_results = None
                 if epoch % 5 == 0 or epoch == 1:
                     with ultra_memory_cleanup():
+                        eval_criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.vocab.get("<pad>", 0))
                         eval_results = evaluate_model_minimal(
-                            model, eval_dataloader, criterion, max_batches=3,
-                            use_mixed_precision=training_config.use_mixed_precision
+                            model, eval_dataloader, eval_criterion, max_batches=3,
+                            use_mixed_precision=training_config.use_mixed_precision and not training_config.use_deepspeed,
+                            deepspeed_engine=deepspeed_engine if training_config.use_deepspeed else None
                         )
                     logger.info(f"Eval - Loss: {eval_results['avg_loss']:.4f}, Acc: {eval_results['accuracy']:.3f}")
                 
@@ -1220,8 +1493,9 @@ def main():
                 if epoch % 10 == 0:
                     with ultra_memory_cleanup():
                         sample = generate_sample_text_minimal(
-                            model, tokenizer, 
-                            use_mixed_precision=training_config.use_mixed_precision
+                            model, tokenizer,
+                            use_mixed_precision=training_config.use_mixed_precision and not training_config.use_deepspeed,
+                            deepspeed_engine=deepspeed_engine if training_config.use_deepspeed else None
                         )
                         logger.info(f"Sample: {sample}")
                 
@@ -1240,6 +1514,8 @@ def main():
                         "is_best": is_best,
                         "mixed_precision_used": training_config.use_mixed_precision,
                         "gradient_checkpointing_used": model_config.gradient_checkpointing,
+                        "deepspeed_used": training_config.use_deepspeed,
+                        "zero_stage": training_config.zero_stage if training_config.use_deepspeed else None,
                     }
                     
                     if eval_results:
@@ -1249,8 +1525,8 @@ def main():
                         })
                     
                     metadata = ModelMetadata(
-                        model_name="Ultra_Low_VRAM_Model_Enhanced",
-                        version=f"v2.0_epoch_{epoch}",
+                        model_name="Ultra_Low_VRAM_Model_DeepSpeed",
+                        version=f"v3.0_epoch_{epoch}",
                         created_at=datetime.now().isoformat(),
                         model_config=model_config,
                         training_config=training_config,
@@ -1261,15 +1537,19 @@ def main():
                         best_loss=float(best_loss),
                         hardware_used=device.type.upper(),
                         pytorch_version=torch.__version__,
-                        notes=f"Enhanced ultra-low VRAM training epoch {epoch} with mixed precision and gradient checkpointing",
-                        tags=["ultra_low_vram", "enhanced", f"epoch_{epoch}"] + (["best"] if is_best else []) + 
+                        notes=f"Ultra-low VRAM training epoch {epoch} with DeepSpeed ZeRO-{training_config.zero_stage if training_config.use_deepspeed else 'disabled'}",
+                        tags=["ultra_low_vram", "deepspeed", f"epoch_{epoch}"] + (["best"] if is_best else []) + 
                              (["mixed_precision"] if training_config.use_mixed_precision else []) +
-                             (["gradient_checkpointing"] if model_config.gradient_checkpointing else [])
+                             (["gradient_checkpointing"] if model_config.gradient_checkpointing else []) +
+                             ([f"zero_stage_{training_config.zero_stage}"] if training_config.use_deepspeed else [])
                     )
                     
                     try:
                         with ultra_memory_cleanup():
-                            model_id = model_manager.save_model(model, tokenizer, metadata)
+                            model_id = model_manager.save_model(
+                                model, tokenizer, metadata, 
+                                deepspeed_engine=deepspeed_engine if training_config.use_deepspeed else None
+                            )
                             if model_id:
                                 models_saved += 1
                                 logger.info(f"💾 Model saved: {model_id}")
@@ -1288,23 +1568,30 @@ def main():
                 if "out of memory" in str(e).lower():
                     logger.info("OOM detected, attempting recovery...")
                     
-                    optimizer.zero_grad()
-                    if scaler is not None:
-                        scaler = GradScaler()  # Reset scaler
-                    
-                    with ultra_memory_cleanup():
-                        pass
-                    
-                    # Further reduce batch size if needed
-                    if training_config.batch_size > 1:
-                        training_config.batch_size = 1
-                        training_config.gradient_accumulation_steps *= 2
-                        logger.info("Reduced to batch size 1")
+                    if training_config.use_deepspeed and deepspeed_engine is not None:
+                        # DeepSpeed recovery
+                        logger.info("Attempting DeepSpeed recovery...")
+                        with ultra_memory_cleanup():
+                            pass
+                    else:
+                        # Regular training recovery
+                        optimizer.zero_grad()
+                        if scaler is not None:
+                            scaler = GradScaler()  # Reset scaler
                         
-                        # Recreate dataloader
-                        train_dataloader = create_optimized_dataloader(
-                            dataset, 1, training_config, shuffle=True
-                        )
+                        with ultra_memory_cleanup():
+                            pass
+                        
+                        # Further reduce batch size if needed
+                        if training_config.batch_size > 1:
+                            training_config.batch_size = 1
+                            training_config.gradient_accumulation_steps *= 2
+                            logger.info("Reduced to batch size 1")
+                            
+                            # Recreate dataloader
+                            train_dataloader = create_optimized_dataloader(
+                                dataset, 1, training_config, shuffle=True
+                            )
                     
                     continue
                 else:
@@ -1314,11 +1601,14 @@ def main():
         total_time = time.time() - training_start
         
         logger.info("=" * 60)
-        logger.info("✅ Enhanced ultra-low VRAM training completed!")
+        logger.info("✅ Ultra-low VRAM training with DeepSpeed completed!")
         logger.info(f"Best loss: {best_loss:.4f}")
         logger.info(f"Models saved: {models_saved}")
         logger.info(f"Training time: {total_time/60:.1f} minutes")
         logger.info(f"Final memory: {get_memory_usage()}")
+        logger.info(f"DeepSpeed used: {training_config.use_deepspeed}")
+        if training_config.use_deepspeed:
+            logger.info(f"ZeRO Stage: {training_config.zero_stage}")
         logger.info(f"Mixed precision used: {training_config.use_mixed_precision}")
         logger.info(f"Gradient checkpointing used: {model_config.gradient_checkpointing}")
         

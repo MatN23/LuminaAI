@@ -5,6 +5,9 @@ torch>=2.1.0,<3.0.0
 torchvision>=0.16.0
 torchaudio>=2.1.0
 
+# DeepSpeed for memory optimization and distributed training
+deepspeed>=0.12.0
+
 # ML Optimization & Training
 accelerate>=0.24.0
 bitsandbytes>=0.41.0
@@ -17,6 +20,13 @@ numpy>=1.24.0,<2.0.0
 flask>=2.3.0,<3.0.0
 flask-socketio>=5.3.0
 flask-cors>=4.0.0
+
+# DeepSpeed dependencies
+py-cpuinfo>=9.0.0
+psutil>=5.9.0
+hjson>=3.1.0
+ninja>=1.11.1
+packaging>=20.0
 
 # Optional: Additional ML utilities (uncomment if needed)
 # transformers>=4.35.0
