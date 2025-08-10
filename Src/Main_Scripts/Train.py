@@ -63,10 +63,10 @@ logger = setup_logging()
 @dataclass
 class ModelConfig:
     vocab_size: int = 50000
-    hidden_size: int = 768
-    num_layers: int = 12
-    num_heads: int = 12
-    seq_length: int = 512
+    hidden_size: int = 2048
+    num_layers: int = 24
+    num_heads: int = 16
+    seq_length: int = 1024
     dropout: float = 0.1
     model_type: str = "transformer"
     tokenizer_type: str = "subword"
@@ -738,16 +738,16 @@ def get_ultra_low_vram_config():
     
     if device.type == 'cuda':
         model_config = ModelConfig(
-            vocab_size=15000,   # Smaller vocabulary for DeepSpeed
-            hidden_size=1536,   # Reduced size
-            num_layers=20,      # Fewer layers
+            vocab_size=150000,   # Smaller vocabulary for DeepSpeed
+            hidden_size=2048,   # Reduced size
+            num_layers=24,      # Fewer layers
             num_heads=12,       # Fewer heads
-            seq_length=768,     # Shorter sequences
+            seq_length=1024,     # Shorter sequences
             dropout=0.1,
             gradient_checkpointing=True
         )
-        batch_size = 1      # Single batch
-        max_samples = 60000  # Smaller dataset
+        batch_size = 4     # Single batch
+        max_samples = 800000  # Smaller dataset
     elif device.type == 'mps':
         model_config = ModelConfig(
             vocab_size=1500,
