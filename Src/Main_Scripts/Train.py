@@ -66,7 +66,7 @@ class ModelConfig:
 @dataclass
 class TrainingConfig:
     """Training configuration"""
-    batch_size: int = 8
+    batch_size: int = 2
     gradient_accumulation_steps: int = 16
     learning_rate: float = 5e-4
     num_epochs: int = 3
@@ -673,12 +673,14 @@ def get_device_info():
 def main():
     """Main training function"""
     parser = argparse.ArgumentParser(description="Train ModernSubwordTransformer")
-    parser.add_argument("--data", required=True, help="Training data file (JSONL)")
     parser.add_argument("--config", default="auto", help="Model configuration")
     parser.add_argument("--output", default="models", help="Output directory")
     parser.add_argument("--experiment", default="auto", help="Experiment name")
     
     args = parser.parse_args()
+    
+    # HARDCODED DATA PATH - Change this to your training data file
+    DATA_PATH = "oasst1_data/oasst1_train.jsonl"  # <-- CHANGE THIS TO YOUR DATA FILE PATH
     
     # Setup logging
     log_file = setup_logging()
@@ -727,7 +729,7 @@ def main():
     try:
         # Load and prepare data
         logging.info("📦 Loading and preparing data...")
-        texts = load_data(args.data)
+        texts = load_data(DATA_PATH)
         
         # Split data
         split_idx = int(0.9 * len(texts))
