@@ -1,8 +1,5 @@
 # Enhanced Configuration System with Modern Architecture
 # Copyright (c) 2025 Matias Nielsen. All rights reserved.
-# 
-# Usage: python Train.py
-# All configuration is hardcoded below - modify the TRAINING_CONFIG section as needed
 
 import os
 import sys
