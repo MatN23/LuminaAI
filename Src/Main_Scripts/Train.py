@@ -67,60 +67,7 @@ TRAINING_CONFIG = {
             "glu_variant": "swiglu",
             "gradient_checkpointing": True,
         },  # FIXED: Added missing comma
-        # Tiny config - for fast experimentation and testing
-        "model_tiny": {
-            "config_preset": "tiny",
-            "custom": {
-                "vocab_size": 32000,
-                "hidden_size": 512,
-                "num_layers": 8,
-                "num_heads": 8,  # 512 ÷ 8 = 64 head dimension
-                "seq_length": 2048,
-                "use_rotary_pos_emb": True,
-                "use_rms_norm": True,
-                "use_grouped_query_attention": False,  # Simpler for tiny model
-                "use_glu_variants": True,
-                "glu_variant": "swiglu",
-                "gradient_checkpointing": False,  # Less memory pressure
-            }
         },
-
-        # Research config - for experimentation with larger scale
-        "model_research": {
-            "config_preset": "research", 
-            "custom": {
-                "vocab_size": 32000,
-                "hidden_size": 8192,
-                "num_layers": 48,
-                "num_heads": 64,  # 8192 ÷ 64 = 128 head dimension
-                "seq_length": 16384,
-                "use_rotary_pos_emb": True,
-                "use_rms_norm": True,
-                "use_grouped_query_attention": True,
-                "use_glu_variants": True,
-                "glu_variant": "swiglu",
-                "gradient_checkpointing": True,
-            }
-        },
-
-        # Original fixed config - balanced for production
-        "model_balanced": {
-            "config_preset": "custom",
-            "custom": {
-                "vocab_size": 32000,
-                "hidden_size": 4096,
-                "num_layers": 36,
-                "num_heads": 32,
-                "seq_length": 8192,
-                "use_rotary_pos_emb": True,
-                "use_rms_norm": True,
-                "use_grouped_query_attention": True,
-                "use_glu_variants": True,
-                "glu_variant": "swiglu",
-                "gradient_checkpointing": True,
-            }
-        }
-    },
     
     # Training Configuration
     "training": {
