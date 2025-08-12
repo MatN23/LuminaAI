@@ -40,7 +40,7 @@ from subword_transformer import SubwordTokenizer, ModernSubwordTransformer
 TRAINING_CONFIG = {
     # Data Configuration
     "data": {
-        "training_data_path": "data/train.jsonl",  # Path to your training data
+        "training_data_path": "oasst1_data/oasst1_train.jsonl",  # Path to your training data
         "use_conversation_format": True,           # Whether to format as chat conversations
         "max_samples_train": None,                 # None for all data, or limit like 10000
         "max_samples_eval": None,                  # None for all data, or limit like 1000
