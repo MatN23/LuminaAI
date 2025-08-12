@@ -54,8 +54,8 @@ except ImportError:
 class ModelConfig:
     """Model configuration"""
     vocab_size: int = 16000
-    hidden_size: int = 1024
-    num_layers: int = 12
+    hidden_size: int = 2048
+    num_layers: int = 24
     num_heads: int = 16
     intermediate_size: int = 4096
     max_seq_length: int = 2048
@@ -66,10 +66,10 @@ class ModelConfig:
 @dataclass
 class TrainingConfig:
     """Training configuration"""
-    batch_size: int = 2
+    batch_size: int = 4
     gradient_accumulation_steps: int = 16
     learning_rate: float = 5e-4
-    num_epochs: int = 3
+    num_epochs: int = 200
     warmup_steps: int = 1000
     max_grad_norm: float = 1.0
     weight_decay: float = 0.01
