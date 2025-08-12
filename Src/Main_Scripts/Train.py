@@ -67,7 +67,33 @@ TRAINING_CONFIG = {
             "glu_variant": "swiglu",
             "gradient_checkpointing": True,
         },  # FIXED: Added missing comma
-        },
+        "tiny": {
+            "vocab_size": 32000,
+            "hidden_size": 256,
+            "num_layers": 4,
+            "num_heads": 4,
+            "seq_length": 512,
+            "use_rotary_pos_emb": True,
+            "use_rms_norm": True,
+            "use_grouped_query_attention": True,
+            "use_glu_variants": True,
+            "glu_variant": "swiglu",
+            "gradient_checkpointing": True
+        },  # FIXED: Added missing comma
+        "research": {
+            "vocab_size": 32000,
+            "hidden_size": 2048,
+            "num_layers": 24,
+            "num_heads": 16,
+            "seq_length": 1024,
+            "use_rotary_pos_emb": True,
+            "use_rms_norm": True,
+            "use_grouped_query_attention": True,
+            "use_glu_variants": True,
+            "glu_variant": "swiglu",
+            "gradient_checkpointing": True
+        },  # FIXED: Added missing comma
+    },
     
     # Training Configuration
     "training": {
