@@ -1,379 +1,402 @@
-# 🌌 LuminaAI Desktop
-### Neural Transformer Chat Interface with Glassmorphic UI
+# Modern Transformer Training System
 
-<div align="center">
+A state-of-the-art transformer training framework with cutting-edge architectural improvements and production-ready features.
 
-![LuminaAI Banner](assets/banner.png)
+## 🚀 Features
 
-**🧠 Advanced Neural Architecture • 🎨 Glassmorphic Interface • ⚡ Real-time Intelligence**
+### **Advanced Architecture**
+- **RoPE (Rotary Position Embedding)** - Superior positional encoding
+- **RMSNorm** - More stable normalization than LayerNorm  
+- **Grouped Query Attention (GQA)** - Efficient attention with reduced memory
+- **SwiGLU/GeGLU Activations** - Modern GLU variants for better performance
+- **Flash Attention** - Memory-efficient attention computation
+- **Gradient Checkpointing** - Trade computation for memory
 
-[![License](https://img.shields.io/badge/license-Custom-ff6b6b.svg?style=for-the-badge)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.8+-4dabf7.svg?style=for-the-badge&logo=python)](https://python.org)
-[![Electron](https://img.shields.io/badge/electron-28.0+-69db7c.svg?style=for-the-badge&logo=electron)](https://electronjs.org)
-[![PyTorch](https://img.shields.io/badge/pytorch-2.0+-ee5a52.svg?style=for-the-badge&logo=pytorch)](https://pytorch.org)
-[![Neural Network](https://img.shields.io/badge/AI-Neural_Transformers-9775fa.svg?style=for-the-badge)]()
+### **Modern Training Features**
+- **Mixed Precision Training** - FP16/BF16 with automatic precision detection
+- **Torch Compile** - JIT compilation for faster training
+- **Advanced Optimizers** - AdamW with configurable parameters
+- **Smart Scheduling** - Cosine with warmup, cosine restarts
+- **Gradient Accumulation** - Handle large effective batch sizes
+- **Dynamic Loss Scaling** - Stable FP16 training
 
-*Experience the future of human-AI interaction through a revolutionary desktop interface*
-
-[🚀 Quick Start](#-quick-start) • [🎯 Features](#-key-features) • [🛠️ Installation](#️-installation) • [🧠 Training](#-neural-training) • [📚 Documentation](#-documentation)
-
-</div>
-
----
-
-## 🎯 Key Features
-
-### 🎨 **Revolutionary Glassmorphic Interface**
-- **Advanced Glassmorphism**: Multi-layer translucent effects with dynamic blur and refraction
-- **Neural Particle System**: Real-time animated neural network visualization with 10,000+ particles
-- **Fluid Animations**: 120fps GSAP-powered micro-interactions and morphing transitions
-- **Adaptive Theming**: Dynamic color schemes that respond to conversation context
-- **Immersive UX**: Cinematic loading sequences and context-aware visual feedback
-
-### 🧠 **State-of-the-Art Neural Engine**
-- **Subword Tokenization**: Advanced BPE (Byte-Pair Encoding) for superior language understanding
-- **Multi-Modal Sampling**: Temperature-controlled Top-K, Nucleus (Top-P), and adaptive sampling strategies
-- **Streaming Intelligence**: Real-time token generation with typing indicators and thinking animations  
-- **Memory Architecture**: Hierarchical conversation context with attention-based history management
-- **Hardware Acceleration**: Optimized inference pipelines for CUDA, Metal Performance Shaders (MPS), and multi-core CPU
-
-### 🚀 **Native Desktop Excellence**
-- **Deep System Integration**: Platform-native menus, dialogs, and keyboard shortcuts
-- **Universal Compatibility**: Seamless operation across Windows 10+, macOS 10.14+, and Linux distributions
-- **Performance Monitoring**: Real-time inference metrics, memory usage, and GPU utilization
-- **Smart Notifications**: Contextual alerts and conversation status updates
-- **File System Integration**: Drag-and-drop model loading and conversation exports
-
----
-
-## 📊 Technical Specifications
-
-<div align="center">
-
-| Component | Specification | Details |
-|-----------|---------------|---------|
-| **Neural Architecture** | Transformer-based | Custom-trained on conversational datasets |
-| **Tokenization** | Subword BPE | Vocabulary size: 32,000+ tokens |
-| **Inference Engine** | PyTorch 2.0+ | Optimized with TorchScript compilation |
-| **Frontend** | Electron 28+ | Chromium-based with native APIs |
-| **Backend** | Flask + SocketIO | Real-time WebSocket communication |
-| **Animation Engine** | GSAP 3.12+ | Hardware-accelerated transitions |
-| **Minimum RAM** | 16GB | 32GB recommended for large models |
-| **Storage** | 30GB+ | SSD recommended for optimal performance |
-
-</div>
-
----
+### **Production-Ready Components**
+- **Advanced BPE Tokenizer** - Fast, robust subword tokenization
+- **Comprehensive Model Management** - Save/load with metadata
+- **Conversation Formatting** - Built-in chat format support
+- **Hardware Auto-Detection** - Optimal config selection
+- **Progress Tracking** - Detailed logging and optional Wandb integration
 
 ## 🛠️ Installation
 
-### ⚡ Automated Setup (Recommended)
+### **Requirements**
+- Python 3.8+
+- PyTorch 2.1.0+
+- CUDA 11.8+ (for GPU training)
 
+### **Quick Setup**
 ```bash
-# Clone the revolutionary AI interface
-git clone https://github.com/MatN23/LuminaAI.git
-cd lumina-ai-desktop
-
-# Linux/macOS - One-command installation
-chmod +x install.sh && ./install.sh
-
-# Windows - PowerShell execution
-./install.bat
-```
-
-### 🔧 Manual Installation
-
-```bash
-# 1. Install Node.js dependencies
-npm install --production
-
-# 2. Create Python virtual environment (recommended)
-python -m venv lumina_env
-source lumina_env/bin/activate  # Linux/macOS
-# or
-lumina_env\Scripts\activate     # Windows
-
-# 3. Install Python dependencies with CUDA support
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-pip install flask flask-socketio flask-cors numpy transformers
-
-# 4. Install additional dependencies
+# Install dependencies
 pip install -r requirements.txt
+
+# Optional: Install Flash Attention for maximum performance
+pip install flash-attn --no-build-isolation
 ```
 
-### 🐳 Docker Deployment (Advanced)
+### **Verify Installation**
+```python
+import torch
+print(f"PyTorch: {torch.__version__}")
+print(f"CUDA Available: {torch.cuda.is_available()}")
 
+# Check if Flash Attention is available
+try:
+    from flash_attn import flash_attn_func
+    print("Flash Attention: Available ✅")
+except ImportError:
+    print("Flash Attention: Not available (optional)")
+```
+
+## 📊 Data Format
+
+The system supports multiple data formats:
+
+### **JSONL Format (Recommended)**
+```json
+{"text": "Your training text here"}
+{"text": "Another training example"}
+```
+
+### **Conversation Format**
+```json
+{
+  "messages": [
+    {"role": "system", "content": "You are a helpful assistant."},
+    {"role": "user", "content": "What is machine learning?"},
+    {"role": "assistant", "content": "Machine learning is..."}
+  ]
+}
+```
+
+### **Simple Text Fields**
+The system automatically detects these fields:
+- `text`, `content`, `message`, `body`, `output`
+- `messages` (for conversation format)
+
+## 🔧 Configuration
+
+All configuration is done through the hardcoded `TRAINING_CONFIG` dictionary in `Train.py`. Here are the key sections:
+
+### **Data Configuration**
+```python
+"data": {
+    "training_data_path": "path/to/your/data.jsonl",
+    "use_conversation_format": True,
+    "max_samples_train": None,  # None for all data
+    "eval_split": 0.1,
+    "min_text_length": 10,
+    "tokenizer_train_size": 100000,
+}
+```
+
+### **Model Configuration**
+```python
+"model": {
+    "config_preset": "auto",  # "auto", "tiny", "research", "custom"
+    "custom": {
+        "vocab_size": 32000,
+        "hidden_size": 2048,
+        "num_layers": 24,
+        "num_heads": 16,
+        "seq_length": 4096,
+        # ... more options
+    }
+}
+```
+
+### **Training Configuration**
+```python
+"training": {
+    "batch_size": 4,
+    "gradient_accumulation_steps": 8,
+    "max_epochs": 3,
+    "learning_rate": 3e-4,
+    "scheduler_type": "cosine_with_warmup",
+    "warmup_ratio": 0.03,
+    # ... more options
+}
+```
+
+## 🏃‍♂️ Quick Start
+
+### **1. Prepare Your Data**
+Place your training data in JSONL format:
 ```bash
-# Build the container
-docker build -t lumina-ai .
-
-# Run with GPU support
-docker run --gpus all -p 5001:5001 -p 3000:3000 lumina-ai
+# Example data structure
+echo '{"text": "The quick brown fox jumps over the lazy dog."}' > train_data.jsonl
+echo '{"text": "Machine learning is a subset of artificial intelligence."}' >> train_data.jsonl
 ```
 
----
+### **2. Configure Training**
+Edit the `TRAINING_CONFIG` in `Train.py`:
+```python
+TRAINING_CONFIG = {
+    "data": {
+        "training_data_path": "train_data.jsonl",
+        # ... other settings
+    },
+    # ... other configurations
+}
+```
 
-## 🧠 Neural Training
-
-### 📚 Dataset Preparation
-
-LuminaAI uses the high-quality OASST1 (OpenAssistant) conversational dataset for training:
-
+### **3. Start Training**
 ```bash
-# Download and prepare training data
-wget https://huggingface.co/datasets/OpenAssistant/oasst1/resolve/main/oasst1_train.jsonl
-mkdir -p oasst1_data
-mv oasst1_train.jsonl oasst1_data/
+python Train.py
 ```
 
-### 🚀 Training Your Custom Model
+The system will:
+- Auto-detect optimal configuration for your hardware
+- Train a BPE tokenizer on your data
+- Initialize the model with modern architecture
+- Start training with advanced features
+- Save checkpoints automatically
+- Log comprehensive metrics
 
-```bash
-# Start neural training with advanced configuration
-python Train.py \
-    --data oasst1_data/oasst1_train.jsonl \
-    --model_size medium \
-    --batch_size 32 \
-    --learning_rate 3e-4 \
-    --max_epochs 10 \
-    --gradient_accumulation 4 \
-    --tokenizer_type subword \
-    --vocab_size 32000 \
-    --save_every 1000 \
-    --validate_every 500 \
-    --mixed_precision \
-    --compile_model
+## 📈 Model Presets
+
+### **Auto Detection** (Recommended)
+```python
+"config_preset": "auto"
+```
+Automatically selects optimal configuration based on available GPU memory:
+- **40GB+ (A100/H100)**: Research-grade 7B model
+- **20GB+ (RTX 4090)**: Medium model (~1.5B parameters)
+- **10GB+ (RTX 3080)**: Small model (~350M parameters)
+- **<10GB**: Tiny model for testing
+
+### **Predefined Presets**
+```python
+# For debugging and testing
+"config_preset": "tiny"
+
+# For research (requires high-end GPU)
+"config_preset": "research" 
+
+# For full control
+"config_preset": "custom"
 ```
 
-### ⚙️ Training Configuration Options
+## 💾 Model Management
 
-| Parameter | Description | Default | Advanced Options |
-|-----------|-------------|---------|------------------|
-| `--data` | Training dataset path | Required | Supports JSONL, CSV, Parquet |
-| `--model_size` | Architecture scale | `medium` | `small`, `medium`, `large`, `xl` |
-| `--tokenizer_type` | Tokenization method | `subword` | `word`, `char`, `sentencepiece` |
-| `--vocab_size` | Vocabulary size | `32000` | `16000`, `32000`, `64000` |
-| `--mixed_precision` | Use FP16 training | `False` | Significantly faster training |
-| `--compile_model` | PyTorch 2.0 compilation | `False` | Up to 2x performance boost |
+The system includes sophisticated model management:
 
-### 📈 Training Monitoring
+### **Automatic Saving**
+- Checkpoints saved periodically during training
+- Comprehensive metadata tracking
+- Model versioning and integrity checks
+- Human-readable model information
 
-Monitor your training progress with built-in visualization:
+### **Loading Models**
+```python
+from model_manager import ModelManager
 
-```bash
-# View training metrics in real-time
-python -m tensorboard.main --logdir=./logs --port=6006
+manager = ModelManager("models")
+model, tokenizer, metadata, optimizer, scheduler = manager.load_model("model_id")
 ```
 
----
-
-## 🚀 Quick Start
-
-### 1. Launch LuminaAI
-
-```bash
-# Start the neural interface
-npm start
-
-# Development mode with debugging
-npm run dev
+### **List Saved Models**
+```python
+models = manager.list_models()
+for model in models:
+    print(f"{model['name']}: {model['parameters']:,} parameters, {model['size_mb']:.1f}MB")
 ```
-
-### 2. Load Your Trained Model
-
-1. **Prepare Model Files**: Ensure you have your trained `.pth` file and `tokenizer.pkl`
-2. **Open LuminaAI**: Launch the application
-3. **Load Neural Model**: Click "Load Model" or press `Ctrl/Cmd + O`
-4. **Select Files**: Choose your model file (tokenizer will be auto-detected)
-5. **Begin Conversation**: Start interacting with your custom AI!
-
-### 3. Advanced Configuration
-
-Access the settings panel to fine-tune generation parameters:
-
-- **Temperature Control**: 0.1 (deterministic) → 2.0 (creative chaos)
-- **Top-K Sampling**: Limit token selection to top K candidates
-- **Nucleus Sampling**: Dynamic vocabulary based on cumulative probability
-- **Response Length**: 25-500 tokens with smart truncation
-- **Memory Depth**: Conversation context window size
-
----
-
-## ⌨️ Keyboard Shortcuts & Controls
-
-<div align="center">
-
-| Shortcut | Action | Description |
-|----------|--------|-------------|
-| `Ctrl/Cmd + O` | Load Model | Open neural model selection dialog |
-| `Ctrl/Cmd + R` | Reload Interface | Refresh the glassmorphic interface |
-| `Ctrl/Cmd + K` | Focus Input | Quick focus to message input field |
-| `Ctrl/Cmd + Enter` | Send Message | Submit message to neural engine |
-| `Ctrl/Cmd + Shift + C` | Clear Chat | Reset conversation history |
-| `Ctrl/Cmd + I` | Model Info | Display neural architecture details |
-| `Ctrl/Cmd + ,` | Settings | Open configuration panel |
-| `F11` | Fullscreen | Toggle immersive fullscreen mode |
-| `Ctrl/Cmd + D` | Developer Tools | Open Chromium DevTools |
-| `Escape` | Close Modal | Dismiss any open dialog |
-
-</div>
-
----
 
 ## 🔬 Advanced Features
 
-### 🧪 **Neural Architecture Insights**
-- **Attention Visualization**: See what your model focuses on during generation
-- **Token Probability Analysis**: Real-time probability distributions for each token
-- **Layer Activation Maps**: Deep neural network introspection tools
-- **Performance Profiling**: Detailed inference timing and memory analysis
+### **Mixed Precision Training**
+Automatically detected based on GPU capability:
+- **Ampere+ (RTX 30xx, A100)**: BF16 (recommended)
+- **Volta/Turing (V100, RTX 20xx)**: FP16
+- **Older GPUs**: FP32 fallback
 
-### 🎛️ **Advanced Sampling Techniques**
-- **Contrastive Search**: Balanced between quality and diversity
-- **Typical Sampling**: Information-theoretic token selection
-- **Repetition Penalties**: Dynamic suppression of repetitive content
-- **Custom Stopping Criteria**: Configurable end-of-sequence detection
+### **Flash Attention**
+Automatically used when available for:
+- 2-8x faster attention computation
+- Significantly reduced memory usage
+- Better scaling to long sequences
 
-### 📊 **Model Management**
-- **Multi-Model Support**: Switch between different trained models instantly
-- **Model Comparison Mode**: A/B test different model versions
-- **Checkpoint Loading**: Resume from any training checkpoint
-- **Model Quantization**: INT8/FP16 optimization for faster inference
+### **Torch Compile**
+JIT compilation for up to 30% speed improvements:
+```python
+"precision": {
+    "use_compile": True,
+    "compile_mode": "default"  # or "max-autotune"
+}
+```
+
+### **Gradient Checkpointing**
+Trade computation for memory:
+- Enables training larger models
+- Automatically enabled for large configurations
+- Minimal speed impact with major memory savings
+
+## 📋 Hardware Requirements
+
+### **Minimum Requirements**
+- **GPU**: GTX 3070 ti 6GB or better
+- **RAM**: 16GB system RAM
+- **Storage**: 10GB+ free space
+
+### **Recommended Requirements**
+- **GPU**: RTX 4090/5080 or better (12GB+ VRAM)
+- **RAM**: 32GB+ system RAM
+- **Storage**: NVMe SSD with 50GB+ free space
+
+### **Optimal Setup**
+- **GPU**: 2x RTX 5090, A6000, A100, or H100
+- **RAM**: 64GB+ system RAM
+- **Storage**: High-speed NVMe SSD
+
+## 📊 Memory Usage Examples
+
+| Model Size | Parameters | VRAM (Training) | Batch Size | Sequence Length |
+|------------|------------|-----------------|------------|-----------------|
+| Tiny       | 25M        | 2-3GB          | 8          | 1024           |
+| Small      | 350M       | 8-10GB         | 4          | 2048           |
+| Medium     | 1.5B       | 18-22GB        | 2          | 4096           |
+| Large      | 7B         | 40-48GB        | 1          | 8192           |
+
+*Note: Memory usage varies based on sequence length, precision, and other factors.*
+
+## 🐛 Troubleshooting
+
+### **Out of Memory Errors**
+```bash
+# Reduce batch size
+"batch_size": 2
+
+# Increase gradient accumulation
+"gradient_accumulation_steps": 16
+
+# Enable gradient checkpointing
+"gradient_checkpointing": True
+
+# Use smaller model
+"config_preset": "tiny"
+```
+
+### **Slow Training**
+```bash
+# Enable mixed precision
+"use_mixed_precision": True
+
+# Install Flash Attention
+pip install flash-attn
+
+# Enable torch compile
+"use_compile": True
+
+# Use more workers
+"num_workers": 8
+```
+
+### **Tokenizer Issues**
+```bash
+# Increase vocab size for complex text
+"vocab_size": 50000
+
+# Adjust minimum frequency
+"min_frequency": 1
+
+# Increase training size
+"tokenizer_train_size": 200000
+```
+
+## 📈 Performance Tips
+
+### **Maximize Throughput**
+1. **Use largest batch size** that fits in memory
+2. **Enable mixed precision** (BF16 preferred)
+3. **Install Flash Attention** for long sequences
+4. **Use torch compile** for additional speedup
+5. **Optimize data loading** with multiple workers
+
+### **Memory Optimization**
+1. **Enable gradient checkpointing**
+2. **Use smaller sequence lengths** during initial training
+3. **Progressive training** (start small, increase size)
+4. **CPU offloading** for very large models
+
+### **Training Stability**
+1. **Use warmup** for learning rate
+2. **Clip gradients** (default: 1.0)
+3. **Monitor loss scaling** for FP16
+4. **Regular checkpointing**
+
+## 🔬 Experimental Features
+
+### **DeepSpeed Integration** (Experimental)
+```python
+# Enable in requirements.txt
+# pip install deepspeed
+
+# The system detects and can use DeepSpeed automatically
+```
+
+### **Wandb Integration**
+```python
+"experiment": {
+    "wandb_project": "your-project-name"
+}
+```
+
+## 📚 Architecture Details
+
+### **Modern Improvements Over Standard Transformers**
+- **RoPE**: Better positional understanding, especially for longer sequences
+- **RMSNorm**: More stable and faster than LayerNorm
+- **GQA**: Reduces memory and compute while maintaining quality
+- **SwiGLU**: Proven superior activation function for language models
+- **Proper Initialization**: Scaled initialization for deep networks
+
+### **Memory Optimizations**
+- **Flash Attention**: O(1) memory complexity for attention
+- **Gradient Checkpointing**: Trade compute for memory
+- **Mixed Precision**: Halve memory usage with minimal quality loss
+- **KV Caching**: Efficient generation with past key-value caching
+
+## 🤝 Contributing
+
+This is a research and educational project. Contributions are welcome!
+
+### **Areas for Contribution**
+- Additional model architectures
+- More efficient training techniques
+- Better data processing pipelines
+- Enhanced monitoring and visualization
+- Documentation improvements
+
+## 📄 License
+
+Copyright (c) 2025 Matias Nielsen. All rights reserved.
+
+## 🙏 Acknowledgments
+
+This project incorporates ideas and techniques from:
+- **Attention Is All You Need** (Transformer architecture)
+- **RoFormer** (Rotary Position Embedding)
+- **PaLM** (Parallel layers and modern scaling)
+- **LLaMA** (Modern architectural choices)
+- **GPT-4 Technical Report** (Training best practices)
+
+## 📞 Support
+
+For questions and issues:
+1. Check the troubleshooting section above
+2. Review the comprehensive logging output
+3. Experiment with different configuration presets
+4. Consider the hardware requirements for your setup
 
 ---
 
-## 🚨 Troubleshooting & Performance
-
-### ⚡ **Optimization Tips**
-
-```bash
-# Enable maximum performance mode
-export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
-export TOKENIZERS_PARALLELISM=true
-```
-
-### 🔧 **Common Solutions**
-
-**🚫 Model Loading Issues**
-```bash
-# Verify model structure
-python -c "import torch; print(torch.load('model.pth').keys())"
-
-# Check tokenizer compatibility
-python -c "import pickle; print(len(pickle.load(open('tokenizer.pkl', 'rb'))))"
-```
-
-**⚡ Performance Optimization**
-- **GPU Memory**: Reduce batch size if CUDA out-of-memory errors occur
-- **CPU Performance**: Enable multi-threading with `torch.set_num_threads()`
-- **M1/M2 Macs**: Ensure MPS backend is available with `torch.backends.mps.is_available()`
-
-**🔌 Backend Connection Issues**
-```bash
-# Check port availability
-netstat -an | grep 5001
-
-# Restart backend service
-pkill -f "python.*lumina_desktop.py" && python lumina_desktop.py
-```
-
----
-
-## 🏗️ Development & Building
-
-### 🛠️ Development Environment
-
-```bash
-# Start development server with hot reload
-npm run dev
-
-# Enable advanced debugging
-DEBUG=lumina:* npm run dev
-
-# Run with specific Electron version
-npm run dev -- --electron-version=28.0.0
-```
-
-### 📦 Production Building
-
-```bash
-# Build for current platform
-npm run build
-
-# Cross-platform compilation
-npm run dist:win     # Windows
-npm run dist:mac     # macOS
-npm run dist:linux   # Linux
-
-# Create portable package
-npm run pack
-```
-
-### 🧪 Testing & Quality Assurance
-
-```bash
-# Run comprehensive test suite
-npm test
-
-# Neural engine unit tests
-python -m pytest tests/neural/
-
-# End-to-end interface testing
-npm run test:e2e
-
-# Performance benchmarking
-npm run benchmark
-```
-
----
-
-## 📚 Documentation
-
-### 🔗 **Essential Links**
-- **[🎯 API Reference](docs/API.md)** - Complete backend API documentation
-- **[🧠 Model Architecture](docs/ARCHITECTURE.md)** - Neural network design details
-- **[⚙️ Configuration Guide](docs/CONFIG.md)** - Advanced setup and tuning
-- **[🚀 Deployment Guide](docs/DEPLOYMENT.md)** - Production deployment strategies
-- **[🔬 Research Papers](docs/RESEARCH.md)** - Academic foundations and citations
-
-### 🤝 **Community & Support**
-- **[💬 Discord Server](https://discord.gg/lumina-ai)** - Real-time community support
-- **[📖 GitHub Discussions](https://github.com/MatN23/LuminaAI/discussions)** - Feature requests and ideas
-- **[🐛 Issue Tracker](https://github.com/MatN23/LuminaAI/issues)** - Bug reports and fixes
-- **[📝 Wiki](https://github.com/MatN23/LuminaAI/wiki)** - Comprehensive guides and tutorials
-
----
-
-## 🌟 Acknowledgments & Credits
-
-<div align="center">
-
-**Built on the shoulders of giants**
-
-🧠 **[PyTorch](https://pytorch.org/)** - Deep learning infrastructure  
-⚡ **[Electron](https://electronjs.org/)** - Cross-platform desktop framework  
-🎨 **[GSAP](https://greensock.com/)** - Premium animation library  
-🔄 **[Socket.IO](https://socket.io/)** - Real-time communication  
-📚 **[OpenAssistant](https://open-assistant.io/)** - High-quality conversational datasets  
-🤗 **[Hugging Face](https://huggingface.co/)** - Transformers and tokenization libraries  
-
-**Special thanks to the open-source AI community for advancing the boundaries of human-machine interaction**
-
-</div>
-
----
-
-<div align="center">
-
-## 🚀 Ready to Experience the Future?
-
-**[⬇️ Download LuminaAI](https://github.com/MatN23/LuminaAI/releases/latest)**
-
-*🌌 Advanced Neural Intelligence • 🎨 Glassmorphic Beauty • ⚡ Desktop Performance*
-
-**Created with 💜 and ☕ by [Matias Nielsen](https://github.com/MatN23)**
-
-[![Star this project](https://img.shields.io/github/stars/MatN23/LuminaAI?style=social)](https://github.com/MatN23/LuminaAI)
-[![Follow the creator](https://img.shields.io/github/followers/MatN23?style=social)](https://github.com/MatN23)
-
-</div>
+**Happy Training! 🚀**
