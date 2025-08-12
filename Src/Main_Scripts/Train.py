@@ -1,16 +1,18 @@
 # Enhanced Configuration System with Modern Architecture
 # Copyright (c) 2025 Matias Nielsen. All rights reserved.
+# 
+# Usage: python Train.py
+# All configuration is hardcoded below - modify the TRAINING_CONFIG section as needed
 
 import os
 import sys
 import json
 import logging
-import argparse
+import math
+import random
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Any
-import math
-import random
 from collections import defaultdict
 
 # Core ML imports
@@ -31,8 +33,96 @@ from model_manager import (
 )
 from subword_transformer import SubwordTokenizer, ModernSubwordTransformer
 
-# HARDCODED TRAINING DATA PATH
-TRAINING_DATA_PATH = "oasst1_data/oasst1_train.jsonl"  # Change this to your desired path
+# ============================================================================
+# TRAINING CONFIGURATION - MODIFY THESE VALUES TO CONFIGURE YOUR TRAINING
+# ============================================================================
+
+TRAINING_CONFIG = {
+    # Data Configuration
+    "data": {
+        "training_data_path": "data/train.jsonl",  # Path to your training data
+        "use_conversation_format": True,           # Whether to format as chat conversations
+        "max_samples_train": None,                 # None for all data, or limit like 10000
+        "max_samples_eval": None,                  # None for all data, or limit like 1000
+        "eval_split": 0.1,                        # Fraction of data to use for evaluation
+        "min_text_length": 10,                    # Minimum text length to include
+        "max_text_length": None,                  # Maximum text length (None for no limit)
+        "remove_duplicates": True,                # Remove duplicate texts
+        "lowercase": False,                       # Convert all text to lowercase
+        "tokenizer_train_size": 100000,          # Number of texts to use for tokenizer training
+        "min_frequency": 2,                      # Minimum token frequency for tokenizer
+    },
+    
+    # Model Configuration
+    "model": {
+        "config_preset": "auto",                 # "auto", "tiny", "research", or "custom"
+        # Custom model config (used if config_preset is "custom")
+        "custom": {
+            "vocab_size": 32000,
+            "hidden_size": 2048,
+            "num_layers": 24,
+            "num_heads": 16,
+            "seq_length": 4096,
+            "use_rotary_pos_emb": True,
+            "use_rms_norm": True,
+            "use_grouped_query_attention": True,
+            "use_glu_variants": True,
+            "glu_variant": "swiglu",
+            "gradient_checkpointing": True,
+        }
+    },
+    
+    # Training Configuration
+    "training": {
+        "batch_size": 4,                         # Batch size per device
+        "gradient_accumulation_steps": 8,        # Steps to accumulate gradients
+        "max_epochs": 200,                         # Maximum number of epochs
+        "max_steps": None,                       # Maximum steps (None to use epochs)
+        "learning_rate": 3e-4,                   # Learning rate
+        "weight_decay": 0.1,                     # Weight decay
+        "warmup_ratio": 0.03,                    # Warmup ratio
+        "scheduler_type": "cosine_with_warmup",   # "cosine_with_warmup", "cosine_restarts"
+        "optimizer_type": "adamw",               # Optimizer type
+        "max_grad_norm": 1.0,                    # Gradient clipping
+        "eval_steps": None,                      # Steps between evaluations (None for auto)
+        "save_steps": None,                      # Steps between saves (None for auto)
+        "logging_steps": 10,                     # Steps between logging
+        "save_total_limit": 3,                   # Maximum saved checkpoints
+        "use_dataloader_workers": True,          # Use multiprocessing for data loading
+        "num_workers": 4,                        # Number of dataloader workers
+    },
+    
+    # Precision and Performance Configuration
+    "precision": {
+        "precision_type": "auto",                # "auto", "fp32", "fp16", "bf16", "tf32"
+        "use_mixed_precision": True,             # Use mixed precision training
+        "use_compile": True,                     # Use torch.compile for optimization
+        "compile_mode": "default",               # "default", "reduce-overhead", "max-autotune"
+        "use_dynamic_loss_scaling": True,        # Dynamic loss scaling for FP16
+    },
+    
+    # System Configuration
+    "system": {
+        "output_dir": "models",                  # Output directory for models
+        "log_dir": "logs",                       # Directory for log files
+        "device": "auto",                        # "auto", "cuda", "cpu"
+        "seed": 42,                             # Random seed
+        "gradient_checkpointing": True,          # Enable gradient checkpointing
+    },
+    
+    # Experiment Configuration
+    "experiment": {
+        "name": "auto",                         # Experiment name ("auto" for timestamp)
+        "tags": ["transformer", "training"],    # Tags for the experiment
+        "notes": "Modern transformer training with advanced features",
+        "wandb_project": None,                  # Wandb project name (None to disable)
+        "debug_mode": False,                    # Enable debug mode (small config)
+    }
+}
+
+# ============================================================================
+# END OF CONFIGURATION - NO NEED TO MODIFY BELOW THIS LINE
+# ============================================================================
 
 # Optional imports
 try:
@@ -775,6 +865,105 @@ def get_device_info():
         logging.info("💻 Using CPU")
         logging.info(f"   CPU Count: {torch.get_num_threads()}")
 
+def parse_config() -> Tuple[ModelConfig, TrainingConfig, PrecisionConfig, DataConfig, str, str]:
+    """Parse hardcoded configuration into config objects"""
+    
+    # Create data config
+    data_cfg = TRAINING_CONFIG["data"]
+    data_config = DataConfig(
+        train_data_path=data_cfg["training_data_path"],
+        use_conversation_format=data_cfg["use_conversation_format"],
+        max_samples_train=data_cfg["max_samples_train"],
+        max_samples_eval=data_cfg["max_samples_eval"],
+        min_text_length=data_cfg["min_text_length"],
+        max_text_length=data_cfg["max_text_length"],
+        remove_duplicates=data_cfg["remove_duplicates"],
+        lowercase=data_cfg["lowercase"],
+        tokenizer_train_size=data_cfg["tokenizer_train_size"],
+        min_frequency=data_cfg["min_frequency"]
+    )
+    
+    # Create model config based on preset
+    model_cfg = TRAINING_CONFIG["model"]
+    if model_cfg["config_preset"] == "auto":
+        model_config, _, _, _ = auto_select_config()
+    elif model_cfg["config_preset"] == "tiny":
+        model_config, _, _, _ = ConfigPresets.tiny_debug()
+    elif model_cfg["config_preset"] == "research":
+        model_config, _, _, _ = ConfigPresets.research_7b()
+    elif model_cfg["config_preset"] == "custom":
+        custom_cfg = model_cfg["custom"]
+        model_config = ModelConfig(**custom_cfg)
+    else:
+        raise ValueError(f"Unknown model config preset: {model_cfg['config_preset']}")
+    
+    # Create training config
+    train_cfg = TRAINING_CONFIG["training"]
+    training_config = TrainingConfig(
+        batch_size=train_cfg["batch_size"],
+        gradient_accumulation_steps=train_cfg["gradient_accumulation_steps"],
+        max_epochs=train_cfg["max_epochs"],
+        max_steps=train_cfg["max_steps"],
+        learning_rate=train_cfg["learning_rate"],
+        weight_decay=train_cfg["weight_decay"],
+        warmup_ratio=train_cfg["warmup_ratio"],
+        scheduler_type=train_cfg["scheduler_type"],
+        optimizer_type=train_cfg["optimizer_type"],
+        max_grad_norm=train_cfg["max_grad_norm"],
+        eval_steps=train_cfg["eval_steps"],
+        save_steps=train_cfg["save_steps"],
+        logging_steps=train_cfg["logging_steps"],
+        save_total_limit=train_cfg["save_total_limit"],
+        use_dataloader_workers=train_cfg["use_dataloader_workers"],
+        num_workers=train_cfg["num_workers"]
+    )
+    
+    # Set output directory
+    training_config.output_dir = TRAINING_CONFIG["system"]["output_dir"]
+    
+    # Add wandb project if specified
+    if TRAINING_CONFIG["experiment"]["wandb_project"]:
+        training_config.wandb_project = TRAINING_CONFIG["experiment"]["wandb_project"]
+    
+    # Create precision config
+    prec_cfg = TRAINING_CONFIG["precision"]
+    precision_config = PrecisionConfig(
+        precision_type=prec_cfg["precision_type"],
+        use_mixed_precision=prec_cfg["use_mixed_precision"],
+        use_compile=prec_cfg["use_compile"],
+        compile_mode=prec_cfg["compile_mode"],
+        use_dynamic_loss_scaling=prec_cfg["use_dynamic_loss_scaling"]
+    )
+    
+    # Apply debug mode overrides
+    if TRAINING_CONFIG["experiment"]["debug_mode"]:
+        logging.info("🐛 Debug mode enabled - using minimal configuration")
+        model_config = ModelConfig(
+            vocab_size=1000,
+            hidden_size=256,
+            num_layers=4,
+            num_heads=4,
+            seq_length=512
+        )
+        training_config.batch_size = 2
+        training_config.gradient_accumulation_steps = 2
+        training_config.max_epochs = 2
+        training_config.logging_steps = 10
+        training_config.eval_steps = 50
+        training_config.save_steps = 100
+        data_config.max_samples_train = 1000
+        precision_config.use_mixed_precision = False
+        precision_config.use_compile = False
+    
+    # Generate experiment name
+    if TRAINING_CONFIG["experiment"]["name"] == "auto":
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        experiment_name = f"modern_transformer_{timestamp}"
+    else:
+        experiment_name = TRAINING_CONFIG["experiment"]["name"]
+    
+    return model_config, training_config, precision_config, data_config, experiment_name, data_config.train_data_path
+
 def detect_optimal_config() -> tuple:
     """Detect optimal configuration based on available hardware"""
     logging.info("🔍 Detecting optimal configuration...")
@@ -817,43 +1006,25 @@ def detect_optimal_config() -> tuple:
         return model_config, training_config, precision_config, data_config
 
 def main():
-    """Enhanced main training function"""
-    parser = argparse.ArgumentParser(description="Advanced ModernSubwordTransformer Training")
-    # Removed --data argument since it's now hardcoded
-    parser.add_argument("--config", default="auto", help="Configuration preset or JSON file")
-    parser.add_argument("--output", default="models", help="Output directory for models")
-    parser.add_argument("--experiment", default="auto", help="Experiment name")
-    parser.add_argument("--eval-split", type=float, default=0.1, help="Evaluation split ratio")
-    parser.add_argument("--max-samples", type=int, help="Maximum training samples")
-    parser.add_argument("--vocab-size", type=int, help="Override vocabulary size")
-    parser.add_argument("--batch-size", type=int, help="Override batch size")
-    parser.add_argument("--learning-rate", type=float, help="Override learning rate")
-    parser.add_argument("--epochs", type=int, help="Override number of epochs")
-    parser.add_argument("--precision", choices=["auto", "fp32", "fp16", "bf16", "tf32"], 
-                       default="auto", help="Training precision")
-    parser.add_argument("--compile", action="store_true", help="Use torch.compile")
-    parser.add_argument("--wandb-project", help="Wandb project name")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--debug", action="store_true", help="Enable debug mode")
-    
-    args = parser.parse_args()
+    """Enhanced main training function with hardcoded configuration"""
     
     # Setup logging
-    log_file = setup_logging("logs")
+    log_file = setup_logging(TRAINING_CONFIG["system"]["log_dir"])
     
     # Set random seed
-    torch.manual_seed(args.seed)
-    random.seed(args.seed)
-    np.random.seed(args.seed)
+    seed = TRAINING_CONFIG["system"]["seed"]
+    torch.manual_seed(seed)
+    random.seed(seed)
+    np.random.seed(seed)
     if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(args.seed)
+        torch.cuda.manual_seed_all(seed)
     
     # Header
     logging.info("🚀 Enhanced ModernSubwordTransformer Training")
     logging.info("=" * 80)
     logging.info(f"📝 Log file: {log_file}")
-    logging.info(f"🌱 Random seed: {args.seed}")
-    logging.info(f"📂 Training data path: {TRAINING_DATA_PATH}")
+    logging.info(f"🌱 Random seed: {seed}")
+    logging.info(f"⚙️ Configuration loaded from hardcoded settings")
     
     # Environment check
     logging.info("🔍 Environment Check:")
@@ -867,77 +1038,13 @@ def main():
     get_device_info()
     
     try:
-        # Load configuration
-        if args.config == "auto":
-            model_config, training_config, precision_config, data_config = detect_optimal_config()
-        elif args.config == "tiny":
-            model_config, training_config, precision_config, data_config = ConfigPresets.tiny_debug()
-        elif args.config == "research":
-            model_config, training_config, precision_config, data_config = ConfigPresets.research_7b()
-        elif os.path.isfile(args.config):
-            # Load from JSON file
-            with open(args.config, 'r') as f:
-                config_data = json.load(f)
-            
-            model_config = ModelConfig(**config_data.get('model', {}))
-            training_config = TrainingConfig(**config_data.get('training', {}))
-            precision_config = PrecisionConfig(**config_data.get('precision', {}))
-            data_config = DataConfig(**config_data.get('data', {}))
-        else:
-            raise ValueError(f"Unknown config: {args.config}")
-        
-        # Apply command line overrides
-        if args.vocab_size:
-            model_config.vocab_size = args.vocab_size
-        if args.batch_size:
-            training_config.batch_size = args.batch_size
-        if args.learning_rate:
-            training_config.learning_rate = args.learning_rate
-        if args.epochs:
-            training_config.max_epochs = args.epochs
-        if args.max_samples:
-            data_config.max_samples_train = args.max_samples
-        if args.precision != "auto":
-            precision_config.precision_type = args.precision
-        if args.compile:
-            precision_config.use_compile = True
-        if args.wandb_project:
-            training_config.wandb_project = args.wandb_project
-        
-        # Set output directory
-        training_config.output_dir = args.output
-        
-        # Generate experiment name
-        if args.experiment == "auto":
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            experiment_name = f"modern_transformer_{timestamp}"
-        else:
-            experiment_name = args.experiment
-        
-        # Debug mode adjustments
-        if args.debug:
-            logging.info("🐛 Debug mode enabled - using minimal configuration")
-            model_config = ModelConfig(
-                vocab_size=1000,
-                hidden_size=256,
-                num_layers=4,
-                num_heads=4,
-                seq_length=512
-            )
-            training_config.batch_size = 2
-            training_config.gradient_accumulation_steps = 2
-            training_config.max_epochs = 2
-            training_config.logging_steps = 10
-            training_config.eval_steps = 50
-            training_config.save_steps = 100
-            data_config.max_samples_train = 1000
-            precision_config.use_mixed_precision = False
-            precision_config.use_compile = False
+        # Parse hardcoded configuration
+        model_config, training_config, precision_config, data_config, experiment_name, data_path = parse_config()
         
         # Log final configuration
         logging.info("⚙️ Final Configuration:")
         logging.info(f"   Experiment: {experiment_name}")
-        logging.info(f"   Data file: {TRAINING_DATA_PATH}")
+        logging.info(f"   Data file: {data_path}")
         logging.info(f"   Output directory: {training_config.output_dir}")
         logging.info(f"   Model: {model_config.hidden_size}d × {model_config.num_layers}L × {model_config.num_heads}A")
         logging.info(f"   Vocabulary: {model_config.vocab_size:,}")
@@ -948,17 +1055,18 @@ def main():
         logging.info(f"   Precision: {precision_config.precision_type}")
         logging.info(f"   Mixed precision: {precision_config.use_mixed_precision}")
         
-        # Load and prepare data using hardcoded path
+        # Load and prepare data
         logging.info("📦 Loading and preparing data...")
-        texts = load_data(TRAINING_DATA_PATH, data_config)
+        texts = load_data(data_path, data_config)
         
         if len(texts) == 0:
             raise ValueError("No valid texts found in the data file!")
         
         # Split data
-        split_idx = int((1 - args.eval_split) * len(texts))
+        eval_split = TRAINING_CONFIG["data"].get("eval_split", 0.1)
+        split_idx = int((1 - eval_split) * len(texts))
         train_texts = texts[:split_idx]
-        eval_texts = texts[split_idx:] if args.eval_split > 0 else []
+        eval_texts = texts[split_idx:] if eval_split > 0 else []
         
         logging.info("📊 Data split:")
         logging.info(f"   Training: {len(train_texts):,} texts")
@@ -974,8 +1082,9 @@ def main():
             tokenizer_texts = random.sample(train_texts, data_config.tokenizer_train_size)
             logging.info(f"   Using {len(tokenizer_texts):,} texts for tokenizer training")
         
-        def tokenizer_progress(message):
-            logging.info(f"   {message}")
+        def tokenizer_progress(progress, step, total):
+            if step % 1000 == 0:
+                logging.info(f"   Progress: {progress:.1f}% ({step:,}/{total:,} merges)")
         
         tokenizer.train_from_text(
             '\n'.join(tokenizer_texts), 
