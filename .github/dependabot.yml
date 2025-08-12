@@ -10,12 +10,23 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "npm"
+      prefix-development: "npm(dev)"
       include: "scope"
-    reviewers:
-      - "MatN23"  # Replace with your GitHub username
     labels:
       - "dependencies"
       - "javascript"
+      - "automated"
+    # Remove specific reviewers to make it more generic
+    # You can add reviewers back if needed:
+    # reviewers:
+    #   - "your-username"
+    allow:
+      - dependency-type: "direct"
+      - dependency-type: "indirect"
+    ignore:
+      # Ignore major version updates for sensitive packages
+      - dependency-name: "electron"
+        update-types: ["version-update:semver-major"]
 
   # Update Python dependencies
   - package-ecosystem: "pip"
@@ -27,23 +38,76 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "pip"
+      prefix-development: "pip(dev)"
       include: "scope"
-    reviewers:
-      - "MatN23"  # Replace with your GitHub username
     labels:
       - "dependencies"
       - "python"
+      - "automated"
+    allow:
+      - dependency-type: "direct"
+      - dependency-type: "indirect"
+    ignore:
+      # Common packages that might need manual review
+      - dependency-name: "tensorflow"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "torch"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "numpy"
+        update-types: ["version-update:semver-major"]
 
   # Update GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "monthly"
+      day: "monday"
+      time: "09:00"
+    open-pull-requests-limit: 3
     commit-message:
       prefix: "ci"
       include: "scope"
-    reviewers:
-      - "MatN23"  # Replace with your GitHub username
     labels:
       - "dependencies"
       - "github-actions"
+      - "automated"
+
+  # Update Docker dependencies (if you have Dockerfile)
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: "docker"
+      include: "scope"
+    labels:
+      - "dependencies"
+      - "docker"
+      - "automated"
+
+  # Security updates (gets priority)
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 10
+    labels:
+      - "security"
+      - "dependencies"
+      - "automated"
+    # Only security updates in this configuration
+    allow:
+      - dependency-type: "security"
+
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    open-pull-requests-limit: 10
+    labels:
+      - "security"
+      - "dependencies"
+      - "automated"
+    allow:
+      - dependency-type: "security"
