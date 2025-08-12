@@ -31,6 +31,9 @@ from model_manager import (
 )
 from subword_transformer import SubwordTokenizer, ModernSubwordTransformer
 
+# HARDCODED TRAINING DATA PATH
+TRAINING_DATA_PATH = "oasst1_data/oasst1_train.jsonl"  # Change this to your desired path
+
 # Optional imports
 try:
     import wandb
@@ -816,7 +819,7 @@ def detect_optimal_config() -> tuple:
 def main():
     """Enhanced main training function"""
     parser = argparse.ArgumentParser(description="Advanced ModernSubwordTransformer Training")
-    parser.add_argument("--data", required=True, help="Path to training data file (JSONL)")
+    # Removed --data argument since it's now hardcoded
     parser.add_argument("--config", default="auto", help="Configuration preset or JSON file")
     parser.add_argument("--output", default="models", help="Output directory for models")
     parser.add_argument("--experiment", default="auto", help="Experiment name")
@@ -850,6 +853,7 @@ def main():
     logging.info("=" * 80)
     logging.info(f"📝 Log file: {log_file}")
     logging.info(f"🌱 Random seed: {args.seed}")
+    logging.info(f"📂 Training data path: {TRAINING_DATA_PATH}")
     
     # Environment check
     logging.info("🔍 Environment Check:")
@@ -933,7 +937,7 @@ def main():
         # Log final configuration
         logging.info("⚙️ Final Configuration:")
         logging.info(f"   Experiment: {experiment_name}")
-        logging.info(f"   Data file: {args.data}")
+        logging.info(f"   Data file: {TRAINING_DATA_PATH}")
         logging.info(f"   Output directory: {training_config.output_dir}")
         logging.info(f"   Model: {model_config.hidden_size}d × {model_config.num_layers}L × {model_config.num_heads}A")
         logging.info(f"   Vocabulary: {model_config.vocab_size:,}")
@@ -944,9 +948,9 @@ def main():
         logging.info(f"   Precision: {precision_config.precision_type}")
         logging.info(f"   Mixed precision: {precision_config.use_mixed_precision}")
         
-        # Load and prepare data
+        # Load and prepare data using hardcoded path
         logging.info("📦 Loading and preparing data...")
-        texts = load_data(args.data, data_config)
+        texts = load_data(TRAINING_DATA_PATH, data_config)
         
         if len(texts) == 0:
             raise ValueError("No valid texts found in the data file!")
