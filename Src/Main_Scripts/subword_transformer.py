@@ -72,19 +72,13 @@ class SubwordTokenizer:
         self.merge_dict = {pair: self._merge_tokens(pair) for pair in self.merges}
         self.id_to_token = {v: k for k, v in self.vocab.items()}
         
-        # Enhanced regex pattern for better tokenization
-        # This pattern handles:
-        # - Contractions ('s, 'll, etc.)
-        # - Words with mixed scripts
-        # - Numbers (including decimals)
-        # - Punctuation and symbols
-        # - Whitespace preservation
+        # Fixed regex pattern using standard Python character classes
         self.word_pattern = re.compile(
-            r"""'(?:[sdmt]|ll|ve|re)|"""  # Common contractions
-            r"""[^\r\n\p{L}\p{N}]?+\p{L}++|"""  # Letter sequences
-            r"""\p{N}++(?:\.\p{N}++)*|"""  # Numbers (including decimals)
-            r"""[^\r\n\p{L}\p{N}]++[\r\n]*|"""  # Punctuation and symbols
-            r"""[\r\n]+""",  # Line breaks
+            r"'(?:[sdmt]|ll|ve|re)|"          # Common contractions
+            r"[^\r\n\w\s]?[\w]+|"             # Letter sequences with optional punctuation
+            r"\d+(?:\.\d+)*|"                 # Numbers (including decimals)
+            r"[^\r\n\w\s]+[\r\n]*|"           # Punctuation and symbols
+            r"[\r\n]+",                       # Line breaks
             re.IGNORECASE | re.UNICODE
         )
         
@@ -151,16 +145,16 @@ class SubwordTokenizer:
                        progress_callback: Optional[callable] = None) -> None:
         """Enhanced BPE training with progress tracking and better efficiency."""
         
-        self.logger.info(f"Training BPE tokenizer:")
-        self.logger.info(f"  Target vocabulary size: {vocab_size:,}")
-        self.logger.info(f"  Training text length: {len(text):,} characters")
-        self.logger.info(f"  Minimum frequency: {min_freq}")
+        logger.info(f"Training BPE tokenizer:")
+        logger.info(f"  Target vocabulary size: {vocab_size:,}")
+        logger.info(f"  Training text length: {len(text):,} characters")
+        logger.info(f"  Minimum frequency: {min_freq}")
         
         # Normalize and preprocess text
         text = self._normalize_text(text)
         
         # Extract words using the improved pattern
-        self.logger.info("Extracting words...")
+        logger.info("Extracting words...")
         words = []
         for match in re.finditer(self.word_pattern, text):
             word = match.group().strip()
@@ -168,7 +162,7 @@ class SubwordTokenizer:
                 words.append(word)
         
         # Count word frequencies
-        self.logger.info("Counting word frequencies...")
+        logger.info("Counting word frequencies...")
         word_freqs = Counter(words)
         
         # Filter by minimum frequency
@@ -176,16 +170,16 @@ class SubwordTokenizer:
         word_freqs = {word: freq for word, freq in word_freqs.items() if freq >= min_freq}
         filtered_unique = len(word_freqs)
         
-        self.logger.info(f"Word statistics:")
-        self.logger.info(f"  Total words: {len(words):,}")
-        self.logger.info(f"  Unique words (all): {original_unique:,}")
-        self.logger.info(f"  Unique words (freq >= {min_freq}): {filtered_unique:,}")
+        logger.info(f"Word statistics:")
+        logger.info(f"  Total words: {len(words):,}")
+        logger.info(f"  Unique words (all): {original_unique:,}")
+        logger.info(f"  Unique words (freq >= {min_freq}): {filtered_unique:,}")
         
         if not word_freqs:
             raise ValueError("No words meet the minimum frequency requirement!")
         
         # Build initial character vocabulary
-        self.logger.info("Building character vocabulary...")
+        logger.info("Building character vocabulary...")
         char_vocab = defaultdict(int)
         for word, freq in word_freqs.items():
             chars = self._get_word_chars(word)
@@ -201,11 +195,11 @@ class SubwordTokenizer:
                 self.next_id += 1
                 chars_added += 1
         
-        self.logger.info(f"Added {chars_added:,} characters to vocabulary")
-        self.logger.info(f"Current vocabulary size: {len(self.vocab):,}")
+        logger.info(f"Added {chars_added:,} characters to vocabulary")
+        logger.info(f"Current vocabulary size: {len(self.vocab):,}")
         
         # Initialize word splits for BPE learning
-        self.logger.info("Initializing word splits for BPE learning...")
+        logger.info("Initializing word splits for BPE learning...")
         word_splits = {}
         for word, freq in word_freqs.items():
             word_splits[word] = self._get_word_chars(word)
@@ -214,7 +208,7 @@ class SubwordTokenizer:
         target_merges = vocab_size - len(self.vocab)
         merges_learned = 0
         
-        self.logger.info(f"Learning BPE merges (target: {target_merges:,})...")
+        logger.info(f"Learning BPE merges (target: {target_merges:,})...")
         
         while merges_learned < target_merges and len(self.vocab) < vocab_size:
             # Count all pairs across all word splits
@@ -226,7 +220,7 @@ class SubwordTokenizer:
                         pair_counts[pair] += freq
             
             if not pair_counts:
-                self.logger.warning("No more pairs to merge!")
+                logger.warning("No more pairs to merge!")
                 break
             
             # Find the most frequent pair
@@ -253,16 +247,16 @@ class SubwordTokenizer:
             # Progress reporting
             if merges_learned % 1000 == 0 or merges_learned == target_merges:
                 progress = (merges_learned / target_merges) * 100
-                self.logger.info(f"Progress: {progress:.1f}% ({merges_learned:,}/{target_merges:,} merges)")
+                logger.info(f"Progress: {progress:.1f}% ({merges_learned:,}/{target_merges:,} merges)")
                 if progress_callback:
                     progress_callback(progress, merges_learned, target_merges)
         
         # Final cleanup and statistics
         actual_vocab_size = len(self.vocab)
-        self.logger.info(f"BPE training completed!")
-        self.logger.info(f"  Final vocabulary size: {actual_vocab_size:,}")
-        self.logger.info(f"  Merge rules learned: {len(self.merges):,}")
-        self.logger.info(f"  Coverage: {(actual_vocab_size / vocab_size) * 100:.1f}%")
+        logger.info(f"BPE training completed!")
+        logger.info(f"  Final vocabulary size: {actual_vocab_size:,}")
+        logger.info(f"  Merge rules learned: {len(self.merges):,}")
+        logger.info(f"  Coverage: {(actual_vocab_size / vocab_size) * 100:.1f}%")
         
         # Clear cache after training
         self._encoding_cache.clear()
@@ -528,6 +522,7 @@ class SubwordTokenizer:
             logger.error(f"Failed to load tokenizer: {e}")
             raise
 
+
 class RMSNorm(nn.Module):
     """Root Mean Square Layer Normalization with improved stability."""
     
@@ -542,6 +537,7 @@ class RMSNorm(nn.Module):
         variance = x.to(torch.float32).pow(2).mean(-1, keepdim=True)
         x = x * torch.rsqrt(variance + self.eps)
         return (x * self.weight).to(x.dtype)
+
 
 class RotaryPositionalEmbedding(nn.Module):
     """Optimized Rotary Position Embedding (RoPE) with caching."""
@@ -594,6 +590,7 @@ class RotaryPositionalEmbedding(nn.Module):
         
         return cos, sin
 
+
 def apply_rotary_pos_emb(q: torch.Tensor, k: torch.Tensor, 
                         cos: torch.Tensor, sin: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
     """Apply rotary positional embedding with optimized rotation."""
@@ -611,6 +608,7 @@ def apply_rotary_pos_emb(q: torch.Tensor, k: torch.Tensor,
     k_embed = (k * cos) + (rotate_half(k) * sin)
     
     return q_embed, k_embed
+
 
 class GroupedQueryAttention(nn.Module):
     """Optimized Grouped Query Attention with Flash Attention support."""
@@ -769,6 +767,7 @@ class GroupedQueryAttention(nn.Module):
         
         return attn_output, attn_weights if output_attentions else None
 
+
 class SwiGLU(nn.Module):
     """SwiGLU activation function - superior to GELU for language models."""
     
@@ -798,6 +797,7 @@ class SwiGLU(nn.Module):
         up = self.up_proj(x)
         return self.down_proj(F.silu(gate) * up)
 
+
 class GeGLU(nn.Module):
     """GeGLU activation function - alternative to SwiGLU."""
     
@@ -824,6 +824,7 @@ class GeGLU(nn.Module):
         gate = self.gate_proj(x)
         up = self.up_proj(x)
         return self.down_proj(F.gelu(gate) * up)
+
 
 class ModernTransformerBlock(nn.Module):
     """Modern transformer block with all the latest improvements."""
@@ -920,6 +921,7 @@ class ModernTransformerBlock(nn.Module):
         x = residual + ff_output
         
         return x, present_kv, attn_weights
+
 
 class ModernSubwordTransformer(nn.Module):
     """Modern transformer with all the latest architectural improvements."""
@@ -1252,6 +1254,113 @@ class ModernSubwordTransformer(nn.Module):
                 'gradient_checkpointing': self.gradient_checkpointing,
             }
         }
+
+
+# Ultra-fast tokenizer class for the training script
+class UltraFastTokenizer(SubwordTokenizer):
+    """Ultra-optimized tokenizer with parallel training"""
+    
+    def train_from_text_ultra_fast(self, text: str, vocab_size: int = 32000, 
+                                  min_freq: int = 2, progress_callback: Optional[callable] = None) -> None:
+        """Ultra-fast BPE training with optimizations"""
+        
+        logging.info(f"🚀 Ultra-fast tokenizer training:")
+        logging.info(f"   Target vocabulary: {vocab_size:,}")
+        logging.info(f"   Training text: {len(text):,} characters")
+        
+        # Optimized text normalization
+        text = self._normalize_text(text)
+        
+        # Ultra-fast word extraction with standard Python regex
+        logging.info("   Extracting words with optimized regex...")
+        words = [match.group().strip() for match in re.finditer(self.word_pattern, text) 
+                if match.group().strip() and not match.group().isspace()]
+        
+        # Ultra-fast frequency counting with Counter
+        logging.info("   Counting frequencies...")
+        word_freqs = Counter(words)
+        
+        # Filter by frequency
+        word_freqs = {word: freq for word, freq in word_freqs.items() if freq >= min_freq}
+        
+        logging.info(f"   Unique words: {len(word_freqs):,}")
+        
+        # Build character vocabulary with optimized counting
+        logging.info("   Building character vocabulary...")
+        char_counter = Counter()
+        for word, freq in word_freqs.items():
+            chars = self._get_word_chars(word)
+            for char in chars:
+                char_counter[char] += freq
+        
+        # Add characters to vocabulary (sorted by frequency)
+        chars_added = 0
+        for char, freq in char_counter.most_common():
+            if char not in self.vocab and len(self.vocab) < vocab_size:
+                self.vocab[char] = self.next_id
+                self.id_to_token[self.next_id] = char
+                self.next_id += 1
+                chars_added += 1
+        
+        logging.info(f"   Added {chars_added:,} characters")
+        
+        # Ultra-fast BPE merge learning with optimized data structures
+        logging.info("   Learning BPE merges...")
+        
+        # Initialize word splits
+        word_splits = {word: self._get_word_chars(word) for word in word_freqs.keys()}
+        
+        target_merges = vocab_size - len(self.vocab)
+        merges_learned = 0
+        
+        # Use more efficient pair counting
+        while merges_learned < target_merges and len(self.vocab) < vocab_size:
+            # Count pairs with optimized algorithm
+            pair_counts = defaultdict(int)
+            for word, freq in word_freqs.items():
+                if word in word_splits:
+                    chars = word_splits[word]
+                    for i in range(len(chars) - 1):
+                        pair = (chars[i], chars[i + 1])
+                        pair_counts[pair] += freq
+            
+            if not pair_counts:
+                break
+            
+            # Find best pair
+            best_pair = max(pair_counts.items(), key=lambda x: x[1])[0]
+            merged_token = self._merge_tokens(best_pair)
+            
+            # Add to vocabulary
+            if merged_token not in self.vocab:
+                self.vocab[merged_token] = self.next_id
+                self.id_to_token[self.next_id] = merged_token
+                self.next_id += 1
+            
+            # Add merge rule
+            self.merges.append(best_pair)
+            self.merge_dict[best_pair] = merged_token
+            
+            # Update word splits efficiently
+            for word in word_splits:
+                word_splits[word] = self._merge_pair(word_splits[word], best_pair, merged_token)
+            
+            merges_learned += 1
+            
+            # Progress reporting (less frequent for speed)
+            if merges_learned % 5000 == 0 or merges_learned == target_merges:
+                progress = (merges_learned / target_merges) * 100
+                logging.info(f"   Progress: {progress:.1f}% ({merges_learned:,}/{target_merges:,})")
+                if progress_callback:
+                    progress_callback(progress, merges_learned, target_merges)
+        
+        logging.info(f"✅ Ultra-fast tokenizer training completed!")
+        logging.info(f"   Final vocabulary: {len(self.vocab):,}")
+        logging.info(f"   Merge rules: {len(self.merges):,}")
+        
+        # Clear cache
+        self._encoding_cache.clear()
+
 
 # Backwards compatibility
 SubwordTransformer = ModernSubwordTransformer

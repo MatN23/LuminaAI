@@ -10,7 +10,7 @@ import random
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Any
-from collections import defaultdict
+from collections import defaultdict, Counter
 import functools
 
 # Core ML imports with optimizations
@@ -140,7 +140,7 @@ TRAINING_CONFIG = {
         "max_grad_norm": 1.0,
         "eval_steps": None,
         "save_steps": None,
-        "logging_steps": 10,
+        "logging_steps": 10,  # Keep this in config but don't pass to TrainingConfig
         "save_total_limit": 3,
         "use_dataloader_workers": True,
         "num_workers": 4,
@@ -287,7 +287,8 @@ class UltraFastTrainer:
     def __init__(self, model_config: ModelConfig, training_config: TrainingConfig,
                  precision_config: PrecisionConfig, data_config: DataConfig,
                  hardware_config: Optional[HardwareConfig] = None,
-                 experiment_name: str = "ultra_fast_training"):
+                 experiment_name: str = "ultra_fast_training",
+                 logging_steps: int = 10):  # Add logging_steps as separate parameter
         
         self.model_config = model_config
         self.training_config = training_config
@@ -295,6 +296,7 @@ class UltraFastTrainer:
         self.data_config = data_config
         self.hardware_config = hardware_config or HardwareConfig()
         self.experiment_name = experiment_name
+        self.logging_steps = logging_steps  # Store logging_steps separately
         
         # Ultra-fast device setup
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -494,7 +496,7 @@ class UltraFastTrainer:
         logging.info(f"   GPU Memory Allocated: {torch.cuda.memory_allocated() / 1e9:.2f}GB")
         
         # Start training with performance monitoring
-        logging.info("🏁 Starting ultra-fast training...")
+        logging.info("🎯 Starting ultra-fast training...")
         start_time = datetime.now()
         
         # Pre-compile first batch for torch.compile
@@ -647,7 +649,7 @@ class UltraFastTrainer:
                         self.step_times.pop(0)
                 
                 # Fast logging (less frequent for speed)
-                if self.global_step % (self.training_config.logging_steps * 5) == 0:
+                if self.global_step % (self.logging_steps * 5) == 0:  # Use self.logging_steps
                     avg_loss = self.accumulated_loss / self.accumulation_count
                     self._log_training_step_fast(avg_loss)
                 
@@ -771,6 +773,47 @@ class UltraFastTrainer:
 # ULTRA-FAST DATA LOADING WITH MULTIPROCESSING
 # ============================================================================
 
+def process_data_chunk(args):
+    """Process a chunk of the file - moved to module level for multiprocessing"""
+    chunk_start, chunk_size, file_path, config_dict = args
+    
+    # Recreate config object in subprocess
+    data_config = DataConfig(**config_dict)
+    
+    texts = []
+    seen = set() if data_config.remove_duplicates else None
+    
+    with open(file_path, 'r', encoding='utf-8') as f:
+        f.seek(chunk_start)
+        
+        # Skip partial line at start (except for first chunk)
+        if chunk_start > 0:
+            f.readline()
+        
+        bytes_read = 0
+        while bytes_read < chunk_size:
+            line = f.readline()
+            if not line:
+                break
+            
+            bytes_read += len(line.encode('utf-8'))
+            
+            try:
+                data = json.loads(line.strip())
+                text = extract_text_from_data(data, data_config)
+                
+                if text and filter_text(text, data_config, seen):
+                    texts.append(text)
+                    
+                    if (data_config.max_samples_train and 
+                        len(texts) >= data_config.max_samples_train // len(args) if len(args) > 4 else data_config.max_samples_train // 8):
+                        break
+                        
+            except (json.JSONDecodeError, Exception):
+                continue
+    
+    return texts
+
 def load_data_ultra_fast(file_path: str, data_config: DataConfig) -> List[str]:
     """Ultra-fast data loading with multiprocessing and streaming"""
     import multiprocessing as mp
@@ -788,47 +831,6 @@ def load_data_ultra_fast(file_path: str, data_config: DataConfig) -> List[str]:
     num_processes = min(mp.cpu_count(), 8)  # Don't use too many processes
     chunk_size = max(1024 * 1024, file_size // (num_processes * 4))  # At least 1MB chunks
     
-    def process_chunk(args):
-        """Process a chunk of the file"""
-        chunk_start, chunk_size, file_path, config_dict = args
-        
-        # Recreate config object in subprocess
-        data_config = DataConfig(**config_dict)
-        
-        texts = []
-        seen = set() if data_config.remove_duplicates else None
-        
-        with open(file_path, 'r', encoding='utf-8') as f:
-            f.seek(chunk_start)
-            
-            # Skip partial line at start (except for first chunk)
-            if chunk_start > 0:
-                f.readline()
-            
-            bytes_read = 0
-            while bytes_read < chunk_size:
-                line = f.readline()
-                if not line:
-                    break
-                
-                bytes_read += len(line.encode('utf-8'))
-                
-                try:
-                    data = json.loads(line.strip())
-                    text = extract_text_from_data(data, data_config)
-                    
-                    if text and filter_text(text, data_config, seen):
-                        texts.append(text)
-                        
-                        if (data_config.max_samples_train and 
-                            len(texts) >= data_config.max_samples_train // num_processes):
-                            break
-                            
-                except (json.JSONDecodeError, Exception):
-                    continue
-        
-        return texts
-    
     # Create chunks
     chunks = []
     with open(file_path, 'rb') as f:
@@ -842,7 +844,7 @@ def load_data_ultra_fast(file_path: str, data_config: DataConfig) -> List[str]:
     # Process chunks in parallel
     all_texts = []
     with ProcessPoolExecutor(max_workers=num_processes) as executor:
-        future_to_chunk = {executor.submit(process_chunk, chunk): chunk for chunk in chunks}
+        future_to_chunk = {executor.submit(process_data_chunk, chunk): chunk for chunk in chunks}
         
         with tqdm(total=len(chunks), desc="Processing chunks") as pbar:
             for future in as_completed(future_to_chunk):
@@ -1095,7 +1097,7 @@ def main():
     get_device_info()
     
     try:
-        # Parse configuration (same as original)
+        # Parse configuration with fixed logging_steps handling
         model_config, training_config, precision_config, data_config, experiment_name, data_path = parse_config()
         
         # Log configuration
@@ -1145,14 +1147,18 @@ def main():
         # Update model config
         model_config.vocab_size = tokenizer.vocab_size()
         
-        # Initialize ultra-fast trainer
+        # Extract logging_steps from config before creating trainer
+        logging_steps = TRAINING_CONFIG["training"]["logging_steps"]
+        
+        # Initialize ultra-fast trainer with logging_steps
         logging.info("🚀 Initializing ultra-fast trainer...")
         trainer = UltraFastTrainer(
             model_config=model_config,
             training_config=training_config,
             precision_config=precision_config,
             data_config=data_config,
-            experiment_name=experiment_name
+            experiment_name=experiment_name,
+            logging_steps=logging_steps  # Pass logging_steps separately
         )
         trainer.tokenizer = tokenizer
         
@@ -1180,7 +1186,7 @@ def main():
             logging.info(f"💾 GPU Memory: {memory_gb:.1f}GB available")
         
         # Start ultra-fast training
-        logging.info("🏁 Starting ULTRA-FAST training...")
+        logging.info("🎯 Starting ULTRA-FAST training...")
         training_start = datetime.now()
         
         trainer.train(train_dataset, eval_dataset)
@@ -1273,7 +1279,7 @@ def get_device_info():
         logging.info(f"   CPU Count: {torch.get_num_threads()}")
 
 def parse_config() -> Tuple[ModelConfig, TrainingConfig, PrecisionConfig, DataConfig, str, str]:
-    """Parse hardcoded configuration (same as original)"""
+    """Parse hardcoded configuration with fixed logging_steps handling"""
     
     data_cfg = TRAINING_CONFIG["data"]
     data_config = DataConfig(
@@ -1303,6 +1309,7 @@ def parse_config() -> Tuple[ModelConfig, TrainingConfig, PrecisionConfig, DataCo
         raise ValueError(f"Unknown model config preset: {model_cfg['config_preset']}")
     
     train_cfg = TRAINING_CONFIG["training"]
+    # Create TrainingConfig without logging_steps
     training_config = TrainingConfig(
         batch_size=train_cfg["batch_size"],
         gradient_accumulation_steps=train_cfg["gradient_accumulation_steps"],
@@ -1316,7 +1323,7 @@ def parse_config() -> Tuple[ModelConfig, TrainingConfig, PrecisionConfig, DataCo
         max_grad_norm=train_cfg["max_grad_norm"],
         eval_steps=train_cfg["eval_steps"],
         save_steps=train_cfg["save_steps"],
-        logging_steps=train_cfg["logging_steps"],
+        # logging_steps removed from here - handled separately
         save_total_limit=train_cfg["save_total_limit"],
         use_dataloader_workers=train_cfg["use_dataloader_workers"],
         num_workers=train_cfg["num_workers"]
