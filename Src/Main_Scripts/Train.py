@@ -1,37 +1,33 @@
-# Conversational Transformer Training System
-# Optimized for OASST1 conversational dataset format
+# Production-Ready Conversational Transformer Training System
+# Optimized for performance, scalability, and maintainability
 
-import math
 import json
 import logging
 import os
 import time
-from dataclasses import dataclass, field
+import math
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union, Any
-from collections import Counter, defaultdict
+from typing import Dict, List, Optional, Tuple, Union, Iterator
 import warnings
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, IterableDataset
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import OneCycleLR
 import numpy as np
+import tiktoken
 
-# Optional high-performance imports
+# High-performance imports
 try:
     from flash_attn import flash_attn_func
     HAS_FLASH_ATTN = True
 except ImportError:
     HAS_FLASH_ATTN = False
 
-try:
-    from torch.cuda.amp import autocast, GradScaler
-    HAS_AMP = True
-except ImportError:
-    HAS_AMP = False
+from torch.cuda.amp import autocast, GradScaler
 
 # Configure for performance
 torch.backends.cuda.matmul.allow_tf32 = True
@@ -39,272 +35,154 @@ torch.backends.cudnn.allow_tf32 = True
 torch.backends.cudnn.benchmark = True
 
 # =============================================================================
-# CONFIGURATION SYSTEM
+# CONFIGURATION
 # =============================================================================
 
 @dataclass
-class ModelConfig:
-    """Model architecture configuration."""
-    vocab_size: int = 32000
+class Config:
+    """Unified configuration for model, training, and data."""
+    # Model architecture
+    vocab_size: int = 50304  # GPT-4 vocab size, padded to multiple of 64
     hidden_size: int = 2048
     num_layers: int = 24
     num_heads: int = 16
-    num_kv_heads: int = 8  # For GQA
+    num_kv_heads: int = 8
     seq_length: int = 2048
-    intermediate_size: int = 5504  # SwiGLU expansion
+    intermediate_size: int = 5504
     rms_norm_eps: float = 1e-6
     rope_theta: float = 10000.0
     dropout: float = 0.0
     
-    def __post_init__(self):
-        if self.intermediate_size is None:
-            self.intermediate_size = int(8 * self.hidden_size / 3)
-            # Round to multiple of 256 for efficiency
-            self.intermediate_size = ((self.intermediate_size + 255) // 256) * 256
-        
-        assert self.hidden_size % self.num_heads == 0
-        assert self.num_heads % self.num_kv_heads == 0
-
-@dataclass  
-class TrainingConfig:
-    """Training configuration."""
+    # Training parameters
     batch_size: int = 4
-    gradient_accumulation_steps: int = 4
+    gradient_accumulation_steps: int = 8
     learning_rate: float = 3e-4
     weight_decay: float = 0.1
-    max_steps: int = 10000
-    warmup_steps: int = 1000
-    eval_interval: int = 1000
-    save_interval: int = 2000
+    max_steps: int = 50000
+    warmup_ratio: float = 0.1
+    eval_steps: int = 1000
+    save_steps: int = 5000
     max_grad_norm: float = 1.0
-    precision: str = "bf16"  # bf16, fp16, fp32
+    precision: str = "bf16"
     compile: bool = True
     
-@dataclass
-class DataConfig:
-    """Data processing configuration."""
-    train_data_path: str = "oasst1_data/oasst1_train_conversations.jsonl"
-    eval_data_path: str = "oasst1_data/oasst1_validation_conversations.jsonl"
-    seq_length: int = 2048
-    num_workers: int = 4
-    vocab_size: int = 32000
-    min_frequency: int = 2
-    max_conversations: Optional[int] = None  # Limit for debugging
+    # Data parameters  
+    train_data_path: str = "data/train_conversations.jsonl"
+    eval_data_path: str = "data/eval_conversations.jsonl"
+    num_workers: int = 8
+    assistant_loss_weight: float = 2.0
+    max_conversations_per_file: int = 10000  # For memory management
+    
+    # Generation parameters
+    max_new_tokens: int = 512
+    temperature: float = 0.8
+    top_p: float = 0.9
+    top_k: int = 50
+    
+    def __post_init__(self):
+        assert self.hidden_size % self.num_heads == 0, "hidden_size must be divisible by num_heads"
+        assert self.num_heads % self.num_kv_heads == 0, "num_heads must be divisible by num_kv_heads"
+        
+        # Ensure vocab size is efficient
+        if self.vocab_size % 64 != 0:
+            self.vocab_size = ((self.vocab_size + 63) // 64) * 64
+            
+        self.warmup_steps = int(self.max_steps * self.warmup_ratio)
+        self.effective_batch_size = self.batch_size * self.gradient_accumulation_steps
 
 # =============================================================================
-# CONVERSATION-AWARE TOKENIZER
+# TOKENIZATION WITH TIKTOKEN
 # =============================================================================
 
 class ConversationTokenizer:
-    """Tokenizer specifically designed for conversational data."""
+    """Production tokenizer using tiktoken with conversation-specific formatting."""
     
-    def __init__(self):
+    def __init__(self, model_name: str = "gpt2"):
+        self.tokenizer = tiktoken.get_encoding(model_name)
+        self.base_vocab_size = self.tokenizer.n_vocab
+        
         # Special tokens for conversation structure
         self.special_tokens = {
-            "<pad>": 0,
-            "<unk>": 1,
-            "<s>": 2,
-            "</s>": 3,
-            "<|user|>": 4,
-            "<|assistant|>": 5,
-            "<|system|>": 6,
-            "<|end|>": 7,
-            "<|conversation_start|>": 8,
-            "<|conversation_end|>": 9,
-            "<|turn|>": 10,
+            "<|im_start|>": self.base_vocab_size,
+            "<|im_end|>": self.base_vocab_size + 1,
+            "<|user|>": self.base_vocab_size + 2,
+            "<|assistant|>": self.base_vocab_size + 3,
+            "<|system|>": self.base_vocab_size + 4,
         }
         
-        self.vocab = self.special_tokens.copy()
-        self.merges = []
-        self._id_to_token = {v: k for k, v in self.vocab.items()}
-        self._merge_cache = {}
+        self.vocab_size = self.base_vocab_size + len(self.special_tokens)
+        self._reverse_special_tokens = {v: k for k, v in self.special_tokens.items()}
         
-        # Regex pattern for tokenization
-        import re
-        self.pattern = re.compile(
-            r"'(?:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{2,}|[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+"
-        )
+        # Pad vocab size to be efficient (multiple of 64)
+        if self.vocab_size % 64 != 0:
+            self.vocab_size = ((self.vocab_size + 63) // 64) * 64
+            
+        logging.info(f"Tokenizer initialized with vocab size: {self.vocab_size}")
     
-    def train_from_conversations(self, conversations: List[Dict], vocab_size: int = 32000, min_freq: int = 2):
-        """Train tokenizer specifically on conversational data."""
-        logging.info(f"Training conversation tokenizer to vocab size {vocab_size}")
-        
-        # Extract all text from conversations
-        texts = []
-        for conv in conversations:
-            for message in conv.get('messages', []):
-                content = message.get('content', '').strip()
-                if content:
-                    texts.append(content)
-        
-        logging.info(f"Training on {len(texts)} message contents")
-        
-        # Standard BPE training
-        word_freqs = Counter()
-        for text in texts:
-            words = self.pattern.findall(text)
-            for word in words:
-                if word.strip():
-                    word_freqs[word + "</w>"] += 1
-        
-        # Filter by frequency
-        word_freqs = {w: f for w, f in word_freqs.items() if f >= min_freq}
-        logging.info(f"Found {len(word_freqs)} unique words after filtering")
-        
-        # Add characters to vocab
-        chars = set()
-        for word in word_freqs:
-            chars.update(word)
-        
-        for char in sorted(chars):
-            if char not in self.vocab and len(self.vocab) < vocab_size:
-                self.vocab[char] = len(self.vocab)
-                self._id_to_token[self.vocab[char]] = char
-        
-        # BPE training
-        word_splits = {word: list(word) for word in word_freqs}
-        target_merges = vocab_size - len(self.vocab)
-        
-        for merge_step in range(target_merges):
-            pair_counts = defaultdict(int)
-            
-            for word, freq in word_freqs.items():
-                splits = word_splits[word]
-                for i in range(len(splits) - 1):
-                    pair = (splits[i], splits[i + 1])
-                    pair_counts[pair] += freq
-            
-            if not pair_counts:
-                break
-            
-            best_pair = max(pair_counts.items(), key=lambda x: x[1])[0]
-            merged_token = best_pair[0] + best_pair[1]
-            
-            if merged_token not in self.vocab:
-                self.vocab[merged_token] = len(self.vocab)
-                self._id_to_token[self.vocab[merged_token]] = merged_token
-            
-            self.merges.append(best_pair)
-            
-            # Apply merge
-            for word in word_freqs:
-                splits = word_splits[word]
-                new_splits = []
-                i = 0
-                while i < len(splits):
-                    if (i < len(splits) - 1 and 
-                        (splits[i], splits[i + 1]) == best_pair):
-                        new_splits.append(merged_token)
-                        i += 2
-                    else:
-                        new_splits.append(splits[i])
-                        i += 1
-                word_splits[word] = new_splits
-            
-            if merge_step % 1000 == 0:
-                logging.info(f"BPE step {merge_step}, vocab size: {len(self.vocab)}")
-        
-        logging.info(f"Tokenizer training complete. Final vocab size: {len(self.vocab)}")
-    
-    def encode_conversation(self, conversation: Dict, max_length: int = 2048) -> List[int]:
-        """Encode a full conversation with special formatting."""
-        tokens = [self.special_tokens["<|conversation_start|>"]]
-        
+    def encode_conversation(self, conversation: Dict[str, any]) -> List[int]:
+        """Encode a conversation with proper formatting."""
+        tokens = []
         messages = conversation.get('messages', [])
         
-        for i, message in enumerate(messages):
+        for message in messages:
             role = message.get('role', '').lower()
             content = message.get('content', '').strip()
             
             if not content:
                 continue
+                
+            # Start message
+            tokens.append(self.special_tokens["<|im_start|>"])
             
-            # Add role token
-            if role == 'prompter':
+            # Add role
+            if role == 'user' or role == 'prompter':
                 tokens.append(self.special_tokens["<|user|>"])
             elif role == 'assistant':
                 tokens.append(self.special_tokens["<|assistant|>"])
             else:
                 tokens.append(self.special_tokens["<|system|>"])
             
-            # Encode content
-            content_tokens = self._encode_text(content)
+            # Add content
+            content_tokens = self.tokenizer.encode(content)
             tokens.extend(content_tokens)
             
-            # Add turn separator (except for last message)
-            if i < len(messages) - 1:
-                tokens.append(self.special_tokens["<|turn|>"])
-        
-        tokens.append(self.special_tokens["<|conversation_end|>"])
-        
-        # Truncate if too long
-        if len(tokens) > max_length:
-            tokens = tokens[:max_length - 1] + [self.special_tokens["</s>"]]
+            # End message
+            tokens.append(self.special_tokens["<|im_end|>"])
         
         return tokens
-    
-    def _encode_text(self, text: str) -> List[int]:
-        """Encode regular text content."""
-        if not text.strip():
-            return []
-        
-        words = self.pattern.findall(text)
-        tokens = []
-        
-        for word in words:
-            if not word.strip():
-                continue
-            word_with_end = word + "</w>"
-            subwords = self._apply_bpe(word_with_end)
-            for subword in subwords:
-                tokens.append(self.vocab.get(subword, self.special_tokens["<unk>"]))
-        
-        return tokens
-    
-    def _apply_bpe(self, word: str) -> List[str]:
-        """Apply BPE merges to a word."""
-        if word in self._merge_cache:
-            return self._merge_cache[word]
-        
-        chars = list(word)
-        if len(chars) <= 1:
-            return chars
-        
-        for merge_pair in self.merges:
-            if len(chars) <= 1:
-                break
-            
-            i = 0
-            new_chars = []
-            while i < len(chars):
-                if (i < len(chars) - 1 and 
-                    (chars[i], chars[i + 1]) == merge_pair):
-                    new_chars.append(chars[i] + chars[i + 1])
-                    i += 2
-                else:
-                    new_chars.append(chars[i])
-                    i += 1
-            chars = new_chars
-        
-        if len(self._merge_cache) < 10000:
-            self._merge_cache[word] = chars
-        
-        return chars
     
     def decode(self, token_ids: List[int], skip_special_tokens: bool = True) -> str:
-        """Decode token IDs back to text."""
-        tokens = []
-        for token_id in token_ids:
-            if skip_special_tokens and token_id in self.special_tokens.values():
-                continue
-            tokens.append(self._id_to_token.get(token_id, "<unk>"))
+        """Decode tokens back to text."""
+        # Filter out special tokens if requested
+        if skip_special_tokens:
+            filtered_tokens = []
+            for token_id in token_ids:
+                if token_id not in self._reverse_special_tokens and token_id < self.base_vocab_size:
+                    filtered_tokens.append(token_id)
+            token_ids = filtered_tokens
         
-        text = "".join(tokens)
-        text = text.replace("</w>", " ")
-        return text.strip()
+        try:
+            return self.tokenizer.decode(token_ids)
+        except Exception:
+            # Fallback for out-of-vocab tokens
+            return "<decode_error>"
+    
+    def is_special_token(self, token_id: int) -> bool:
+        """Check if token is a special token."""
+        return token_id in self._reverse_special_tokens
+    
+    def get_role_token(self, role: str) -> int:
+        """Get token ID for a role."""
+        role_map = {
+            'user': self.special_tokens["<|user|>"],
+            'prompter': self.special_tokens["<|user|>"], 
+            'assistant': self.special_tokens["<|assistant|>"],
+            'system': self.special_tokens["<|system|>"]
+        }
+        return role_map.get(role.lower(), self.special_tokens["<|user|>"])
 
 # =============================================================================
-# MODEL ARCHITECTURE (Same as before but included for completeness)
+# EFFICIENT MODEL ARCHITECTURE
 # =============================================================================
 
 class RMSNorm(nn.Module):
@@ -320,16 +198,15 @@ class RotaryEmbedding(nn.Module):
     def __init__(self, dim: int, max_seq_len: int = 8192, theta: float = 10000.0):
         super().__init__()
         inv_freq = 1.0 / (theta ** (torch.arange(0, dim, 2).float() / dim))
-        self.register_buffer("inv_freq", inv_freq)
-        self.max_seq_len = max_seq_len
+        self.register_buffer("inv_freq", inv_freq, persistent=False)
+        self._seq_len_cached = 0
         self._cos_cached = None
         self._sin_cached = None
-        self._seq_len_cached = 0
     
     def forward(self, seq_len: int, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
-        if seq_len > self._seq_len_cached or self._cos_cached is None:
-            self._seq_len_cached = max(seq_len, self._seq_len_cached)
-            t = torch.arange(self._seq_len_cached, device=device, dtype=torch.float32)
+        if seq_len > self._seq_len_cached or self._cos_cached is None or self._cos_cached.device != device:
+            self._seq_len_cached = seq_len
+            t = torch.arange(seq_len, device=device, dtype=torch.float32)
             freqs = torch.outer(t, self.inv_freq.to(device))
             emb = torch.cat((freqs, freqs), dim=-1)
             self._cos_cached = emb.cos()
@@ -339,7 +216,7 @@ class RotaryEmbedding(nn.Module):
 def apply_rotary_pos_emb(q: torch.Tensor, k: torch.Tensor, 
                         cos: torch.Tensor, sin: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
     def rotate_half(x):
-        x1, x2 = x[..., : x.shape[-1] // 2], x[..., x.shape[-1] // 2 :]
+        x1, x2 = x.chunk(2, dim=-1)
         return torch.cat((-x2, x1), dim=-1)
     
     q_embed = (q * cos) + (rotate_half(q) * sin)
@@ -347,55 +224,66 @@ def apply_rotary_pos_emb(q: torch.Tensor, k: torch.Tensor,
     return q_embed, k_embed
 
 class GroupedQueryAttention(nn.Module):
-    def __init__(self, config: ModelConfig):
+    def __init__(self, config: Config):
         super().__init__()
+        self.config = config
         self.hidden_size = config.hidden_size
         self.num_heads = config.num_heads
         self.num_kv_heads = config.num_kv_heads
         self.head_dim = self.hidden_size // self.num_heads
         self.num_queries_per_kv = self.num_heads // self.num_kv_heads
+        self.scale = self.head_dim ** -0.5
         
         self.q_proj = nn.Linear(config.hidden_size, self.num_heads * self.head_dim, bias=False)
         self.k_proj = nn.Linear(config.hidden_size, self.num_kv_heads * self.head_dim, bias=False)
         self.v_proj = nn.Linear(config.hidden_size, self.num_kv_heads * self.head_dim, bias=False)
-        self.o_proj = nn.Linear(self.num_heads * self.head_dim, config.hidden_size, bias=False)
+        self.o_proj = nn.Linear(config.hidden_size, config.hidden_size, bias=False)
         
         self.rope = RotaryEmbedding(self.head_dim, config.seq_length, config.rope_theta)
         
-        for proj in [self.q_proj, self.k_proj, self.v_proj]:
-            nn.init.xavier_uniform_(proj.weight)
-        nn.init.xavier_uniform_(self.o_proj.weight, gain=1 / math.sqrt(2))
+        # Initialize weights
+        self._init_weights()
     
-    def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def _init_weights(self):
+        for proj in [self.q_proj, self.k_proj, self.v_proj]:
+            nn.init.xavier_uniform_(proj.weight, gain=1 / math.sqrt(2))
+        nn.init.xavier_uniform_(self.o_proj.weight, gain=1 / math.sqrt(2 * self.config.num_layers))
+    
+    def forward(self, x: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         B, L, D = x.shape
         
         q = self.q_proj(x).view(B, L, self.num_heads, self.head_dim).transpose(1, 2)
         k = self.k_proj(x).view(B, L, self.num_kv_heads, self.head_dim).transpose(1, 2)
         v = self.v_proj(x).view(B, L, self.num_kv_heads, self.head_dim).transpose(1, 2)
         
+        # Apply RoPE
         cos, sin = self.rope(L, x.device)
         q, k = apply_rotary_pos_emb(q, k, cos, sin)
         
+        # Expand K, V for GQA
         if self.num_queries_per_kv > 1:
             k = k[:, :, None, :, :].expand(B, self.num_kv_heads, self.num_queries_per_kv, L, self.head_dim)
             v = v[:, :, None, :, :].expand(B, self.num_kv_heads, self.num_queries_per_kv, L, self.head_dim)
             k = k.reshape(B, self.num_heads, L, self.head_dim)
             v = v.reshape(B, self.num_heads, L, self.head_dim)
         
-        if HAS_FLASH_ATTN and x.is_cuda and mask is None:
-            q = q.transpose(1, 2)
+        # Use FlashAttention if available
+        if HAS_FLASH_ATTN and x.is_cuda and attention_mask is None:
+            q = q.transpose(1, 2)  # (B, L, H, D)
             k = k.transpose(1, 2)
             v = v.transpose(1, 2)
             out = flash_attn_func(q, k, v, causal=True)
             out = out.reshape(B, L, self.hidden_size)
         else:
-            scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)
+            # Standard attention
+            scores = torch.matmul(q, k.transpose(-2, -1)) * self.scale
             
-            if mask is None:
-                mask = torch.triu(torch.ones(L, L, device=x.device, dtype=torch.bool), diagonal=1)
-                scores.masked_fill_(mask, float('-inf'))
+            # Apply causal mask
+            if attention_mask is None:
+                causal_mask = torch.triu(torch.ones(L, L, device=x.device, dtype=torch.bool), diagonal=1)
+                scores.masked_fill_(causal_mask, float('-inf'))
             else:
-                scores = scores + mask
+                scores = scores + attention_mask
             
             attn = F.softmax(scores, dim=-1, dtype=torch.float32).to(q.dtype)
             out = torch.matmul(attn, v)
@@ -404,15 +292,18 @@ class GroupedQueryAttention(nn.Module):
         return self.o_proj(out)
 
 class SwiGLU(nn.Module):
-    def __init__(self, config: ModelConfig):
+    def __init__(self, config: Config):
         super().__init__()
+        self.config = config
         self.gate_proj = nn.Linear(config.hidden_size, config.intermediate_size, bias=False)
         self.up_proj = nn.Linear(config.hidden_size, config.intermediate_size, bias=False)
         self.down_proj = nn.Linear(config.intermediate_size, config.hidden_size, bias=False)
-        
+        self._init_weights()
+    
+    def _init_weights(self):
         nn.init.xavier_uniform_(self.gate_proj.weight)
         nn.init.xavier_uniform_(self.up_proj.weight)
-        nn.init.xavier_uniform_(self.down_proj.weight, gain=1 / math.sqrt(2))
+        nn.init.xavier_uniform_(self.down_proj.weight, gain=1 / math.sqrt(2 * self.config.num_layers))
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         gate = F.silu(self.gate_proj(x))
@@ -420,20 +311,21 @@ class SwiGLU(nn.Module):
         return self.down_proj(gate * up)
 
 class TransformerBlock(nn.Module):
-    def __init__(self, config: ModelConfig):
+    def __init__(self, config: Config):
         super().__init__()
         self.input_norm = RMSNorm(config.hidden_size, config.rms_norm_eps)
         self.self_attn = GroupedQueryAttention(config)
         self.post_attn_norm = RMSNorm(config.hidden_size, config.rms_norm_eps)
         self.mlp = SwiGLU(config)
     
-    def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
-        x = x + self.self_attn(self.input_norm(x), mask)
+    def forward(self, x: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        # Pre-norm architecture
+        x = x + self.self_attn(self.input_norm(x), attention_mask)
         x = x + self.mlp(self.post_attn_norm(x))
         return x
 
 class TransformerModel(nn.Module):
-    def __init__(self, config: ModelConfig):
+    def __init__(self, config: Config):
         super().__init__()
         self.config = config
         
@@ -442,11 +334,22 @@ class TransformerModel(nn.Module):
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps)
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         
-        nn.init.normal_(self.embed_tokens.weight, std=0.02)
-        nn.init.normal_(self.lm_head.weight, std=0.02)
+        # Weight tying
+        self.lm_head.weight = self.embed_tokens.weight
         
+        self._init_weights()
+        
+        # Count parameters
         n_params = sum(p.numel() for p in self.parameters())
         logging.info(f"Model initialized with {n_params:,} parameters")
+    
+    def _init_weights(self):
+        nn.init.normal_(self.embed_tokens.weight, std=0.02)
+        
+        # Apply scaling to deeper layers
+        for layer in self.layers:
+            layer.self_attn.o_proj.weight.data *= (2 * self.config.num_layers) ** -0.5
+            layer.mlp.down_proj.weight.data *= (2 * self.config.num_layers) ** -0.5
     
     def forward(self, input_ids: torch.Tensor, 
                 attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -459,682 +362,919 @@ class TransformerModel(nn.Module):
         return self.lm_head(x)
 
 # =============================================================================
-# CONVERSATIONAL DATASET
+# MEMORY-EFFICIENT DATASET
 # =============================================================================
 
-class ConversationDataset(Dataset):
-    """Dataset specifically designed for conversational training."""
+class ConversationDataset(IterableDataset):
+    """Memory-efficient streaming dataset for conversational data."""
     
-    def __init__(self, conversations: List[Dict], tokenizer: ConversationTokenizer, 
-                 seq_length: int = 2048):
+    def __init__(self, data_path: str, tokenizer: ConversationTokenizer, 
+                 config: Config, split: str = "train"):
+        self.data_path = Path(data_path)
         self.tokenizer = tokenizer
-        self.seq_length = seq_length
-        self.examples = []
+        self.config = config
+        self.split = split
         
-        logging.info("Processing conversations for training...")
+        # Count total conversations for progress tracking
+        self.total_conversations = self._count_conversations()
+        logging.info(f"Dataset {split}: {self.total_conversations:,} conversations from {data_path}")
+    
+    def _count_conversations(self) -> int:
+        """Count total conversations in the file."""
+        if not self.data_path.exists():
+            return 0
         
-        for conv in conversations:
-            # Skip empty conversations
-            if not conv.get('messages') or len(conv['messages']) < 2:
-                continue
+        count = 0
+        with open(self.data_path, 'r', encoding='utf-8') as f:
+            for _ in f:
+                count += 1
+        return count
+    
+    def _process_conversation(self, conversation: Dict) -> Optional[Dict[str, torch.Tensor]]:
+        """Process a single conversation into model inputs."""
+        try:
+            tokens = self.tokenizer.encode_conversation(conversation)
             
-            # Encode the conversation
-            tokens = tokenizer.encode_conversation(conv, max_length=seq_length)
+            # Skip if too short or too long
+            if len(tokens) < 10 or len(tokens) > self.config.seq_length:
+                return None
             
-            if len(tokens) >= 10:  # Minimum meaningful length
-                self.examples.append(tokens)
-        
-        logging.info(f"Created dataset with {len(self.examples)} conversation examples")
-        
-        # Dataset statistics
-        if self.examples:
-            lengths = [len(ex) for ex in self.examples]
-            logging.info(f"Token lengths - Mean: {np.mean(lengths):.1f}, "
-                        f"Std: {np.std(lengths):.1f}, "
-                        f"Min: {min(lengths)}, Max: {max(lengths)}")
-    
-    def __len__(self):
-        return len(self.examples)
-    
-    def __getitem__(self, idx):
-        tokens = self.examples[idx]
-        
-        # Pad to sequence length
-        if len(tokens) < self.seq_length:
-            tokens = tokens + [0] * (self.seq_length - len(tokens))
-        
-        tokens = torch.tensor(tokens[:self.seq_length], dtype=torch.long)
-        
-        return {
-            'input_ids': tokens[:-1],
-            'labels': tokens[1:],
-            'attention_mask': (tokens[:-1] != 0).float()
-        }
-
-def load_conversations(file_path: str, max_conversations: Optional[int] = None) -> List[Dict]:
-    """Load conversations from JSONL file."""
-    logging.info(f"Loading conversations from {file_path}")
-    
-    conversations = []
-    if not os.path.exists(file_path):
-        logging.error(f"File not found: {file_path}")
-        return conversations
-    
-    with open(file_path, 'r', encoding='utf-8') as f:
-        for line_no, line in enumerate(f, 1):
-            try:
-                conv = json.loads(line.strip())
+            # Pad to sequence length
+            if len(tokens) < self.config.seq_length:
+                tokens.extend([0] * (self.config.seq_length - len(tokens)))
+            else:
+                tokens = tokens[:self.config.seq_length]
+            
+            tokens = torch.tensor(tokens, dtype=torch.long)
+            
+            # Create attention mask
+            attention_mask = (tokens != 0).float()
+            
+            # Create labels with assistant token weighting
+            labels = tokens.clone()
+            
+            # Create loss weights
+            loss_weights = torch.ones_like(tokens, dtype=torch.float)
+            assistant_token = self.tokenizer.get_role_token('assistant')
+            
+            # Weight assistant responses higher
+            assistant_positions = (tokens == assistant_token).float()
+            if assistant_positions.sum() > 0:
+                # Create forward mask from assistant tokens
+                assistant_mask = torch.zeros_like(tokens, dtype=torch.float)
+                in_assistant_response = False
                 
-                # Validate conversation structure
-                if 'messages' not in conv or not conv['messages']:
+                for i, token_id in enumerate(tokens):
+                    if token_id == assistant_token:
+                        in_assistant_response = True
+                    elif token_id == self.tokenizer.special_tokens["<|im_end|>"]:
+                        in_assistant_response = False
+                    
+                    if in_assistant_response:
+                        assistant_mask[i] = 1.0
+                
+                loss_weights = loss_weights + (assistant_mask * (self.config.assistant_loss_weight - 1.0))
+            
+            return {
+                'input_ids': tokens[:-1],
+                'labels': labels[1:],
+                'attention_mask': attention_mask[:-1],
+                'loss_weights': loss_weights[1:]
+            }
+            
+        except Exception as e:
+            logging.warning(f"Error processing conversation: {e}")
+            return None
+    
+    def __iter__(self) -> Iterator[Dict[str, torch.Tensor]]:
+        """Iterate over conversations."""
+        if not self.data_path.exists():
+            logging.error(f"Data file not found: {self.data_path}")
+            return
+        
+        with open(self.data_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                try:
+                    conversation = json.loads(line.strip())
+                    processed = self._process_conversation(conversation)
+                    if processed is not None:
+                        yield processed
+                except json.JSONDecodeError:
                     continue
-                
-                # Check message format
-                valid = True
-                for msg in conv['messages']:
-                    if 'role' not in msg or 'content' not in msg:
-                        valid = False
-                        break
-                
-                if valid:
-                    conversations.append(conv)
-                    
-                if max_conversations and len(conversations) >= max_conversations:
-                    break
-                    
-            except json.JSONDecodeError:
-                logging.warning(f"Skipping invalid JSON at line {line_no}")
-                continue
-    
-    logging.info(f"Loaded {len(conversations)} valid conversations")
-    return conversations
+
+def create_dataloader(dataset: ConversationDataset, config: Config, shuffle: bool = True) -> DataLoader:
+    """Create optimized dataloader."""
+    return DataLoader(
+        dataset,
+        batch_size=config.batch_size,
+        num_workers=config.num_workers,
+        pin_memory=True,
+        prefetch_factor=2 if config.num_workers > 0 else None
+    )
 
 # =============================================================================
-# CONVERSATIONAL TRAINER
+# PRODUCTION TRAINER
 # =============================================================================
 
 class ConversationTrainer:
-    """Trainer specifically optimized for conversational data."""
+    """Production-ready trainer with all optimizations."""
     
-    def __init__(self, model: TransformerModel, tokenizer: ConversationTokenizer,
-                 config: TrainingConfig, device: torch.device):
+    def __init__(self, model: TransformerModel, tokenizer: ConversationTokenizer, config: Config):
         self.model = model
         self.tokenizer = tokenizer
         self.config = config
-        self.device = device
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
-        self.model = self.model.to(device)
+        # Move model to device
+        self.model = self.model.to(self.device)
         
-        # Optimizer with different learning rates for different components
-        param_groups = [
-            {'params': [p for n, p in model.named_parameters() if 'embed' in n], 'lr': config.learning_rate * 0.1},
-            {'params': [p for n, p in model.named_parameters() if 'embed' not in n], 'lr': config.learning_rate}
-        ]
+        # Setup optimizer with layer-wise learning rate decay
+        self.optimizer = self._create_optimizer()
         
-        self.optimizer = AdamW(
-            param_groups,
-            weight_decay=config.weight_decay,
-            betas=(0.9, 0.95),
-            fused=torch.cuda.is_available()
-        )
-        
-        self.use_amp = HAS_AMP and config.precision != "fp32"
-        self.scaler = GradScaler() if self.use_amp else None
+        # Setup mixed precision
+        self.use_amp = config.precision in ["fp16", "bf16"]
+        self.dtype = torch.bfloat16 if config.precision == "bf16" else torch.float16
+        self.scaler = GradScaler() if config.precision == "fp16" else None
         
         # Compile model
         if config.compile and hasattr(torch, 'compile'):
             try:
-                self.model = torch.compile(self.model)
+                self.model = torch.compile(self.model, mode='reduce-overhead')
                 logging.info("Model compiled successfully")
             except Exception as e:
                 logging.warning(f"Model compilation failed: {e}")
         
-        self.step = 0
+        self.global_step = 0
         self.scheduler = None
+        
+        # Metrics tracking
+        self.metrics = {
+            'train_loss': [],
+            'eval_loss': [],
+            'learning_rates': [],
+            'step_times': []
+        }
     
-    def train(self, train_dataset: ConversationDataset, eval_dataset: Optional[ConversationDataset] = None):
-        """Main conversational training loop."""
+    def _create_optimizer(self) -> torch.optim.Optimizer:
+        """Create optimizer with proper weight decay."""
+        # Separate parameters for weight decay
+        decay_params = []
+        no_decay_params = []
         
-        train_loader = DataLoader(
-            train_dataset,
-            batch_size=self.config.batch_size,
-            shuffle=True,
-            num_workers=self.config.num_workers,
-            pin_memory=True,
-            drop_last=True
-        )
-        
-        self.scheduler = OneCycleLR(
-            self.optimizer,
-            max_lr=[pg['lr'] for pg in self.optimizer.param_groups],
-            total_steps=self.config.max_steps,
-            pct_start=self.config.warmup_steps / self.config.max_steps
-        )
-        
-        logging.info("Starting conversational training...")
-        logging.info(f"Training steps: {self.config.max_steps}")
-        logging.info(f"Batch size: {self.config.batch_size}")
-        logging.info(f"Gradient accumulation: {self.config.gradient_accumulation_steps}")
-        logging.info(f"Effective batch size: {self.config.batch_size * self.config.gradient_accumulation_steps}")
-        
-        self.model.train()
-        accumulation_loss = 0.0
-        conversation_count = 0
-        
-        while self.step < self.config.max_steps:
-            for batch in train_loader:
-                if self.step >= self.config.max_steps:
-                    break
-                
-                batch = {k: v.to(self.device, non_blocking=True) for k, v in batch.items()}
-                
-                with autocast(enabled=self.use_amp, 
-                             dtype=torch.bfloat16 if self.config.precision == "bf16" else torch.float16):
-                    logits = self.model(batch['input_ids'], batch['attention_mask'])
-                    
-                    # Compute loss with special token weighting
-                    loss = self.compute_conversation_loss(logits, batch['labels'])
-                    loss = loss / self.config.gradient_accumulation_steps
-                
-                if self.use_amp:
-                    self.scaler.scale(loss).backward()
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                if 'bias' in name or 'norm' in name or 'embed' in name:
+                    no_decay_params.append(param)
                 else:
-                    loss.backward()
-                
-                accumulation_loss += loss.item()
-                conversation_count += batch['input_ids'].size(0)
-                
-                # Update weights
-                if (self.step + 1) % self.config.gradient_accumulation_steps == 0:
-                    if self.use_amp:
-                        self.scaler.unscale_(self.optimizer)
-                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.max_grad_norm)
-                        self.scaler.step(self.optimizer)
-                        self.scaler.update()
-                    else:
-                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.max_grad_norm)
-                        self.optimizer.step()
-                    
-                    self.optimizer.zero_grad()
-                    self.scheduler.step()
-                    
-                    # Logging
-                    if (self.step + 1) % 100 == 0:
-                        lr = self.scheduler.get_last_lr()[0]
-                        conversations_per_sec = conversation_count / 100 if (self.step + 1) % 100 == 0 else 0
-                        logging.info(f"Step {self.step + 1}: loss={accumulation_loss:.6f}, "
-                                   f"lr={lr:.2e}, conv/s={conversations_per_sec:.1f}")
-                        conversation_count = 0
-                    
-                    # Evaluation
-                    if eval_dataset and (self.step + 1) % self.config.eval_interval == 0:
-                        eval_loss = self.evaluate(eval_dataset)
-                        logging.info(f"Eval loss: {eval_loss:.6f}")
-                        self.model.train()
-                    
-                    # Save checkpoint
-                    if (self.step + 1) % self.config.save_interval == 0:
-                        self.save_checkpoint()
-                    
-                    accumulation_loss = 0.0
-                
-                self.step += 1
+                    decay_params.append(param)
         
-        logging.info("Conversational training completed!")
-        self.save_checkpoint(final=True)
+        param_groups = [
+            {'params': decay_params, 'weight_decay': self.config.weight_decay},
+            {'params': no_decay_params, 'weight_decay': 0.0}
+        ]
+        
+        return AdamW(
+            param_groups,
+            lr=self.config.learning_rate,
+            betas=(0.9, 0.95),
+            eps=1e-8,
+            fused=torch.cuda.is_available()
+        )
     
-    def compute_conversation_loss(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
-        """Compute loss with special weighting for conversational tokens."""
-        # Standard cross-entropy loss
+    def compute_loss(self, logits: torch.Tensor, labels: torch.Tensor, 
+                    loss_weights: torch.Tensor) -> torch.Tensor:
+        """Compute weighted cross-entropy loss."""
+        # Shift for causal modeling
+        shift_logits = logits[..., :-1, :].contiguous()
+        shift_labels = labels[..., 1:].contiguous()
+        shift_weights = loss_weights[..., 1:].contiguous()
+        
+        # Compute loss
         loss = F.cross_entropy(
-            logits.view(-1, logits.size(-1)),
-            labels.view(-1),
-            ignore_index=0,  # Ignore padding
+            shift_logits.view(-1, shift_logits.size(-1)),
+            shift_labels.view(-1),
             reduction='none'
-        ).view_as(labels)
+        )
+        loss = loss.view_as(shift_labels)
         
-        # Apply weights to focus on important tokens
-        weights = torch.ones_like(labels, dtype=torch.float)
-        
-        # Higher weight for assistant responses (tokens after <|assistant|>)
-        assistant_token = self.tokenizer.special_tokens.get("<|assistant|>", -1)
-        if assistant_token != -1:
-            assistant_mask = (labels == assistant_token).float()
-            # Create a forward-fill mask for assistant responses
-            for i in range(1, labels.size(1)):
-                assistant_mask[:, i] = torch.max(assistant_mask[:, i], assistant_mask[:, i-1] * 0.9)
-            weights = weights + assistant_mask * 0.5  # 1.5x weight for assistant tokens
-        
-        # Apply weights and compute final loss
-        weighted_loss = loss * weights
-        mask = (labels != 0).float()  # Don't count padding tokens
+        # Apply weights and mask padding
+        mask = (shift_labels != 0).float()
+        weighted_loss = loss * shift_weights * mask
         
         return weighted_loss.sum() / mask.sum().clamp(min=1)
     
+    def train_step(self, batch: Dict[str, torch.Tensor]) -> float:
+        """Single training step."""
+        self.model.train()
+        
+        # Move batch to device
+        batch = {k: v.to(self.device, non_blocking=True) for k, v in batch.items()}
+        
+        with autocast(enabled=self.use_amp, dtype=self.dtype):
+            logits = self.model(batch['input_ids'], batch['attention_mask'])
+            loss = self.compute_loss(logits, batch['labels'], batch['loss_weights'])
+            loss = loss / self.config.gradient_accumulation_steps
+        
+        # Backward pass
+        if self.use_amp and self.scaler is not None:
+            self.scaler.scale(loss).backward()
+        else:
+            loss.backward()
+        
+        return loss.item() * self.config.gradient_accumulation_steps
+    
+    def optimizer_step(self):
+        """Perform optimizer step with gradient clipping."""
+        if self.use_amp and self.scaler is not None:
+            self.scaler.unscale_(self.optimizer)
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.max_grad_norm)
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+        else:
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.max_grad_norm)
+            self.optimizer.step()
+        
+        self.optimizer.zero_grad(set_to_none=True)
+        if self.scheduler:
+            self.scheduler.step()
+    
     @torch.no_grad()
-    def evaluate(self, eval_dataset: ConversationDataset) -> float:
-        """Evaluate model on conversational eval dataset."""
+    def evaluate(self, eval_dataloader: DataLoader, max_batches: int = 100) -> float:
+        """Evaluate model on validation data."""
         self.model.eval()
-        
-        eval_loader = DataLoader(
-            eval_dataset,
-            batch_size=self.config.batch_size,
-            num_workers=self.config.num_workers,
-            pin_memory=True
-        )
-        
         total_loss = 0.0
         num_batches = 0
         
-        for batch in eval_loader:
-            if num_batches >= 50:  # Limit eval time
+        for batch in eval_dataloader:
+            if num_batches >= max_batches:
                 break
-                
+            
             batch = {k: v.to(self.device, non_blocking=True) for k, v in batch.items()}
             
-            with autocast(enabled=self.use_amp, 
-                         dtype=torch.bfloat16 if self.config.precision == "bf16" else torch.float16):
+            with autocast(enabled=self.use_amp, dtype=self.dtype):
                 logits = self.model(batch['input_ids'], batch['attention_mask'])
-                loss = self.compute_conversation_loss(logits, batch['labels'])
+                loss = self.compute_loss(logits, batch['labels'], batch['loss_weights'])
             
             total_loss += loss.item()
             num_batches += 1
         
         return total_loss / max(num_batches, 1)
     
-    def save_checkpoint(self, final: bool = False):
+    def train(self, train_dataloader: DataLoader, eval_dataloader: Optional[DataLoader] = None):
+        """Main training loop."""
+        logging.info("Starting training...")
+        logging.info(f"Max steps: {self.config.max_steps}")
+        logging.info(f"Effective batch size: {self.config.effective_batch_size}")
+        logging.info(f"Device: {self.device}")
+        
+        # Setup scheduler
+        self.scheduler = OneCycleLR(
+            self.optimizer,
+            max_lr=self.config.learning_rate,
+            total_steps=self.config.max_steps,
+            pct_start=self.config.warmup_ratio,
+            anneal_strategy='cos'
+        )
+        
+        train_iterator = iter(train_dataloader)
+        accumulation_loss = 0.0
+        start_time = time.time()
+        
+        for step in range(self.config.max_steps):
+            step_start = time.time()
+            
+            # Training steps
+            for micro_step in range(self.config.gradient_accumulation_steps):
+                try:
+                    batch = next(train_iterator)
+                except StopIteration:
+                    train_iterator = iter(train_dataloader)
+                    batch = next(train_iterator)
+                
+                loss = self.train_step(batch)
+                accumulation_loss += loss
+            
+            # Optimizer step
+            self.optimizer_step()
+            self.global_step += 1
+            
+            # Logging
+            step_time = time.time() - step_start
+            self.metrics['step_times'].append(step_time)
+            self.metrics['train_loss'].append(accumulation_loss)
+            self.metrics['learning_rates'].append(self.scheduler.get_last_lr()[0])
+            
+            if (step + 1) % 100 == 0:
+                lr = self.scheduler.get_last_lr()[0]
+                tokens_per_sec = (self.config.effective_batch_size * self.config.seq_length) / step_time
+                
+                logging.info(
+                    f"Step {step + 1:6d} | Loss: {accumulation_loss:.6f} | "
+                    f"LR: {lr:.2e} | Tokens/s: {tokens_per_sec:.0f} | "
+                    f"Step time: {step_time:.2f}s"
+                )
+            
+            # Evaluation
+            if eval_dataloader and (step + 1) % self.config.eval_steps == 0:
+                eval_loss = self.evaluate(eval_dataloader)
+                self.metrics['eval_loss'].append(eval_loss)
+                logging.info(f"Eval loss: {eval_loss:.6f}")
+                self.model.train()
+            
+            # Checkpointing
+            if (step + 1) % self.config.save_steps == 0:
+                self.save_checkpoint(step + 1)
+            
+            accumulation_loss = 0.0
+        
+        # Final checkpoint
+        self.save_checkpoint(self.config.max_steps, final=True)
+        
+        total_time = time.time() - start_time
+        logging.info(f"Training completed in {total_time / 3600:.2f} hours")
+    
+    def save_checkpoint(self, step: int, final: bool = False):
         """Save model checkpoint."""
         os.makedirs("checkpoints", exist_ok=True)
-        suffix = "final" if final else f"step_{self.step}"
-        path = f"checkpoints/conversation_model_{suffix}.pt"
+        
+        suffix = "final" if final else f"step_{step:06d}"
+        checkpoint_path = f"checkpoints/model_{suffix}.pt"
+        
+        # Unwrap compiled model if needed
+        model_state = self.model.state_dict()
+        if hasattr(self.model, '_orig_mod'):
+            model_state = self.model._orig_mod.state_dict()
         
         checkpoint = {
-            'model': self.model.state_dict(),
-            'optimizer': self.optimizer.state_dict(),
-            'scheduler': self.scheduler.state_dict() if self.scheduler else None,
-            'step': self.step,
+            'model_state_dict': model_state,
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler else None,
             'config': self.config,
-            'tokenizer_vocab': self.tokenizer.vocab,
-            'tokenizer_merges': self.tokenizer.merges
+            'global_step': self.global_step,
+            'metrics': self.metrics,
+            'tokenizer_info': {
+                'vocab_size': self.tokenizer.vocab_size,
+                'special_tokens': self.tokenizer.special_tokens
+            }
         }
         
-        torch.save(checkpoint, path)
-        logging.info(f"Saved checkpoint: {path}")
+        torch.save(checkpoint, checkpoint_path)
+        logging.info(f"Checkpoint saved: {checkpoint_path}")
+        
+        # Save metrics separately
+        metrics_path = f"checkpoints/metrics_{suffix}.json"
+        with open(metrics_path, 'w') as f:
+            json.dump({k: v[-1000:] for k, v in self.metrics.items()}, f, indent=2)
+    
+    def load_checkpoint(self, checkpoint_path: str) -> int:
+        """Load checkpoint and return global step."""
+        logging.info(f"Loading checkpoint: {checkpoint_path}")
+        
+        checkpoint = torch.load(checkpoint_path, map_location='cpu')
+        
+        # Load model state
+        model_to_load = self.model
+        if hasattr(self.model, '_orig_mod'):
+            model_to_load = self.model._orig_mod
+        
+        model_to_load.load_state_dict(checkpoint['model_state_dict'])
+        
+        # Load optimizer and scheduler
+        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        if checkpoint.get('scheduler_state_dict') and self.scheduler:
+            self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        
+        # Load training state
+        self.global_step = checkpoint.get('global_step', 0)
+        self.metrics = checkpoint.get('metrics', self.metrics)
+        
+        logging.info(f"Resumed from step {self.global_step}")
+        return self.global_step
     
     @torch.no_grad()
-    def generate_response(self, prompt: str, max_new_tokens: int = 256, 
-                         temperature: float = 0.8, top_p: float = 0.9) -> str:
-        """Generate a conversational response to a prompt."""
+    def generate(self, prompt: str, max_new_tokens: Optional[int] = None) -> str:
+        """Generate response to a prompt."""
         self.model.eval()
         
-        # Format prompt as conversation
+        if max_new_tokens is None:
+            max_new_tokens = self.config.max_new_tokens
+        
+        # Create conversation format
         conversation = {
             'messages': [
-                {'role': 'prompter', 'content': prompt}
+                {'role': 'user', 'content': prompt}
             ]
         }
         
         # Encode input
         input_tokens = self.tokenizer.encode_conversation(conversation)
         
-        # Add assistant token to start response
-        input_tokens.append(self.tokenizer.special_tokens["<|assistant|>"])
+        # Add assistant start token
+        input_tokens.extend([
+            self.tokenizer.special_tokens["<|im_start|>"],
+            self.tokenizer.special_tokens["<|assistant|>"]
+        ])
         
-        input_ids = torch.tensor([input_tokens], dtype=torch.long, device=self.device)
+        # Convert to tensor
+        input_ids = torch.tensor([input_tokens], device=self.device, dtype=torch.long)
         
-        # Generate
-        generated = input_ids.clone()
+        # Generation loop with advanced sampling
+        generated_tokens = []
         
         for _ in range(max_new_tokens):
-            with autocast(enabled=self.use_amp, 
-                         dtype=torch.bfloat16 if self.config.precision == "bf16" else torch.float16):
-                logits = self.model(generated)
+            with autocast(enabled=self.use_amp, dtype=self.dtype):
+                logits = self.model(input_ids)
             
-            next_token_logits = logits[0, -1, :] / temperature
+            # Get next token logits
+            next_token_logits = logits[0, -1, :] / self.config.temperature
             
-            # Top-p sampling
-            if top_p < 1.0:
+            # Apply top-k filtering
+            if self.config.top_k > 0:
+                top_k_logits, top_k_indices = torch.topk(next_token_logits, self.config.top_k)
+                next_token_logits = torch.full_like(next_token_logits, float('-inf'))
+                next_token_logits.scatter_(0, top_k_indices, top_k_logits)
+            
+            # Apply top-p (nucleus) filtering
+            if self.config.top_p < 1.0:
                 sorted_logits, sorted_indices = torch.sort(next_token_logits, descending=True)
                 cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
-                sorted_indices_to_remove = cumulative_probs > top_p
+                
+                # Remove tokens with cumulative probability above threshold
+                sorted_indices_to_remove = cumulative_probs > self.config.top_p
                 sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
                 sorted_indices_to_remove[..., 0] = 0
+                
                 indices_to_remove = sorted_indices_to_remove.scatter(0, sorted_indices, sorted_indices_to_remove)
                 next_token_logits[indices_to_remove] = float('-inf')
             
+            # Sample next token
             probs = F.softmax(next_token_logits, dim=-1)
             next_token = torch.multinomial(probs, 1)
             
-            generated = torch.cat([generated, next_token.unsqueeze(0)], dim=1)
+            # Check for stop tokens
+            if next_token.item() == self.tokenizer.special_tokens["<|im_end|>"]:
+                break
             
-            # Stop at conversation end or turn token
-            if next_token.item() in [
-                self.tokenizer.special_tokens.get("<|conversation_end|>", -1),
-                self.tokenizer.special_tokens.get("<|turn|>", -1),
-                self.tokenizer.special_tokens.get("</s>", -1)
-            ]:
+            generated_tokens.append(next_token.item())
+            input_ids = torch.cat([input_ids, next_token.unsqueeze(0)], dim=1)
+            
+            # Prevent runaway generation
+            if len(generated_tokens) > max_new_tokens:
                 break
         
-        # Extract response
-        response_tokens = generated[0][len(input_tokens):].cpu().tolist()
-        response = self.tokenizer.decode(response_tokens, skip_special_tokens=True)
-        
+        # Decode response
+        response = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
         return response.strip()
+
+# =============================================================================
+# CONFIGURATION PRESETS
+# =============================================================================
+
+class ConfigPresets:
+    """Predefined configurations for different use cases."""
+    
+    @staticmethod
+    def debug() -> Config:
+        """Minimal config for debugging."""
+        return Config(
+            # Tiny model
+            vocab_size=1024,
+            hidden_size=256,
+            num_layers=4,
+            num_heads=8,
+            num_kv_heads=4,
+            seq_length=512,
+            intermediate_size=512,
+            
+            # Fast training
+            batch_size=2,
+            gradient_accumulation_steps=2,
+            max_steps=1000,
+            warmup_ratio=0.1,
+            eval_steps=200,
+            save_steps=500,
+            precision="fp32",
+            compile=False,
+            num_workers=0
+        )
+    
+    @staticmethod
+    def small() -> Config:
+        """Small production model."""
+        return Config(
+            # Small model (similar to GPT-2 small)
+            hidden_size=768,
+            num_layers=12,
+            num_heads=12,
+            num_kv_heads=4,
+            seq_length=2048,
+            intermediate_size=2048,
+            
+            # Training config
+            batch_size=8,
+            gradient_accumulation_steps=4,
+            learning_rate=5e-4,
+            max_steps=50000,
+            warmup_ratio=0.1,
+            eval_steps=1000,
+            save_steps=5000,
+        )
+    
+    @staticmethod
+    def medium() -> Config:
+        """Medium model for serious training."""
+        return Config(
+            # Medium model
+            hidden_size=1536,
+            num_layers=24,
+            num_heads=16,
+            num_kv_heads=8,
+            seq_length=2048,
+            intermediate_size=4096,
+            
+            # Training config
+            batch_size=4,
+            gradient_accumulation_steps=8,
+            learning_rate=3e-4,
+            max_steps=100000,
+            warmup_ratio=0.1,
+            eval_steps=2000,
+            save_steps=10000,
+        )
+    
+    @staticmethod
+    def large() -> Config:
+        """Large model for production use."""
+        return Config(
+            # Large model
+            hidden_size=2048,
+            num_layers=32,
+            num_heads=16,
+            num_kv_heads=8,
+            seq_length=4096,
+            intermediate_size=5504,
+            
+            # Training config
+            batch_size=2,
+            gradient_accumulation_steps=16,
+            learning_rate=2e-4,
+            max_steps=200000,
+            warmup_ratio=0.05,
+            eval_steps=2500,
+            save_steps=10000,
+        )
+
+# =============================================================================
+# DATA UTILITIES
+# =============================================================================
+
+def create_sample_data(output_path: str, num_conversations: int = 1000):
+    """Create sample conversational data for testing."""
+    import random
+    
+    sample_conversations = []
+    
+    topics = [
+        "programming", "science", "history", "cooking", "travel", "health",
+        "technology", "music", "art", "literature", "sports", "movies"
+    ]
+    
+    for i in range(num_conversations):
+        topic = random.choice(topics)
+        
+        # Generate realistic conversation
+        conversation = {
+            "conversation_id": f"sample_{i:06d}",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": f"Can you tell me about {topic}? I'm really interested in learning more."
+                },
+                {
+                    "role": "assistant", 
+                    "content": f"I'd be happy to tell you about {topic}! It's a fascinating subject with many interesting aspects. "
+                              f"There are several key concepts you should understand when exploring {topic}. "
+                              f"Would you like me to focus on any particular aspect of {topic}?"
+                },
+                {
+                    "role": "user",
+                    "content": f"Yes, could you give me some specific examples related to {topic}?"
+                },
+                {
+                    "role": "assistant",
+                    "content": f"Certainly! Here are some great examples of {topic} that might interest you: "
+                              f"First, let me explain the fundamentals. Then I'll show you how these principles "
+                              f"apply in real-world scenarios. This should give you a solid foundation in {topic}."
+                }
+            ]
+        }
+        
+        sample_conversations.append(conversation)
+    
+    # Write to JSONL
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    with open(output_path, 'w', encoding='utf-8') as f:
+        for conv in sample_conversations:
+            f.write(json.dumps(conv) + '\n')
+    
+    logging.info(f"Created {num_conversations} sample conversations at {output_path}")
+
+def validate_data(data_path: str, tokenizer: ConversationTokenizer, max_check: int = 1000) -> Dict:
+    """Validate conversation data quality."""
+    stats = {
+        'total_conversations': 0,
+        'valid_conversations': 0,
+        'token_lengths': [],
+        'message_counts': [],
+        'role_distribution': {},
+        'errors': []
+    }
+    
+    if not os.path.exists(data_path):
+        stats['errors'].append(f"File not found: {data_path}")
+        return stats
+    
+    with open(data_path, 'r', encoding='utf-8') as f:
+        for line_no, line in enumerate(f, 1):
+            if stats['total_conversations'] >= max_check:
+                break
+                
+            try:
+                conv = json.loads(line.strip())
+                stats['total_conversations'] += 1
+                
+                # Validate structure
+                if 'messages' not in conv:
+                    stats['errors'].append(f"Line {line_no}: Missing 'messages' key")
+                    continue
+                
+                messages = conv['messages']
+                if not messages:
+                    stats['errors'].append(f"Line {line_no}: Empty messages")
+                    continue
+                
+                # Count messages and roles
+                stats['message_counts'].append(len(messages))
+                for msg in messages:
+                    role = msg.get('role', 'unknown')
+                    stats['role_distribution'][role] = stats['role_distribution'].get(role, 0) + 1
+                
+                # Test tokenization
+                try:
+                    tokens = tokenizer.encode_conversation(conv)
+                    stats['token_lengths'].append(len(tokens))
+                    stats['valid_conversations'] += 1
+                except Exception as e:
+                    stats['errors'].append(f"Line {line_no}: Tokenization error: {e}")
+                    
+            except json.JSONDecodeError as e:
+                stats['errors'].append(f"Line {line_no}: JSON decode error: {e}")
+    
+    # Calculate statistics
+    if stats['token_lengths']:
+        stats['avg_token_length'] = np.mean(stats['token_lengths'])
+        stats['max_token_length'] = max(stats['token_lengths'])
+        stats['min_token_length'] = min(stats['token_lengths'])
+    
+    if stats['message_counts']:
+        stats['avg_message_count'] = np.mean(stats['message_counts'])
+    
+    return stats
 
 # =============================================================================
 # MAIN TRAINING SCRIPT
 # =============================================================================
 
-def main():
-    """Main conversational training function."""
-    # Setup logging
+def setup_logging(log_file: str = "training.log"):
+    """Setup comprehensive logging."""
     logging.basicConfig(
         level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
+        format='%(asctime)s | %(levelname)8s | %(message)s',
         handlers=[
-            logging.FileHandler('conversation_training.log'),
+            logging.FileHandler(log_file),
             logging.StreamHandler()
         ]
     )
     
-    # Configuration
-    model_config = ModelConfig(
-        vocab_size=32000,  # Will be updated after tokenizer training
-        hidden_size=1024,  # Smaller for faster training
-        num_layers=12,
-        num_heads=16,
-        num_kv_heads=4,
-        seq_length=2048,
-        intermediate_size=2816
-    )
-    
-    training_config = TrainingConfig(
-        batch_size=2,  # Small batch for conversation data
-        gradient_accumulation_steps=8,  # Larger effective batch
-        learning_rate=5e-4,
-        max_steps=20000,
-        warmup_steps=2000,
-        eval_interval=1000,
-        save_interval=2500,
-        precision="bf16" if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8 else "fp16"
-    )
-    
-    data_config = DataConfig(
-        max_conversations=100000  # Limit for faster experimentation
-    )
-    
-    # Device setup
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    logging.info(f"Using device: {device}")
+    # Log system info
+    logging.info("=" * 80)
+    logging.info("PRODUCTION CONVERSATIONAL TRANSFORMER TRAINING")
+    logging.info("=" * 80)
     
     if torch.cuda.is_available():
-        logging.info(f"GPU: {torch.cuda.get_device_name()}")
-        logging.info(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f}GB")
+        logging.info(f"CUDA Device: {torch.cuda.get_device_name()}")
+        logging.info(f"CUDA Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f}GB")
+        logging.info(f"CUDA Compute Capability: {torch.cuda.get_device_capability()}")
+    else:
+        logging.info("Running on CPU")
     
-    # Load conversational data
-    train_conversations = load_conversations(data_config.train_data_path, data_config.max_conversations)
-    eval_conversations = load_conversations(data_config.eval_data_path, data_config.max_conversations // 10)
+    logging.info(f"PyTorch version: {torch.__version__}")
+    logging.info(f"Flash Attention available: {HAS_FLASH_ATTN}")
+
+def main():
+    """Main training function."""
+    import argparse
     
-    if not train_conversations:
-        logging.error("No training conversations loaded! Check your data paths.")
-        logging.error(f"Expected: {data_config.train_data_path}")
-        logging.error("Make sure you've run the dataset download script first.")
-        return 1
+    parser = argparse.ArgumentParser(description="Train conversational transformer")
+    parser.add_argument("--config", type=str, choices=["debug", "small", "medium", "large"],
+                       default="small", help="Configuration preset")
+    parser.add_argument("--train_data", type=str, required=True, 
+                       help="Path to training data (JSONL format)")
+    parser.add_argument("--eval_data", type=str, 
+                       help="Path to evaluation data (JSONL format)")
+    parser.add_argument("--resume", type=str, 
+                       help="Path to checkpoint to resume from")
+    parser.add_argument("--create_sample_data", action="store_true",
+                       help="Create sample data for testing")
+    parser.add_argument("--validate_data", action="store_true", 
+                       help="Validate data format before training")
+    args = parser.parse_args()
     
-    logging.info(f"Loaded {len(train_conversations)} training conversations")
-    logging.info(f"Loaded {len(eval_conversations)} evaluation conversations")
+    # Setup logging
+    setup_logging()
     
-    # Analyze conversation statistics
-    analyze_conversation_data(train_conversations)
+    # Create sample data if requested
+    if args.create_sample_data:
+        logging.info("Creating sample training data...")
+        create_sample_data("data/sample_train.jsonl", 5000)
+        create_sample_data("data/sample_eval.jsonl", 500)
+        logging.info("Sample data created. Update --train_data and --eval_data paths.")
+        return 0
     
-    # Initialize and train tokenizer
-    tokenizer = ConversationTokenizer()
-    tokenizer.train_from_conversations(
-        train_conversations, 
-        vocab_size=data_config.vocab_size, 
-        min_freq=data_config.min_frequency
-    )
+    # Get configuration
+    config_map = {
+        "debug": ConfigPresets.debug,
+        "small": ConfigPresets.small,
+        "medium": ConfigPresets.medium,
+        "large": ConfigPresets.large
+    }
     
-    # Update model config with actual vocab size
-    model_config.vocab_size = len(tokenizer.vocab)
-    logging.info(f"Updated model vocab size to: {model_config.vocab_size}")
+    config = config_map[args.config]()
+    config.train_data_path = args.train_data
+    if args.eval_data:
+        config.eval_data_path = args.eval_data
+    
+    logging.info(f"Using {args.config} configuration")
+    logging.info(f"Model parameters: ~{estimate_parameters(config):,}")
+    
+    # Initialize tokenizer
+    tokenizer = ConversationTokenizer("gpt2")
+    config.vocab_size = tokenizer.vocab_size
+    
+    logging.info(f"Tokenizer initialized (vocab_size={tokenizer.vocab_size})")
+    
+    # Validate data if requested
+    if args.validate_data:
+        logging.info("Validating training data...")
+        stats = validate_data(config.train_data_path, tokenizer)
+        
+        logging.info(f"Validation results:")
+        logging.info(f"  Total conversations: {stats['total_conversations']:,}")
+        logging.info(f"  Valid conversations: {stats['valid_conversations']:,}")
+        
+        if stats.get('avg_token_length'):
+            logging.info(f"  Avg token length: {stats['avg_token_length']:.1f}")
+            logging.info(f"  Token length range: {stats['min_token_length']}-{stats['max_token_length']}")
+        
+        if stats['errors']:
+            logging.warning(f"Found {len(stats['errors'])} errors:")
+            for error in stats['errors'][:10]:  # Show first 10 errors
+                logging.warning(f"  {error}")
+        
+        if stats['valid_conversations'] == 0:
+            logging.error("No valid conversations found! Check your data format.")
+            return 1
     
     # Create datasets
-    train_dataset = ConversationDataset(train_conversations, tokenizer, data_config.seq_length)
-    eval_dataset = ConversationDataset(eval_conversations, tokenizer, data_config.seq_length) if eval_conversations else None
+    logging.info("Creating datasets...")
+    train_dataset = ConversationDataset(config.train_data_path, tokenizer, config, "train")
+    
+    eval_dataset = None
+    if args.eval_data and os.path.exists(config.eval_data_path):
+        eval_dataset = ConversationDataset(config.eval_data_path, tokenizer, config, "eval")
+    
+    # Create dataloaders
+    train_dataloader = create_dataloader(train_dataset, config, shuffle=True)
+    eval_dataloader = create_dataloader(eval_dataset, config, shuffle=False) if eval_dataset else None
     
     # Initialize model
-    model = TransformerModel(model_config)
+    logging.info("Initializing model...")
+    model = TransformerModel(config)
     
     # Initialize trainer
-    trainer = ConversationTrainer(model, tokenizer, training_config, device)
+    trainer = ConversationTrainer(model, tokenizer, config)
+    
+    # Resume from checkpoint if requested
+    start_step = 0
+    if args.resume:
+        start_step = trainer.load_checkpoint(args.resume)
+    
+    # Log training info
+    logging.info("Training configuration:")
+    logging.info(f"  Max steps: {config.max_steps:,}")
+    logging.info(f"  Effective batch size: {config.effective_batch_size:,}")
+    logging.info(f"  Learning rate: {config.learning_rate:.2e}")
+    logging.info(f"  Precision: {config.precision}")
+    logging.info(f"  Gradient accumulation steps: {config.gradient_accumulation_steps}")
+    
+    # Estimate training time
+    if torch.cuda.is_available():
+        device_name = torch.cuda.get_device_name()
+    else:
+        device_name = "CPU"
+    
+    estimated_time = estimate_training_time(config.max_steps - start_step, config, device_name)
+    logging.info(f"Estimated training time: {estimated_time}")
     
     # Start training
-    logging.info("="*60)
-    logging.info("STARTING CONVERSATIONAL TRAINING")
-    logging.info("="*60)
-    
-    trainer.train(train_dataset, eval_dataset)
-    
-    # Save tokenizer
-    save_tokenizer(tokenizer)
+    logging.info("Starting training...")
+    try:
+        trainer.train(train_dataloader, eval_dataloader)
+    except KeyboardInterrupt:
+        logging.info("Training interrupted by user")
+        trainer.save_checkpoint(trainer.global_step, final=True)
+    except Exception as e:
+        logging.error(f"Training failed: {e}")
+        return 1
     
     # Test generation
-    test_generation(trainer)
-    
-    logging.info("Conversational training completed successfully!")
-    return 0
-
-def analyze_conversation_data(conversations: List[Dict]):
-    """Analyze the structure of conversational data."""
-    logging.info("Analyzing conversational data...")
-    
-    total_messages = 0
-    role_counts = Counter()
-    turn_counts = []
-    
-    for conv in conversations:
-        messages = conv.get('messages', [])
-        turn_counts.append(len(messages))
-        total_messages += len(messages)
-        
-        for msg in messages:
-            role_counts[msg.get('role', 'unknown')] += 1
-    
-    logging.info(f"Total conversations: {len(conversations)}")
-    logging.info(f"Total messages: {total_messages}")
-    logging.info(f"Average turns per conversation: {np.mean(turn_counts):.1f}")
-    logging.info(f"Turn distribution - Min: {min(turn_counts)}, Max: {max(turn_counts)}")
-    
-    logging.info("Role distribution:")
-    for role, count in role_counts.most_common():
-        logging.info(f"  {role}: {count:,} ({count/total_messages*100:.1f}%)")
-
-def save_tokenizer(tokenizer: ConversationTokenizer):
-    """Save tokenizer vocabulary and merges."""
-    os.makedirs("checkpoints", exist_ok=True)
-    
-    with open('checkpoints/conversation_tokenizer_vocab.json', 'w') as f:
-        json.dump(tokenizer.vocab, f, indent=2)
-    
-    with open('checkpoints/conversation_tokenizer_merges.txt', 'w') as f:
-        f.write("#version: 0.2\n")
-        for merge in tokenizer.merges:
-            f.write(f"{merge[0]} {merge[1]}\n")
-    
-    logging.info("Saved conversation tokenizer files")
-
-def test_generation(trainer: ConversationTrainer):
-    """Test text generation with the trained model."""
-    logging.info("Testing conversation generation...")
-    
+    logging.info("Testing generation...")
     test_prompts = [
-        "How can I learn Python programming?",
-        "What's the weather like today?",
-        "Explain quantum computing in simple terms.",
-        "How do I make a good impression in a job interview?"
+        "How do I learn Python programming?",
+        "Explain machine learning in simple terms.",
+        "What are the benefits of exercise?",
     ]
     
     for prompt in test_prompts:
         logging.info(f"\nPrompt: {prompt}")
-        response = trainer.generate_response(prompt, max_new_tokens=128, temperature=0.8)
+        response = trainer.generate(prompt, max_new_tokens=128)
         logging.info(f"Response: {response}")
+    
+    logging.info("Training completed successfully!")
+    return 0
 
-# =============================================================================
-# CONFIGURATION PRESETS FOR CONVERSATIONS
-# =============================================================================
+def estimate_parameters(config: Config) -> int:
+    """Estimate total model parameters."""
+    # Embedding parameters
+    embed_params = config.vocab_size * config.hidden_size
+    
+    # Transformer block parameters
+    # Attention: Q, K, V projections + output projection
+    attn_params = (
+        config.hidden_size * config.hidden_size +  # Q
+        config.hidden_size * (config.hidden_size * config.num_kv_heads // config.num_heads) * 2 +  # K, V
+        config.hidden_size * config.hidden_size  # output
+    )
+    
+    # MLP parameters
+    mlp_params = (
+        config.hidden_size * config.intermediate_size * 2 +  # gate + up
+        config.intermediate_size * config.hidden_size  # down
+    )
+    
+    # Layer norm parameters
+    norm_params = config.hidden_size * 2  # input + post-attn norm per layer
+    
+    # Total per layer
+    layer_params = attn_params + mlp_params + norm_params
+    
+    # Total model
+    total_params = (
+        embed_params +  # embedding (shared with lm_head)
+        layer_params * config.num_layers +  # all transformer layers
+        config.hidden_size  # final norm
+    )
+    
+    return total_params
 
-class ConversationConfigPresets:
-    """Predefined configurations optimized for conversational training."""
-    
-    @staticmethod
-    def debug_tiny() -> Tuple[ModelConfig, TrainingConfig, DataConfig]:
-        """Tiny model for debugging conversational training."""
-        model_config = ModelConfig(
-            vocab_size=5000,
-            hidden_size=256,
-            num_layers=4,
-            num_heads=8,
-            num_kv_heads=2,
-            seq_length=512,
-            intermediate_size=688
-        )
-        
-        training_config = TrainingConfig(
-            batch_size=1,
-            gradient_accumulation_steps=2,
-            max_steps=500,
-            warmup_steps=50,
-            eval_interval=100,
-            save_interval=250,
-            precision="fp32",
-            compile=False
-        )
-        
-        data_config = DataConfig(
-            seq_length=512,
-            vocab_size=5000,
-            max_conversations=100
-        )
-        
-        return model_config, training_config, data_config
-    
-    @staticmethod
-    def small_conversational() -> Tuple[ModelConfig, TrainingConfig, DataConfig]:
-        """Small model optimized for conversation."""
-        model_config = ModelConfig(
-            vocab_size=32000,
-            hidden_size=1024,
-            num_layers=12,
-            num_heads=16,
-            num_kv_heads=4,
-            seq_length=2048,
-            intermediate_size=2816
-        )
-        
-        training_config = TrainingConfig(
-            batch_size=2,
-            gradient_accumulation_steps=8,
-            learning_rate=5e-4,
-            max_steps=20000,
-            warmup_steps=2000,
-            eval_interval=1000,
-            save_interval=2500,
-            precision="bf16"
-        )
-        
-        data_config = DataConfig(
-            seq_length=2048,
-            vocab_size=32000,
-            max_conversations=10000
-        )
-        
-        return model_config, training_config, data_config
-    
-    @staticmethod
-    def production_conversational() -> Tuple[ModelConfig, TrainingConfig, DataConfig]:
-        """Production-ready conversational model."""
-        model_config = ModelConfig(
-            vocab_size=32000,
-            hidden_size=2048,
-            num_layers=24,
-            num_heads=16,
-            num_kv_heads=8,
-            seq_length=4096,
-            intermediate_size=5504
-        )
-        
-        training_config = TrainingConfig(
-            batch_size=1,
-            gradient_accumulation_steps=16,
-            learning_rate=3e-4,
-            max_steps=100000,
-            warmup_steps=5000,
-            eval_interval=2000,
-            save_interval=10000,
-            precision="bf16"
-        )
-        
-        data_config = DataConfig(
-            seq_length=4096,
-            vocab_size=32000,
-            max_conversations=None  # Use all data
-        )
-        
-        return model_config, training_config, data_config
-
-# =============================================================================
-# UTILITIES AND HELPERS
-# =============================================================================
-
-def load_checkpoint(checkpoint_path: str, model: TransformerModel, 
-                   optimizer: torch.optim.Optimizer = None) -> Dict:
-    """Load model checkpoint."""
-    logging.info(f"Loading checkpoint from {checkpoint_path}")
-    
-    checkpoint = torch.load(checkpoint_path, map_location='cpu')
-    model.load_state_dict(checkpoint['model'])
-    
-    if optimizer and 'optimizer' in checkpoint:
-        optimizer.load_state_dict(checkpoint['optimizer'])
-    
-    return checkpoint
-
-def estimate_training_time(num_conversations: int, config: TrainingConfig, 
-                          device_name: str = "unknown") -> str:
-    """Estimate training time based on configuration."""
-    # Rough estimates based on empirical data
-    base_time_per_step = {
-        'cpu': 2.0,
-        'gpu_slow': 0.5,  # Older GPUs
-        'gpu_fast': 0.1   # Modern GPUs like A100
+def estimate_training_time(steps: int, config: Config, device_name: str) -> str:
+    """Estimate training time based on hardware."""
+    # Rough estimates (tokens per second)
+    performance_map = {
+        'A100': 15000,
+        'H100': 25000,
+        '4090': 8000,
+        '3090': 6000,
+        'V100': 10000,
+        'T4': 3000,
+        'CPU': 100
     }
     
-    device_type = 'cpu'
-    if 'cuda' in str(device_name).lower():
-        if any(gpu in device_name.lower() for gpu in ['a100', 'h100', '4090']):
-            device_type = 'gpu_fast'
-        else:
-            device_type = 'gpu_slow'
+    # Find matching device
+    tokens_per_sec = 5000  # Default estimate
+    for device, perf in performance_map.items():
+        if device in device_name:
+            tokens_per_sec = perf
+            break
     
-    time_per_step = base_time_per_step[device_type]
-    total_seconds = config.max_steps * time_per_step
+    # Calculate time
+    total_tokens = steps * config.effective_batch_size * config.seq_length
+    total_seconds = total_tokens / tokens_per_sec
     
-    hours = total_seconds // 3600
-    minutes = (total_seconds % 3600) // 60
+    hours = int(total_seconds // 3600)
+    minutes = int((total_seconds % 3600) // 60)
     
-    return f"Estimated training time: {hours:.0f}h {minutes:.0f}m (on {device_type})"
-
-def create_conversation_from_text(user_text: str, assistant_text: str) -> Dict:
-    """Helper to create a conversation dict from text pairs."""
-    return {
-        'conversation_id': 'synthetic',
-        'messages': [
-            {'role': 'prompter', 'content': user_text, 'turn': 1},
-            {'role': 'assistant', 'content': assistant_text, 'turn': 2}
-        ],
-        'total_turns': 2
-    }
+    return f"{hours}h {minutes}m"
 
 if __name__ == "__main__":
     exit(main())
