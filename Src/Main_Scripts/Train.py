@@ -860,7 +860,7 @@ def main():
     )
     
     data_config = DataConfig(
-        max_conversations=10000  # Limit for faster experimentation
+        max_conversations=100000  # Limit for faster experimentation
     )
     
     # Device setup
