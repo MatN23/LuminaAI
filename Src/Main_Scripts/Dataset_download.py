@@ -360,7 +360,7 @@ def main():
         output_dir = setup_output_directory()
         
         # Check if files already exist
-        train_file = output_dir / "oasst1_train_conversations.jsonl"
+        train_file = output_dir / "oasst1_train.jsonl"
         val_file = output_dir / "oasst1_validation_conversations.jsonl"
         
         if train_file.exists() and val_file.exists():
