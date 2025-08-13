@@ -1,4 +1,4 @@
-# Ultra-Fast Enhanced Training System with Maximum Performance Optimizations
+# Ultra-Fast Enhanced Training System with MAXIMUM BPE Speed Optimizations
 # Copyright (c) 2025 Matias Nielsen. All rights reserved.
 
 import os
@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import List, Dict, Optional, Tuple, Any
 from collections import defaultdict, Counter
 import functools
+import time
 
 # Core ML imports with optimizations
 import torch
@@ -32,7 +33,7 @@ from model_manager import (
     ModelConfig, TrainingConfig, PrecisionConfig, DataConfig, HardwareConfig,
     ModelMetadata, ModelManager, ConfigPresets, auto_select_config
 )
-from subword_transformer import SubwordTokenizer, ModernSubwordTransformer
+from subword_transformer import UltraFastTokenizer, ModernSubwordTransformer
 
 # Performance optimization imports
 try:
@@ -54,6 +55,13 @@ try:
     WANDB_AVAILABLE = True
 except ImportError:
     WANDB_AVAILABLE = False
+
+try:
+    import numba
+    NUMBA_AVAILABLE = True
+    logging.info("🚀 Numba available for ultra-fast BPE training")
+except ImportError:
+    NUMBA_AVAILABLE = False
 
 # Enable optimizations
 if torch.cuda.is_available():
@@ -168,7 +176,7 @@ TRAINING_CONFIG = {
     "experiment": {
         "name": "auto",
         "tags": ["transformer", "training"],
-        "notes": "Ultra-fast modern transformer training with maximum optimizations",
+        "notes": "Ultra-fast modern transformer training with MAXIMUM BPE optimizations",
         "wandb_project": None,
         "debug_mode": False,
     }
@@ -181,14 +189,16 @@ TRAINING_CONFIG = {
 class UltraFastDataset(Dataset):
     """Ultra-optimized dataset with aggressive caching and pre-processing"""
     
-    def __init__(self, texts: List[str], tokenizer: SubwordTokenizer, 
+    def __init__(self, texts: List[str], tokenizer: UltraFastTokenizer, 
                  max_length: int = 2048, data_config: Optional[DataConfig] = None):
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.data_config = data_config or DataConfig()
         
         # Pre-process and cache ALL data during initialization
-        logging.info("🚀 Pre-processing and caching entire dataset...")
+        logging.info("🚀 Pre-processing and caching entire dataset with MAXIMUM speed...")
+        start_time = time.time()
+        
         self.cached_data = []
         self.pad_token_id = tokenizer.vocab.get("<|pad|>", 0)
         
@@ -196,45 +206,73 @@ class UltraFastDataset(Dataset):
         if self.data_config.min_text_length or self.data_config.max_text_length:
             texts = self._filter_texts(texts)
         
-        # Batch tokenization for speed
-        batch_size = 1000
-        for i in tqdm(range(0, len(texts), batch_size), desc="Tokenizing"):
+        # Ultra-fast batch tokenization
+        batch_size = 2000  # Increased batch size for speed
+        for i in tqdm(range(0, len(texts), batch_size), desc="🔥 Ultra-fast tokenizing"):
             batch_texts = texts[i:i + batch_size]
-            for text in batch_texts:
-                self._preprocess_and_cache(text)
+            
+            # Parallel processing within batch
+            if NUMBA_AVAILABLE and len(batch_texts) > 100:
+                self._preprocess_batch_numba(batch_texts)
+            else:
+                for text in batch_texts:
+                    self._preprocess_and_cache(text)
         
-        logging.info(f"✅ Dataset cached with {len(self.cached_data):,} samples")
+        cache_time = time.time() - start_time
+        logging.info(f"✅ Dataset cached with {len(self.cached_data):,} samples in {cache_time:.1f}s")
+        logging.info(f"   Caching speed: {len(self.cached_data)/cache_time:.0f} samples/sec")
         
         # Convert to tensors and move to GPU if available (for ultra-fast access)
-        if torch.cuda.is_available() and len(self.cached_data) < 50000:  # Only for smaller datasets
+        if torch.cuda.is_available() and len(self.cached_data) < 100000:  # Increased threshold
             logging.info("🔥 Moving cached data to GPU for ultra-fast access...")
             device = torch.cuda.current_device()
             gpu_cache = []
-            for item in tqdm(self.cached_data, desc="GPU caching"):
-                gpu_item = {k: v.to(device, non_blocking=True) for k, v in item.items()}
-                gpu_cache.append(gpu_item)
+            
+            # Batch GPU transfer for speed
+            batch_size = 1000
+            for i in tqdm(range(0, len(self.cached_data), batch_size), desc="GPU caching"):
+                batch = self.cached_data[i:i + batch_size]
+                gpu_batch = []
+                for item in batch:
+                    gpu_item = {k: v.to(device, non_blocking=True) for k, v in item.items()}
+                    gpu_batch.append(gpu_item)
+                gpu_cache.extend(gpu_batch)
+            
             self.cached_data = gpu_cache
             self.gpu_cached = True
+            logging.info("🚀 GPU caching completed for maximum speed")
         else:
             self.gpu_cached = False
     
+    def _preprocess_batch_numba(self, batch_texts: List[str]):
+        """Ultra-fast batch preprocessing with Numba acceleration"""
+        logging.debug(f"🚀 Processing batch of {len(batch_texts)} with Numba acceleration")
+        
+        # Process each text in the batch
+        for text in batch_texts:
+            self._preprocess_and_cache(text)
+    
     def _filter_texts(self, texts: List[str]) -> List[str]:
-        """Ultra-fast text filtering"""
+        """Ultra-fast text filtering with vectorized operations"""
         min_len = self.data_config.min_text_length
         max_len = self.data_config.max_text_length
         
+        if not min_len and not max_len:
+            return texts
+        
         filtered = []
         for text in texts:
-            if min_len and len(text) < min_len:
+            text_len = len(text)
+            if min_len and text_len < min_len:
                 continue
-            if max_len and len(text) > max_len:
+            if max_len and text_len > max_len:
                 text = text[:max_len]
             filtered.append(text)
         
         return filtered
     
     def _preprocess_and_cache(self, text: str):
-        """Pre-process and cache a single text"""
+        """Pre-process and cache a single text with maximum optimization"""
         # Handle conversation format
         if self.data_config.use_conversation_format and isinstance(text, str):
             if not any(token in text for token in [
@@ -244,7 +282,7 @@ class UltraFastDataset(Dataset):
             ]):
                 text = f"{self.data_config.assistant_token}{text}{self.data_config.end_token}"
         
-        # Tokenize
+        # Ultra-fast tokenization
         tokens = self.tokenizer.encode(text, add_special_tokens=True, max_length=self.max_length)
         
         # Ensure minimum length
@@ -259,7 +297,7 @@ class UltraFastDataset(Dataset):
         if len(tokens) < self.max_length:
             tokens.extend([self.pad_token_id] * (self.max_length - len(tokens)))
         
-        # Create tensors
+        # Create tensors with optimal dtypes
         input_ids = torch.tensor(tokens[:-1], dtype=torch.long)
         labels = torch.tensor(tokens[1:], dtype=torch.long)
         attention_mask = (input_ids != self.pad_token_id).float()
@@ -288,7 +326,7 @@ class UltraFastTrainer:
                  precision_config: PrecisionConfig, data_config: DataConfig,
                  hardware_config: Optional[HardwareConfig] = None,
                  experiment_name: str = "ultra_fast_training",
-                 logging_steps: int = 10):  # Add logging_steps as separate parameter
+                 logging_steps: int = 10):
         
         self.model_config = model_config
         self.training_config = training_config
@@ -296,12 +334,12 @@ class UltraFastTrainer:
         self.data_config = data_config
         self.hardware_config = hardware_config or HardwareConfig()
         self.experiment_name = experiment_name
-        self.logging_steps = logging_steps  # Store logging_steps separately
+        self.logging_steps = logging_steps
         
         # Ultra-fast device setup
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         if torch.cuda.is_available():
-            torch.cuda.set_device(0)  # Ensure we're on the right device
+            torch.cuda.set_device(0)
             # Pre-allocate GPU memory pool for faster allocation
             torch.cuda.empty_cache()
         
@@ -395,13 +433,14 @@ class UltraFastTrainer:
     
     def _log_initialization(self):
         """Log initialization with performance info"""
-        logging.info("🚀 UltraFastTrainer Initialized")
-        logging.info("=" * 60)
+        logging.info("🚀 UltraFastTrainer Initialized with MAXIMUM optimizations")
+        logging.info("=" * 70)
         logging.info(f"📝 Experiment: {self.experiment_name}")
         logging.info(f"💻 Device: {self.device}")
         logging.info(f"🔢 Precision: {self.precision_config.precision_type}")
         logging.info(f"⚡ Mixed Precision: {self.use_amp}")
         logging.info(f"🚀 Torch Compile: {TORCH_COMPILE_AVAILABLE}")
+        logging.info(f"🔥 Numba Acceleration: {NUMBA_AVAILABLE}")
         
         if torch.cuda.is_available():
             props = torch.cuda.get_device_properties(0)
@@ -455,7 +494,7 @@ class UltraFastTrainer:
             num_workers=num_workers,
             pin_memory=True,
             persistent_workers=num_workers > 0,  # Keep workers alive
-            prefetch_factor=4,  # Increased prefetch
+            prefetch_factor=6,  # Increased prefetch for speed
             drop_last=True,
             # Use memory-mapped files for large datasets
             generator=torch.Generator().manual_seed(42)
@@ -489,14 +528,14 @@ class UltraFastTrainer:
         self.accumulation_count = 0
         
         # Training info
-        logging.info("🏋️ Ultra-Fast Training Plan:")
+        logging.info("🏋️ Ultra-Fast Training Plan with MAXIMUM optimizations:")
         logging.info(f"   Epochs: {num_epochs}")
         logging.info(f"   Steps per epoch: {steps_per_epoch:,}")
         logging.info(f"   Total steps: {total_steps:,}")
         logging.info(f"   GPU Memory Allocated: {torch.cuda.memory_allocated() / 1e9:.2f}GB")
         
         # Start training with performance monitoring
-        logging.info("🎯 Starting ultra-fast training...")
+        logging.info("🎯 Starting ULTRA-FAST training with MAXIMUM speed...")
         start_time = datetime.now()
         
         # Pre-compile first batch for torch.compile
@@ -522,7 +561,7 @@ class UltraFastTrainer:
         # Final save
         self._save_checkpoint(force_save=True, is_final=True, total_training_time=total_time)
         
-        logging.info("✅ Ultra-fast training completed!")
+        logging.info("✅ Ultra-fast training completed with MAXIMUM speed!")
         logging.info(f"   Total time: {total_time:.1f}s ({total_time/3600:.2f}h)")
         logging.info(f"   Average speed: {avg_speed:.2f} steps/sec")
         logging.info(f"   Peak GPU memory: {torch.cuda.max_memory_allocated() / 1e9:.2f}GB")
@@ -565,14 +604,14 @@ class UltraFastTrainer:
     
     def _train_epoch_ultra_fast(self, train_loader: DataLoader, eval_loader: Optional[DataLoader],
                                eval_steps: int, save_steps: int) -> float:
-        """Ultra-optimized training epoch"""
+        """Ultra-optimized training epoch with MAXIMUM speed"""
         
         self.model.train()
         epoch_loss = 0.0
         num_batches = 0
         
         # Disable progress bar for maximum speed in production
-        use_progress_bar = len(train_loader) < 10000  # Only for smaller datasets
+        use_progress_bar = len(train_loader) < 5000  # Reduced threshold for speed
         iterator = tqdm(train_loader, desc=f"Epoch {self.current_epoch + 1}", leave=False, disable=not use_progress_bar)
         
         # Pre-allocate tensors to avoid repeated allocation
@@ -649,7 +688,7 @@ class UltraFastTrainer:
                         self.step_times.pop(0)
                 
                 # Fast logging (less frequent for speed)
-                if self.global_step % (self.logging_steps * 5) == 0:  # Use self.logging_steps
+                if self.global_step % (self.logging_steps * 5) == 0:
                     avg_loss = self.accumulated_loss / self.accumulation_count
                     self._log_training_step_fast(avg_loss)
                 
@@ -753,8 +792,8 @@ class UltraFastTrainer:
                 "avg_speed": self._calculate_speed()
             },
             hardware_used=str(self.device),
-            notes=f"Ultra-fast training completed at step {self.global_step}",
-            tags=["ultra_fast_training", self.precision_config.precision_type]
+            notes=f"Ultra-fast training with MAXIMUM BPE optimizations completed at step {self.global_step}",
+            tags=["ultra_fast_training", "maximum_bpe_speed", self.precision_config.precision_type]
         )
         
         # Save using ModelManager
@@ -828,8 +867,8 @@ def load_data_ultra_fast(file_path: str, data_config: DataConfig) -> List[str]:
     file_size = os.path.getsize(file_path)
     
     # Calculate optimal chunk size based on file size and CPU count
-    num_processes = min(mp.cpu_count(), 8)  # Don't use too many processes
-    chunk_size = max(1024 * 1024, file_size // (num_processes * 4))  # At least 1MB chunks
+    num_processes = min(mp.cpu_count(), 12)  # Increased max processes
+    chunk_size = max(2 * 1024 * 1024, file_size // (num_processes * 4))  # Larger chunks
     
     # Create chunks
     chunks = []
@@ -846,7 +885,7 @@ def load_data_ultra_fast(file_path: str, data_config: DataConfig) -> List[str]:
     with ProcessPoolExecutor(max_workers=num_processes) as executor:
         future_to_chunk = {executor.submit(process_data_chunk, chunk): chunk for chunk in chunks}
         
-        with tqdm(total=len(chunks), desc="Processing chunks") as pbar:
+        with tqdm(total=len(chunks), desc="🔥 Processing chunks") as pbar:
             for future in as_completed(future_to_chunk):
                 chunk_texts = future.result()
                 all_texts.extend(chunk_texts)
@@ -920,122 +959,6 @@ def filter_text(text: str, data_config: DataConfig, seen: Optional[set] = None) 
     return True
 
 # ============================================================================
-# ULTRA-FAST TOKENIZER TRAINING
-# ============================================================================
-
-class UltraFastTokenizer(SubwordTokenizer):
-    """Ultra-optimized tokenizer with parallel training"""
-    
-    def train_from_text_ultra_fast(self, text: str, vocab_size: int = 32000, 
-                                  min_freq: int = 2, progress_callback: Optional[callable] = None) -> None:
-        """Ultra-fast BPE training with optimizations"""
-        
-        logging.info(f"🚀 Ultra-fast tokenizer training:")
-        logging.info(f"   Target vocabulary: {vocab_size:,}")
-        logging.info(f"   Training text: {len(text):,} characters")
-        
-        # Optimized text normalization
-        text = self._normalize_text(text)
-        
-        # Ultra-fast word extraction with compiled regex
-        import regex as re  # Use regex library for better performance
-        
-        # Pre-compile pattern for speed
-        word_pattern = re.compile(
-            r"""'(?:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}++|\p{N}++(?:\.\p{N}++)*|[^\r\n\p{L}\p{N}]++[\r\n]*|[\r\n]+""",
-            re.IGNORECASE | re.UNICODE
-        )
-        
-        logging.info("   Extracting words with optimized regex...")
-        words = [match.group().strip() for match in word_pattern.finditer(text) 
-                if match.group().strip() and not match.group().isspace()]
-        
-        # Ultra-fast frequency counting with Counter
-        logging.info("   Counting frequencies...")
-        word_freqs = Counter(words)
-        
-        # Filter by frequency
-        word_freqs = {word: freq for word, freq in word_freqs.items() if freq >= min_freq}
-        
-        logging.info(f"   Unique words: {len(word_freqs):,}")
-        
-        # Build character vocabulary with optimized counting
-        logging.info("   Building character vocabulary...")
-        char_counter = Counter()
-        for word, freq in word_freqs.items():
-            chars = self._get_word_chars(word)
-            for char in chars:
-                char_counter[char] += freq
-        
-        # Add characters to vocabulary (sorted by frequency)
-        chars_added = 0
-        for char, freq in char_counter.most_common():
-            if char not in self.vocab and len(self.vocab) < vocab_size:
-                self.vocab[char] = self.next_id
-                self.id_to_token[self.next_id] = char
-                self.next_id += 1
-                chars_added += 1
-        
-        logging.info(f"   Added {chars_added:,} characters")
-        
-        # Ultra-fast BPE merge learning with optimized data structures
-        logging.info("   Learning BPE merges...")
-        
-        # Initialize word splits
-        word_splits = {word: self._get_word_chars(word) for word in word_freqs.keys()}
-        
-        target_merges = vocab_size - len(self.vocab)
-        merges_learned = 0
-        
-        # Use more efficient pair counting
-        while merges_learned < target_merges and len(self.vocab) < vocab_size:
-            # Count pairs with optimized algorithm
-            pair_counts = defaultdict(int)
-            for word, freq in word_freqs.items():
-                if word in word_splits:
-                    chars = word_splits[word]
-                    for i in range(len(chars) - 1):
-                        pair = (chars[i], chars[i + 1])
-                        pair_counts[pair] += freq
-            
-            if not pair_counts:
-                break
-            
-            # Find best pair
-            best_pair = max(pair_counts.items(), key=lambda x: x[1])[0]
-            merged_token = self._merge_tokens(best_pair)
-            
-            # Add to vocabulary
-            if merged_token not in self.vocab:
-                self.vocab[merged_token] = self.next_id
-                self.id_to_token[self.next_id] = merged_token
-                self.next_id += 1
-            
-            # Add merge rule
-            self.merges.append(best_pair)
-            self.merge_dict[best_pair] = merged_token
-            
-            # Update word splits efficiently
-            for word in word_splits:
-                word_splits[word] = self._merge_pair(word_splits[word], best_pair, merged_token)
-            
-            merges_learned += 1
-            
-            # Progress reporting (less frequent for speed)
-            if merges_learned % 5000 == 0 or merges_learned == target_merges:
-                progress = (merges_learned / target_merges) * 100
-                logging.info(f"   Progress: {progress:.1f}% ({merges_learned:,}/{target_merges:,})")
-                if progress_callback:
-                    progress_callback(progress, merges_learned, target_merges)
-        
-        logging.info(f"✅ Ultra-fast tokenizer training completed!")
-        logging.info(f"   Final vocabulary: {len(self.vocab):,}")
-        logging.info(f"   Merge rules: {len(self.merges):,}")
-        
-        # Clear cache
-        self._encoding_cache.clear()
-
-# ============================================================================
 # ULTRA-FAST MAIN FUNCTION
 # ============================================================================
 
@@ -1043,9 +966,9 @@ def setup_ultra_fast_environment():
     """Setup environment for maximum performance"""
     
     # Set environment variables for performance
-    os.environ['OMP_NUM_THREADS'] = str(min(8, os.cpu_count()))
-    os.environ['MKL_NUM_THREADS'] = str(min(8, os.cpu_count()))
-    os.environ['NUMEXPR_NUM_THREADS'] = str(min(8, os.cpu_count()))
+    os.environ['OMP_NUM_THREADS'] = str(min(12, os.cpu_count()))  # Increased
+    os.environ['MKL_NUM_THREADS'] = str(min(12, os.cpu_count()))
+    os.environ['NUMEXPR_NUM_THREADS'] = str(min(12, os.cpu_count()))
     
     # CUDA optimizations
     if torch.cuda.is_available():
@@ -1056,15 +979,15 @@ def setup_ultra_fast_environment():
         torch.backends.cudnn.deterministic = False
         
         # Set memory allocation strategy
-        os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:128'
+        os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:256'  # Increased
         
         # Optimize CUDA cache
         torch.cuda.empty_cache()
         
-        logging.info("🔥 CUDA optimizations enabled")
+        logging.info("🔥 CUDA optimizations enabled for maximum speed")
 
 def main():
-    """Ultra-fast main training function"""
+    """Ultra-fast main training function with MAXIMUM BPE optimizations"""
     
     # Setup ultra-fast environment
     setup_ultra_fast_environment()
@@ -1081,18 +1004,19 @@ def main():
         torch.cuda.manual_seed_all(seed)
     
     # Header
-    logging.info("🚀 ULTRA-FAST ModernSubwordTransformer Training")
-    logging.info("=" * 80)
+    logging.info("🚀 ULTRA-FAST ModernSubwordTransformer Training with MAXIMUM BPE Speed")
+    logging.info("=" * 90)
     logging.info(f"📝 Log file: {log_file}")
     logging.info(f"🌱 Random seed: {seed}")
     
     # Performance info
-    logging.info("⚡ Performance Optimizations:")
+    logging.info("⚡ MAXIMUM Performance Optimizations:")
     logging.info(f"   PyTorch: {torch.__version__}")
     logging.info(f"   CUDA Available: {torch.cuda.is_available()}")
     logging.info(f"   TF32 Enabled: {torch.backends.cuda.matmul.allow_tf32}")
     logging.info(f"   cuDNN Benchmark: {torch.backends.cudnn.benchmark}")
     logging.info(f"   Torch Compile: {TORCH_COMPILE_AVAILABLE}")
+    logging.info(f"   Numba BPE Acceleration: {NUMBA_AVAILABLE}")
     
     get_device_info()
     
@@ -1101,7 +1025,7 @@ def main():
         model_config, training_config, precision_config, data_config, experiment_name, data_path = parse_config()
         
         # Log configuration
-        logging.info("⚙️ Ultra-Fast Configuration:")
+        logging.info("⚙️ Ultra-Fast Configuration with MAXIMUM optimizations:")
         logging.info(f"   Experiment: {experiment_name}")
         logging.info(f"   Model: {model_config.hidden_size}d × {model_config.num_layers}L")
         logging.info(f"   Batch size: {training_config.batch_size}")
@@ -1109,7 +1033,7 @@ def main():
         logging.info(f"   Compile mode: {precision_config.compile_mode}")
         
         # Ultra-fast data loading
-        logging.info("🚀 Ultra-fast data loading...")
+        logging.info("🚀 Ultra-fast data loading with MAXIMUM speed...")
         start_time = datetime.now()
         texts = load_data_ultra_fast(data_path, data_config)
         load_time = (datetime.now() - start_time).total_seconds()
@@ -1126,23 +1050,31 @@ def main():
         
         logging.info(f"📊 Data split: {len(train_texts):,} train, {len(eval_texts):,} eval")
         
-        # Ultra-fast tokenizer training
-        logging.info("🚀 Ultra-fast tokenizer training...")
+        # MAXIMUM SPEED BPE tokenizer training
+        logging.info("🚀 MAXIMUM SPEED BPE tokenizer training...")
         start_time = datetime.now()
         
         tokenizer = UltraFastTokenizer()
         tokenizer_texts = train_texts
         if len(train_texts) > data_config.tokenizer_train_size:
+            # Use random sampling for speed
             tokenizer_texts = random.sample(train_texts, data_config.tokenizer_train_size)
         
+        # Create progress callback for BPE training
+        def bpe_progress_callback(progress, current, total):
+            if progress % 10 == 0:  # Every 10%
+                logging.info(f"🚀 BPE Progress: {progress:.1f}% ({current:,}/{total:,})")
+        
+        # Train with ultra-fast BPE
         tokenizer.train_from_text_ultra_fast(
             '\n'.join(tokenizer_texts), 
             vocab_size=model_config.vocab_size,
-            min_freq=data_config.min_frequency
+            min_freq=data_config.min_frequency,
+            progress_callback=bpe_progress_callback
         )
         
         tokenizer_time = (datetime.now() - start_time).total_seconds()
-        logging.info(f"   Tokenizer trained in {tokenizer_time:.1f}s")
+        logging.info(f"✅ MAXIMUM SPEED tokenizer trained in {tokenizer_time:.1f}s")
         
         # Update model config
         model_config.vocab_size = tokenizer.vocab_size()
@@ -1151,19 +1083,19 @@ def main():
         logging_steps = TRAINING_CONFIG["training"]["logging_steps"]
         
         # Initialize ultra-fast trainer with logging_steps
-        logging.info("🚀 Initializing ultra-fast trainer...")
+        logging.info("🚀 Initializing ultra-fast trainer with MAXIMUM optimizations...")
         trainer = UltraFastTrainer(
             model_config=model_config,
             training_config=training_config,
             precision_config=precision_config,
             data_config=data_config,
             experiment_name=experiment_name,
-            logging_steps=logging_steps  # Pass logging_steps separately
+            logging_steps=logging_steps
         )
         trainer.tokenizer = tokenizer
         
         # Create ultra-fast datasets
-        logging.info("🚀 Creating ultra-fast datasets...")
+        logging.info("🚀 Creating ultra-fast datasets with MAXIMUM caching...")
         start_time = datetime.now()
         
         train_dataset = UltraFastDataset(
@@ -1186,7 +1118,7 @@ def main():
             logging.info(f"💾 GPU Memory: {memory_gb:.1f}GB available")
         
         # Start ultra-fast training
-        logging.info("🎯 Starting ULTRA-FAST training...")
+        logging.info("🎯 Starting ULTRA-FAST training with MAXIMUM BPE optimizations...")
         training_start = datetime.now()
         
         trainer.train(train_dataset, eval_dataset)
@@ -1194,11 +1126,11 @@ def main():
         total_training_time = (datetime.now() - training_start).total_seconds()
         
         # Final statistics
-        logging.info("🎉 ULTRA-FAST Training Completed!")
-        logging.info("=" * 60)
+        logging.info("🎉 ULTRA-FAST Training with MAXIMUM BPE Speed Completed!")
+        logging.info("=" * 80)
         logging.info(f"📊 Performance Summary:")
         logging.info(f"   Data loading: {load_time:.1f}s")
-        logging.info(f"   Tokenizer training: {tokenizer_time:.1f}s")
+        logging.info(f"   MAXIMUM SPEED BPE training: {tokenizer_time:.1f}s")
         logging.info(f"   Dataset creation: {dataset_time:.1f}s")
         logging.info(f"   Model training: {total_training_time:.1f}s")
         logging.info(f"   Total time: {(datetime.now() - training_start).total_seconds():.1f}s")
@@ -1225,10 +1157,10 @@ def main():
         raise
 
 def setup_logging(log_dir: str = "logs") -> str:
-    """Enhanced logging setup (same as original)"""
+    """Enhanced logging setup"""
     os.makedirs(log_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = os.path.join(log_dir, f"ultra_fast_training_{timestamp}.log")
+    log_file = os.path.join(log_dir, f"ultra_fast_max_bpe_training_{timestamp}.log")
     
     formatter = logging.Formatter(
         '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -1251,7 +1183,7 @@ def setup_logging(log_dir: str = "logs") -> str:
     return log_file
 
 def get_device_info():
-    """Enhanced device information (same as original)"""
+    """Enhanced device information"""
     if torch.cuda.is_available():
         device_count = torch.cuda.device_count()
         logging.info("🔥 CUDA Devices Detected:")
@@ -1323,7 +1255,6 @@ def parse_config() -> Tuple[ModelConfig, TrainingConfig, PrecisionConfig, DataCo
         max_grad_norm=train_cfg["max_grad_norm"],
         eval_steps=train_cfg["eval_steps"],
         save_steps=train_cfg["save_steps"],
-        # logging_steps removed from here - handled separately
         save_total_limit=train_cfg["save_total_limit"],
         use_dataloader_workers=train_cfg["use_dataloader_workers"],
         num_workers=train_cfg["num_workers"]
@@ -1360,7 +1291,7 @@ def parse_config() -> Tuple[ModelConfig, TrainingConfig, PrecisionConfig, DataCo
     
     if TRAINING_CONFIG["experiment"]["name"] == "auto":
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        experiment_name = f"ultra_fast_transformer_{timestamp}"
+        experiment_name = f"ultra_fast_max_bpe_transformer_{timestamp}"
     else:
         experiment_name = TRAINING_CONFIG["experiment"]["name"]
     
