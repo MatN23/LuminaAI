@@ -1,1301 +1,1140 @@
-# Ultra-Fast Enhanced Training System with MAXIMUM BPE Speed Optimizations
-# Copyright (c) 2025 Matias Nielsen. All rights reserved.
+# Conversational Transformer Training System
+# Optimized for OASST1 conversational dataset format
 
-import os
-import sys
+import math
 import json
 import logging
-import math
-import random
-from datetime import datetime
-from pathlib import Path
-from typing import List, Dict, Optional, Tuple, Any
-from collections import defaultdict, Counter
-import functools
+import os
 import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple, Union, Any
+from collections import Counter, defaultdict
+import warnings
 
-# Core ML imports with optimizations
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import OneCycleLR, CosineAnnealingWarmRestarts
-from torch.utils.data.distributed import DistributedSampler
-from torch.nn.parallel import DistributedDataParallel as DDP
-import torch.multiprocessing as mp
-
+from torch.optim.lr_scheduler import OneCycleLR
 import numpy as np
-from tqdm import tqdm
 
-# Import our advanced components
-from model_manager import (
-    ModelConfig, TrainingConfig, PrecisionConfig, DataConfig, HardwareConfig,
-    ModelMetadata, ModelManager, ConfigPresets, auto_select_config
-)
-from subword_transformer import UltraFastTokenizer, ModernSubwordTransformer
-
-# Performance optimization imports
+# Optional high-performance imports
 try:
-    import torch._dynamo
-    torch._dynamo.config.cache_size_limit = 256
-    torch._dynamo.config.suppress_errors = True
-    TORCH_COMPILE_AVAILABLE = True
+    from flash_attn import flash_attn_func
+    HAS_FLASH_ATTN = True
 except ImportError:
-    TORCH_COMPILE_AVAILABLE = False
+    HAS_FLASH_ATTN = False
 
 try:
-    from torch.cuda.amp import GradScaler, autocast
-    AMP_AVAILABLE = True
+    from torch.cuda.amp import autocast, GradScaler
+    HAS_AMP = True
 except ImportError:
-    AMP_AVAILABLE = False
+    HAS_AMP = False
 
-try:
-    import wandb
-    WANDB_AVAILABLE = True
-except ImportError:
-    WANDB_AVAILABLE = False
+# Configure for performance
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
+torch.backends.cudnn.benchmark = True
 
-try:
-    import numba
-    NUMBA_AVAILABLE = True
-    logging.info("🚀 Numba available for ultra-fast BPE training")
-except ImportError:
-    NUMBA_AVAILABLE = False
+# =============================================================================
+# CONFIGURATION SYSTEM
+# =============================================================================
 
-# Enable optimizations
-if torch.cuda.is_available():
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True
-    torch.backends.cudnn.benchmark = True
-    torch.backends.cudnn.deterministic = False
+@dataclass
+class ModelConfig:
+    """Model architecture configuration."""
+    vocab_size: int = 32000
+    hidden_size: int = 2048
+    num_layers: int = 24
+    num_heads: int = 16
+    num_kv_heads: int = 8  # For GQA
+    seq_length: int = 2048
+    intermediate_size: int = 5504  # SwiGLU expansion
+    rms_norm_eps: float = 1e-6
+    rope_theta: float = 10000.0
+    dropout: float = 0.0
+    
+    def __post_init__(self):
+        if self.intermediate_size is None:
+            self.intermediate_size = int(8 * self.hidden_size / 3)
+            # Round to multiple of 256 for efficiency
+            self.intermediate_size = ((self.intermediate_size + 255) // 256) * 256
+        
+        assert self.hidden_size % self.num_heads == 0
+        assert self.num_heads % self.num_kv_heads == 0
 
-# ============================================================================
-# TRAINING CONFIGURATION - SAME AS ORIGINAL
-# ============================================================================
+@dataclass  
+class TrainingConfig:
+    """Training configuration."""
+    batch_size: int = 4
+    gradient_accumulation_steps: int = 4
+    learning_rate: float = 3e-4
+    weight_decay: float = 0.1
+    max_steps: int = 10000
+    warmup_steps: int = 1000
+    eval_interval: int = 1000
+    save_interval: int = 2000
+    max_grad_norm: float = 1.0
+    precision: str = "bf16"  # bf16, fp16, fp32
+    compile: bool = True
+    
+@dataclass
+class DataConfig:
+    """Data processing configuration."""
+    train_data_path: str = "oasst1_data/oasst1_train_conversations.jsonl"
+    eval_data_path: str = "oasst1_data/oasst1_validation_conversations.jsonl"
+    seq_length: int = 2048
+    num_workers: int = 4
+    vocab_size: int = 32000
+    min_frequency: int = 2
+    max_conversations: Optional[int] = None  # Limit for debugging
 
-TRAINING_CONFIG = {
-    # Data Configuration
-    "data": {
-        "training_data_path": "oasst1_data/oasst1_train.jsonl",
-        "use_conversation_format": True,
-        "max_samples_train": None,
-        "max_samples_eval": None,
-        "eval_split": 0.1,
-        "min_text_length": 10,
-        "max_text_length": None,
-        "remove_duplicates": True,
-        "lowercase": False,
-        "tokenizer_train_size": 100000,
-        "min_frequency": 2,
-    },
-    
-    # Model Configuration
-    "model": {
-        "config_preset": "custom",
-        "custom": {
-            "vocab_size": 32000,
-            "hidden_size": 4096,
-            "num_layers": 36,
-            "num_heads": 32,
-            "seq_length": 8192,
-            "use_rotary_pos_emb": True,
-            "use_rms_norm": True,
-            "use_grouped_query_attention": True,
-            "use_glu_variants": True,
-            "glu_variant": "swiglu",
-            "gradient_checkpointing": True,
-        },
-        "tiny": {
-            "vocab_size": 32000,
-            "hidden_size": 256,
-            "num_layers": 4,
-            "num_heads": 4,
-            "seq_length": 512,
-            "use_rotary_pos_emb": True,
-            "use_rms_norm": True,
-            "use_grouped_query_attention": True,
-            "use_glu_variants": True,
-            "glu_variant": "swiglu",
-            "gradient_checkpointing": True
-        },
-        "research": {
-            "vocab_size": 32000,
-            "hidden_size": 2048,
-            "num_layers": 24,
-            "num_heads": 16,
-            "seq_length": 1024,
-            "use_rotary_pos_emb": True,
-            "use_rms_norm": True,
-            "use_grouped_query_attention": True,
-            "use_glu_variants": True,
-            "glu_variant": "swiglu",
-            "gradient_checkpointing": True
-        },
-    },
-    
-    # Training Configuration
-    "training": {
-        "batch_size": 1,
-        "gradient_accumulation_steps": 8,
-        "max_epochs": 200,
-        "max_steps": None,
-        "learning_rate": 3e-4,
-        "weight_decay": 0.1,
-        "warmup_ratio": 0.03,
-        "scheduler_type": "cosine_with_warmup",
-        "optimizer_type": "adamw",
-        "max_grad_norm": 1.0,
-        "eval_steps": None,
-        "save_steps": None,
-        "logging_steps": 10,  # Keep this in config but don't pass to TrainingConfig
-        "save_total_limit": 3,
-        "use_dataloader_workers": True,
-        "num_workers": 4,
-    },
-    
-    # Precision and Performance Configuration
-    "precision": {
-        "precision_type": "auto",
-        "use_mixed_precision": True,
-        "use_compile": True,
-        "compile_mode": "max-autotune",  # Changed for maximum speed
-        "use_dynamic_loss_scaling": True,
-    },
-    
-    # System Configuration
-    "system": {
-        "output_dir": "models",
-        "log_dir": "logs",
-        "device": "auto",
-        "seed": 42,
-        "gradient_checkpointing": True,
-    },
-    
-    # Experiment Configuration
-    "experiment": {
-        "name": "auto",
-        "tags": ["transformer", "training"],
-        "notes": "Ultra-fast modern transformer training with MAXIMUM BPE optimizations",
-        "wandb_project": None,
-        "debug_mode": False,
-    }
-}
+# =============================================================================
+# CONVERSATION-AWARE TOKENIZER
+# =============================================================================
 
-# ============================================================================
-# ULTRA-FAST OPTIMIZED DATASET WITH CACHING
-# ============================================================================
-
-class UltraFastDataset(Dataset):
-    """Ultra-optimized dataset with aggressive caching and pre-processing"""
+class ConversationTokenizer:
+    """Tokenizer specifically designed for conversational data."""
     
-    def __init__(self, texts: List[str], tokenizer: UltraFastTokenizer, 
-                 max_length: int = 2048, data_config: Optional[DataConfig] = None):
-        self.tokenizer = tokenizer
-        self.max_length = max_length
-        self.data_config = data_config or DataConfig()
+    def __init__(self):
+        # Special tokens for conversation structure
+        self.special_tokens = {
+            "<pad>": 0,
+            "<unk>": 1,
+            "<s>": 2,
+            "</s>": 3,
+            "<|user|>": 4,
+            "<|assistant|>": 5,
+            "<|system|>": 6,
+            "<|end|>": 7,
+            "<|conversation_start|>": 8,
+            "<|conversation_end|>": 9,
+            "<|turn|>": 10,
+        }
         
-        # Pre-process and cache ALL data during initialization
-        logging.info("🚀 Pre-processing and caching entire dataset with MAXIMUM speed...")
-        start_time = time.time()
+        self.vocab = self.special_tokens.copy()
+        self.merges = []
+        self._id_to_token = {v: k for k, v in self.vocab.items()}
+        self._merge_cache = {}
         
-        self.cached_data = []
-        self.pad_token_id = tokenizer.vocab.get("<|pad|>", 0)
-        
-        # Filter texts first
-        if self.data_config.min_text_length or self.data_config.max_text_length:
-            texts = self._filter_texts(texts)
-        
-        # Ultra-fast batch tokenization
-        batch_size = 2000  # Increased batch size for speed
-        for i in tqdm(range(0, len(texts), batch_size), desc="🔥 Ultra-fast tokenizing"):
-            batch_texts = texts[i:i + batch_size]
-            
-            # Parallel processing within batch
-            if NUMBA_AVAILABLE and len(batch_texts) > 100:
-                self._preprocess_batch_numba(batch_texts)
-            else:
-                for text in batch_texts:
-                    self._preprocess_and_cache(text)
-        
-        cache_time = time.time() - start_time
-        logging.info(f"✅ Dataset cached with {len(self.cached_data):,} samples in {cache_time:.1f}s")
-        logging.info(f"   Caching speed: {len(self.cached_data)/cache_time:.0f} samples/sec")
-        
-        # Convert to tensors and move to GPU if available (for ultra-fast access)
-        if torch.cuda.is_available() and len(self.cached_data) < 100000:  # Increased threshold
-            logging.info("🔥 Moving cached data to GPU for ultra-fast access...")
-            device = torch.cuda.current_device()
-            gpu_cache = []
-            
-            # Batch GPU transfer for speed
-            batch_size = 1000
-            for i in tqdm(range(0, len(self.cached_data), batch_size), desc="GPU caching"):
-                batch = self.cached_data[i:i + batch_size]
-                gpu_batch = []
-                for item in batch:
-                    gpu_item = {k: v.to(device, non_blocking=True) for k, v in item.items()}
-                    gpu_batch.append(gpu_item)
-                gpu_cache.extend(gpu_batch)
-            
-            self.cached_data = gpu_cache
-            self.gpu_cached = True
-            logging.info("🚀 GPU caching completed for maximum speed")
-        else:
-            self.gpu_cached = False
+        # Regex pattern for tokenization
+        import re
+        self.pattern = re.compile(
+            r"'(?:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{2,}|[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+"
+        )
     
-    def _preprocess_batch_numba(self, batch_texts: List[str]):
-        """Ultra-fast batch preprocessing with Numba acceleration"""
-        logging.debug(f"🚀 Processing batch of {len(batch_texts)} with Numba acceleration")
+    def train_from_conversations(self, conversations: List[Dict], vocab_size: int = 32000, min_freq: int = 2):
+        """Train tokenizer specifically on conversational data."""
+        logging.info(f"Training conversation tokenizer to vocab size {vocab_size}")
         
-        # Process each text in the batch
-        for text in batch_texts:
-            self._preprocess_and_cache(text)
-    
-    def _filter_texts(self, texts: List[str]) -> List[str]:
-        """Ultra-fast text filtering with vectorized operations"""
-        min_len = self.data_config.min_text_length
-        max_len = self.data_config.max_text_length
+        # Extract all text from conversations
+        texts = []
+        for conv in conversations:
+            for message in conv.get('messages', []):
+                content = message.get('content', '').strip()
+                if content:
+                    texts.append(content)
         
-        if not min_len and not max_len:
-            return texts
+        logging.info(f"Training on {len(texts)} message contents")
         
-        filtered = []
+        # Standard BPE training
+        word_freqs = Counter()
         for text in texts:
-            text_len = len(text)
-            if min_len and text_len < min_len:
-                continue
-            if max_len and text_len > max_len:
-                text = text[:max_len]
-            filtered.append(text)
+            words = self.pattern.findall(text)
+            for word in words:
+                if word.strip():
+                    word_freqs[word + "</w>"] += 1
         
-        return filtered
+        # Filter by frequency
+        word_freqs = {w: f for w, f in word_freqs.items() if f >= min_freq}
+        logging.info(f"Found {len(word_freqs)} unique words after filtering")
+        
+        # Add characters to vocab
+        chars = set()
+        for word in word_freqs:
+            chars.update(word)
+        
+        for char in sorted(chars):
+            if char not in self.vocab and len(self.vocab) < vocab_size:
+                self.vocab[char] = len(self.vocab)
+                self._id_to_token[self.vocab[char]] = char
+        
+        # BPE training
+        word_splits = {word: list(word) for word in word_freqs}
+        target_merges = vocab_size - len(self.vocab)
+        
+        for merge_step in range(target_merges):
+            pair_counts = defaultdict(int)
+            
+            for word, freq in word_freqs.items():
+                splits = word_splits[word]
+                for i in range(len(splits) - 1):
+                    pair = (splits[i], splits[i + 1])
+                    pair_counts[pair] += freq
+            
+            if not pair_counts:
+                break
+            
+            best_pair = max(pair_counts.items(), key=lambda x: x[1])[0]
+            merged_token = best_pair[0] + best_pair[1]
+            
+            if merged_token not in self.vocab:
+                self.vocab[merged_token] = len(self.vocab)
+                self._id_to_token[self.vocab[merged_token]] = merged_token
+            
+            self.merges.append(best_pair)
+            
+            # Apply merge
+            for word in word_freqs:
+                splits = word_splits[word]
+                new_splits = []
+                i = 0
+                while i < len(splits):
+                    if (i < len(splits) - 1 and 
+                        (splits[i], splits[i + 1]) == best_pair):
+                        new_splits.append(merged_token)
+                        i += 2
+                    else:
+                        new_splits.append(splits[i])
+                        i += 1
+                word_splits[word] = new_splits
+            
+            if merge_step % 1000 == 0:
+                logging.info(f"BPE step {merge_step}, vocab size: {len(self.vocab)}")
+        
+        logging.info(f"Tokenizer training complete. Final vocab size: {len(self.vocab)}")
     
-    def _preprocess_and_cache(self, text: str):
-        """Pre-process and cache a single text with maximum optimization"""
-        # Handle conversation format
-        if self.data_config.use_conversation_format and isinstance(text, str):
-            if not any(token in text for token in [
-                self.data_config.user_token, 
-                self.data_config.assistant_token,
-                self.data_config.system_token
-            ]):
-                text = f"{self.data_config.assistant_token}{text}{self.data_config.end_token}"
+    def encode_conversation(self, conversation: Dict, max_length: int = 2048) -> List[int]:
+        """Encode a full conversation with special formatting."""
+        tokens = [self.special_tokens["<|conversation_start|>"]]
         
-        # Ultra-fast tokenization
-        tokens = self.tokenizer.encode(text, add_special_tokens=True, max_length=self.max_length)
+        messages = conversation.get('messages', [])
         
-        # Ensure minimum length
-        if len(tokens) < 2:
-            tokens = [
-                self.tokenizer.vocab.get("<|bos|>", 2),
-                self.tokenizer.vocab.get("<|unk|>", 1),
-                self.tokenizer.vocab.get("<|eos|>", 3)
-            ]
+        for i, message in enumerate(messages):
+            role = message.get('role', '').lower()
+            content = message.get('content', '').strip()
+            
+            if not content:
+                continue
+            
+            # Add role token
+            if role == 'prompter':
+                tokens.append(self.special_tokens["<|user|>"])
+            elif role == 'assistant':
+                tokens.append(self.special_tokens["<|assistant|>"])
+            else:
+                tokens.append(self.special_tokens["<|system|>"])
+            
+            # Encode content
+            content_tokens = self._encode_text(content)
+            tokens.extend(content_tokens)
+            
+            # Add turn separator (except for last message)
+            if i < len(messages) - 1:
+                tokens.append(self.special_tokens["<|turn|>"])
         
-        # Pad to exact length for consistent batching
-        if len(tokens) < self.max_length:
-            tokens.extend([self.pad_token_id] * (self.max_length - len(tokens)))
+        tokens.append(self.special_tokens["<|conversation_end|>"])
         
-        # Create tensors with optimal dtypes
-        input_ids = torch.tensor(tokens[:-1], dtype=torch.long)
-        labels = torch.tensor(tokens[1:], dtype=torch.long)
-        attention_mask = (input_ids != self.pad_token_id).float()
+        # Truncate if too long
+        if len(tokens) > max_length:
+            tokens = tokens[:max_length - 1] + [self.special_tokens["</s>"]]
         
-        self.cached_data.append({
-            'input_ids': input_ids,
-            'attention_mask': attention_mask,
-            'labels': labels
-        })
+        return tokens
+    
+    def _encode_text(self, text: str) -> List[int]:
+        """Encode regular text content."""
+        if not text.strip():
+            return []
+        
+        words = self.pattern.findall(text)
+        tokens = []
+        
+        for word in words:
+            if not word.strip():
+                continue
+            word_with_end = word + "</w>"
+            subwords = self._apply_bpe(word_with_end)
+            for subword in subwords:
+                tokens.append(self.vocab.get(subword, self.special_tokens["<unk>"]))
+        
+        return tokens
+    
+    def _apply_bpe(self, word: str) -> List[str]:
+        """Apply BPE merges to a word."""
+        if word in self._merge_cache:
+            return self._merge_cache[word]
+        
+        chars = list(word)
+        if len(chars) <= 1:
+            return chars
+        
+        for merge_pair in self.merges:
+            if len(chars) <= 1:
+                break
+            
+            i = 0
+            new_chars = []
+            while i < len(chars):
+                if (i < len(chars) - 1 and 
+                    (chars[i], chars[i + 1]) == merge_pair):
+                    new_chars.append(chars[i] + chars[i + 1])
+                    i += 2
+                else:
+                    new_chars.append(chars[i])
+                    i += 1
+            chars = new_chars
+        
+        if len(self._merge_cache) < 10000:
+            self._merge_cache[word] = chars
+        
+        return chars
+    
+    def decode(self, token_ids: List[int], skip_special_tokens: bool = True) -> str:
+        """Decode token IDs back to text."""
+        tokens = []
+        for token_id in token_ids:
+            if skip_special_tokens and token_id in self.special_tokens.values():
+                continue
+            tokens.append(self._id_to_token.get(token_id, "<unk>"))
+        
+        text = "".join(tokens)
+        text = text.replace("</w>", " ")
+        return text.strip()
+
+# =============================================================================
+# MODEL ARCHITECTURE (Same as before but included for completeness)
+# =============================================================================
+
+class RMSNorm(nn.Module):
+    def __init__(self, dim: int, eps: float = 1e-6):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps) * self.weight
+
+class RotaryEmbedding(nn.Module):
+    def __init__(self, dim: int, max_seq_len: int = 8192, theta: float = 10000.0):
+        super().__init__()
+        inv_freq = 1.0 / (theta ** (torch.arange(0, dim, 2).float() / dim))
+        self.register_buffer("inv_freq", inv_freq)
+        self.max_seq_len = max_seq_len
+        self._cos_cached = None
+        self._sin_cached = None
+        self._seq_len_cached = 0
+    
+    def forward(self, seq_len: int, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
+        if seq_len > self._seq_len_cached or self._cos_cached is None:
+            self._seq_len_cached = max(seq_len, self._seq_len_cached)
+            t = torch.arange(self._seq_len_cached, device=device, dtype=torch.float32)
+            freqs = torch.outer(t, self.inv_freq.to(device))
+            emb = torch.cat((freqs, freqs), dim=-1)
+            self._cos_cached = emb.cos()
+            self._sin_cached = emb.sin()
+        return self._cos_cached[:seq_len], self._sin_cached[:seq_len]
+
+def apply_rotary_pos_emb(q: torch.Tensor, k: torch.Tensor, 
+                        cos: torch.Tensor, sin: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def rotate_half(x):
+        x1, x2 = x[..., : x.shape[-1] // 2], x[..., x.shape[-1] // 2 :]
+        return torch.cat((-x2, x1), dim=-1)
+    
+    q_embed = (q * cos) + (rotate_half(q) * sin)
+    k_embed = (k * cos) + (rotate_half(k) * sin)
+    return q_embed, k_embed
+
+class GroupedQueryAttention(nn.Module):
+    def __init__(self, config: ModelConfig):
+        super().__init__()
+        self.hidden_size = config.hidden_size
+        self.num_heads = config.num_heads
+        self.num_kv_heads = config.num_kv_heads
+        self.head_dim = self.hidden_size // self.num_heads
+        self.num_queries_per_kv = self.num_heads // self.num_kv_heads
+        
+        self.q_proj = nn.Linear(config.hidden_size, self.num_heads * self.head_dim, bias=False)
+        self.k_proj = nn.Linear(config.hidden_size, self.num_kv_heads * self.head_dim, bias=False)
+        self.v_proj = nn.Linear(config.hidden_size, self.num_kv_heads * self.head_dim, bias=False)
+        self.o_proj = nn.Linear(self.num_heads * self.head_dim, config.hidden_size, bias=False)
+        
+        self.rope = RotaryEmbedding(self.head_dim, config.seq_length, config.rope_theta)
+        
+        for proj in [self.q_proj, self.k_proj, self.v_proj]:
+            nn.init.xavier_uniform_(proj.weight)
+        nn.init.xavier_uniform_(self.o_proj.weight, gain=1 / math.sqrt(2))
+    
+    def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        B, L, D = x.shape
+        
+        q = self.q_proj(x).view(B, L, self.num_heads, self.head_dim).transpose(1, 2)
+        k = self.k_proj(x).view(B, L, self.num_kv_heads, self.head_dim).transpose(1, 2)
+        v = self.v_proj(x).view(B, L, self.num_kv_heads, self.head_dim).transpose(1, 2)
+        
+        cos, sin = self.rope(L, x.device)
+        q, k = apply_rotary_pos_emb(q, k, cos, sin)
+        
+        if self.num_queries_per_kv > 1:
+            k = k[:, :, None, :, :].expand(B, self.num_kv_heads, self.num_queries_per_kv, L, self.head_dim)
+            v = v[:, :, None, :, :].expand(B, self.num_kv_heads, self.num_queries_per_kv, L, self.head_dim)
+            k = k.reshape(B, self.num_heads, L, self.head_dim)
+            v = v.reshape(B, self.num_heads, L, self.head_dim)
+        
+        if HAS_FLASH_ATTN and x.is_cuda and mask is None:
+            q = q.transpose(1, 2)
+            k = k.transpose(1, 2)
+            v = v.transpose(1, 2)
+            out = flash_attn_func(q, k, v, causal=True)
+            out = out.reshape(B, L, self.hidden_size)
+        else:
+            scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)
+            
+            if mask is None:
+                mask = torch.triu(torch.ones(L, L, device=x.device, dtype=torch.bool), diagonal=1)
+                scores.masked_fill_(mask, float('-inf'))
+            else:
+                scores = scores + mask
+            
+            attn = F.softmax(scores, dim=-1, dtype=torch.float32).to(q.dtype)
+            out = torch.matmul(attn, v)
+            out = out.transpose(1, 2).reshape(B, L, self.hidden_size)
+        
+        return self.o_proj(out)
+
+class SwiGLU(nn.Module):
+    def __init__(self, config: ModelConfig):
+        super().__init__()
+        self.gate_proj = nn.Linear(config.hidden_size, config.intermediate_size, bias=False)
+        self.up_proj = nn.Linear(config.hidden_size, config.intermediate_size, bias=False)
+        self.down_proj = nn.Linear(config.intermediate_size, config.hidden_size, bias=False)
+        
+        nn.init.xavier_uniform_(self.gate_proj.weight)
+        nn.init.xavier_uniform_(self.up_proj.weight)
+        nn.init.xavier_uniform_(self.down_proj.weight, gain=1 / math.sqrt(2))
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        gate = F.silu(self.gate_proj(x))
+        up = self.up_proj(x)
+        return self.down_proj(gate * up)
+
+class TransformerBlock(nn.Module):
+    def __init__(self, config: ModelConfig):
+        super().__init__()
+        self.input_norm = RMSNorm(config.hidden_size, config.rms_norm_eps)
+        self.self_attn = GroupedQueryAttention(config)
+        self.post_attn_norm = RMSNorm(config.hidden_size, config.rms_norm_eps)
+        self.mlp = SwiGLU(config)
+    
+    def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        x = x + self.self_attn(self.input_norm(x), mask)
+        x = x + self.mlp(self.post_attn_norm(x))
+        return x
+
+class TransformerModel(nn.Module):
+    def __init__(self, config: ModelConfig):
+        super().__init__()
+        self.config = config
+        
+        self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size)
+        self.layers = nn.ModuleList([TransformerBlock(config) for _ in range(config.num_layers)])
+        self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps)
+        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        
+        nn.init.normal_(self.embed_tokens.weight, std=0.02)
+        nn.init.normal_(self.lm_head.weight, std=0.02)
+        
+        n_params = sum(p.numel() for p in self.parameters())
+        logging.info(f"Model initialized with {n_params:,} parameters")
+    
+    def forward(self, input_ids: torch.Tensor, 
+                attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        x = self.embed_tokens(input_ids)
+        
+        for layer in self.layers:
+            x = layer(x, attention_mask)
+        
+        x = self.norm(x)
+        return self.lm_head(x)
+
+# =============================================================================
+# CONVERSATIONAL DATASET
+# =============================================================================
+
+class ConversationDataset(Dataset):
+    """Dataset specifically designed for conversational training."""
+    
+    def __init__(self, conversations: List[Dict], tokenizer: ConversationTokenizer, 
+                 seq_length: int = 2048):
+        self.tokenizer = tokenizer
+        self.seq_length = seq_length
+        self.examples = []
+        
+        logging.info("Processing conversations for training...")
+        
+        for conv in conversations:
+            # Skip empty conversations
+            if not conv.get('messages') or len(conv['messages']) < 2:
+                continue
+            
+            # Encode the conversation
+            tokens = tokenizer.encode_conversation(conv, max_length=seq_length)
+            
+            if len(tokens) >= 10:  # Minimum meaningful length
+                self.examples.append(tokens)
+        
+        logging.info(f"Created dataset with {len(self.examples)} conversation examples")
+        
+        # Dataset statistics
+        if self.examples:
+            lengths = [len(ex) for ex in self.examples]
+            logging.info(f"Token lengths - Mean: {np.mean(lengths):.1f}, "
+                        f"Std: {np.std(lengths):.1f}, "
+                        f"Min: {min(lengths)}, Max: {max(lengths)}")
     
     def __len__(self):
-        return len(self.cached_data)
+        return len(self.examples)
     
     def __getitem__(self, idx):
-        # Ultra-fast cached access
-        return self.cached_data[idx]
+        tokens = self.examples[idx]
+        
+        # Pad to sequence length
+        if len(tokens) < self.seq_length:
+            tokens = tokens + [0] * (self.seq_length - len(tokens))
+        
+        tokens = torch.tensor(tokens[:self.seq_length], dtype=torch.long)
+        
+        return {
+            'input_ids': tokens[:-1],
+            'labels': tokens[1:],
+            'attention_mask': (tokens[:-1] != 0).float()
+        }
 
-# ============================================================================
-# ULTRA-FAST TRAINER WITH MAXIMUM OPTIMIZATIONS
-# ============================================================================
-
-class UltraFastTrainer:
-    """Ultra-optimized trainer with maximum performance enhancements"""
+def load_conversations(file_path: str, max_conversations: Optional[int] = None) -> List[Dict]:
+    """Load conversations from JSONL file."""
+    logging.info(f"Loading conversations from {file_path}")
     
-    def __init__(self, model_config: ModelConfig, training_config: TrainingConfig,
-                 precision_config: PrecisionConfig, data_config: DataConfig,
-                 hardware_config: Optional[HardwareConfig] = None,
-                 experiment_name: str = "ultra_fast_training",
-                 logging_steps: int = 10):
-        
-        self.model_config = model_config
-        self.training_config = training_config
-        self.precision_config = precision_config
-        self.data_config = data_config
-        self.hardware_config = hardware_config or HardwareConfig()
-        self.experiment_name = experiment_name
-        self.logging_steps = logging_steps
-        
-        # Ultra-fast device setup
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        if torch.cuda.is_available():
-            torch.cuda.set_device(0)
-            # Pre-allocate GPU memory pool for faster allocation
-            torch.cuda.empty_cache()
-        
-        # Initialize model manager
-        self.model_manager = ModelManager(training_config.output_dir or "models")
-        
-        # Initialize model with optimizations
-        self.model = ModernSubwordTransformer(model_config)
-        
-        # Apply model optimizations
-        self._optimize_model()
-        
-        # Move to device
-        self.model = self.model.to(self.device)
-        
-        # Training state
-        self.global_step = 0
-        self.current_epoch = 0
-        self.best_loss = float('inf')
-        
-        # Ultra-fast mixed precision setup
-        self.use_amp = (self.precision_config.use_mixed_precision and 
-                       self.precision_config.precision_type in ["fp16", "bf16"] and 
-                       AMP_AVAILABLE)
-        
-        if self.use_amp:
-            # Optimized scaler settings for speed
-            self.scaler = GradScaler(
-                init_scale=65536.0,  # Higher initial scale
-                growth_factor=2.0,
-                backoff_factor=0.5,
-                growth_interval=1000,  # Less frequent updates
-                enabled=self.precision_config.use_dynamic_loss_scaling
-            )
-        
-        # Compile model for maximum speed
-        if TORCH_COMPILE_AVAILABLE and self.device.type == 'cuda':
+    conversations = []
+    if not os.path.exists(file_path):
+        logging.error(f"File not found: {file_path}")
+        return conversations
+    
+    with open(file_path, 'r', encoding='utf-8') as f:
+        for line_no, line in enumerate(f, 1):
             try:
-                # Ultra-aggressive compilation
-                self.model = torch.compile(
-                    self.model, 
-                    mode="max-autotune",  # Maximum optimization
-                    fullgraph=True,       # Compile entire graph
-                    dynamic=False         # Static shapes for speed
-                )
-                logging.info("🚀 Model compiled with max-autotune mode")
-            except Exception as e:
-                logging.warning(f"⚠️ Failed to compile model: {e}")
-        
-        # Initialize tokenizer reference
-        self.tokenizer = None
-        
-        # Pre-compile loss function
-        self.loss_fn = self._create_optimized_loss()
-        
-        # Performance tracking
-        self.step_times = []
-        
-        self._log_initialization()
+                conv = json.loads(line.strip())
+                
+                # Validate conversation structure
+                if 'messages' not in conv or not conv['messages']:
+                    continue
+                
+                # Check message format
+                valid = True
+                for msg in conv['messages']:
+                    if 'role' not in msg or 'content' not in msg:
+                        valid = False
+                        break
+                
+                if valid:
+                    conversations.append(conv)
+                    
+                if max_conversations and len(conversations) >= max_conversations:
+                    break
+                    
+            except json.JSONDecodeError:
+                logging.warning(f"Skipping invalid JSON at line {line_no}")
+                continue
     
-    def _optimize_model(self):
-        """Apply aggressive model optimizations"""
-        # Fuse operations where possible
-        if hasattr(self.model, 'fuse_ops'):
-            self.model.fuse_ops()
-        
-        # Set optimal attention implementation
-        if hasattr(torch.nn.functional, 'scaled_dot_product_attention'):
-            # Use PyTorch's optimized attention
-            for layer in self.model.layers:
-                if hasattr(layer.self_attn, 'use_pytorch_attention'):
-                    layer.self_attn.use_pytorch_attention = True
-        
-        # Enable memory efficient attention patterns
-        for layer in self.model.layers:
-            if hasattr(layer.self_attn, 'enable_memory_efficient_attention'):
-                layer.self_attn.enable_memory_efficient_attention()
+    logging.info(f"Loaded {len(conversations)} valid conversations")
+    return conversations
+
+# =============================================================================
+# CONVERSATIONAL TRAINER
+# =============================================================================
+
+class ConversationTrainer:
+    """Trainer specifically optimized for conversational data."""
     
-    def _create_optimized_loss(self):
-        """Create optimized loss function"""
-        @torch.jit.script
-        def fast_cross_entropy(logits: torch.Tensor, targets: torch.Tensor, 
-                              ignore_index: int) -> torch.Tensor:
-            return F.cross_entropy(
-                logits.view(-1, logits.size(-1)), 
-                targets.view(-1), 
-                ignore_index=ignore_index,
-                reduction='mean'
-            )
-        return fast_cross_entropy
-    
-    def _log_initialization(self):
-        """Log initialization with performance info"""
-        logging.info("🚀 UltraFastTrainer Initialized with MAXIMUM optimizations")
-        logging.info("=" * 70)
-        logging.info(f"📝 Experiment: {self.experiment_name}")
-        logging.info(f"💻 Device: {self.device}")
-        logging.info(f"🔢 Precision: {self.precision_config.precision_type}")
-        logging.info(f"⚡ Mixed Precision: {self.use_amp}")
-        logging.info(f"🚀 Torch Compile: {TORCH_COMPILE_AVAILABLE}")
-        logging.info(f"🔥 Numba Acceleration: {NUMBA_AVAILABLE}")
+    def __init__(self, model: TransformerModel, tokenizer: ConversationTokenizer,
+                 config: TrainingConfig, device: torch.device):
+        self.model = model
+        self.tokenizer = tokenizer
+        self.config = config
+        self.device = device
         
-        if torch.cuda.is_available():
-            props = torch.cuda.get_device_properties(0)
-            logging.info(f"🔥 GPU: {props.name} ({props.total_memory // 1e9:.0f}GB)")
-            logging.info(f"   Compute Capability: {props.major}.{props.minor}")
-    
-    def prepare_optimizer_and_scheduler(self, total_steps: int):
-        """Prepare ultra-optimized optimizer and scheduler"""
-        # Optimized AdamW with better defaults
+        self.model = self.model.to(device)
+        
+        # Optimizer with different learning rates for different components
+        param_groups = [
+            {'params': [p for n, p in model.named_parameters() if 'embed' in n], 'lr': config.learning_rate * 0.1},
+            {'params': [p for n, p in model.named_parameters() if 'embed' not in n], 'lr': config.learning_rate}
+        ]
+        
         self.optimizer = AdamW(
-            self.model.parameters(),
-            lr=self.training_config.learning_rate,
-            weight_decay=self.training_config.weight_decay,
-            betas=(0.9, 0.95),  # Optimized betas
-            eps=1e-8,
-            fused=torch.cuda.is_available()  # Use fused AdamW if available
+            param_groups,
+            weight_decay=config.weight_decay,
+            betas=(0.9, 0.95),
+            fused=torch.cuda.is_available()
         )
         
-        # Fast scheduler setup
-        if self.training_config.warmup_steps is None:
-            warmup_steps = int(total_steps * self.training_config.warmup_ratio)
-        else:
-            warmup_steps = self.training_config.warmup_steps
+        self.use_amp = HAS_AMP and config.precision != "fp32"
+        self.scaler = GradScaler() if self.use_amp else None
         
-        # OneCycleLR for maximum speed
+        # Compile model
+        if config.compile and hasattr(torch, 'compile'):
+            try:
+                self.model = torch.compile(self.model)
+                logging.info("Model compiled successfully")
+            except Exception as e:
+                logging.warning(f"Model compilation failed: {e}")
+        
+        self.step = 0
+        self.scheduler = None
+    
+    def train(self, train_dataset: ConversationDataset, eval_dataset: Optional[ConversationDataset] = None):
+        """Main conversational training loop."""
+        
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=self.config.batch_size,
+            shuffle=True,
+            num_workers=self.config.num_workers,
+            pin_memory=True,
+            drop_last=True
+        )
+        
         self.scheduler = OneCycleLR(
             self.optimizer,
-            max_lr=self.training_config.learning_rate,
-            total_steps=total_steps,
-            pct_start=warmup_steps / total_steps,
-            anneal_strategy='cos',
-            div_factor=25.0,
-            final_div_factor=10000.0
+            max_lr=[pg['lr'] for pg in self.optimizer.param_groups],
+            total_steps=self.config.max_steps,
+            pct_start=self.config.warmup_steps / self.config.max_steps
         )
         
-        logging.info(f"📈 Ultra-fast optimizer prepared (total steps: {total_steps:,})")
-    
-    def create_fast_dataloader(self, dataset: Dataset) -> DataLoader:
-        """Create ultra-optimized dataloader"""
-        # Calculate optimal number of workers
-        num_workers = min(
-            self.training_config.num_workers,
-            max(1, os.cpu_count() // 2)
-        ) if self.training_config.use_dataloader_workers else 0
-        
-        # Ultra-fast dataloader settings
-        return DataLoader(
-            dataset,
-            batch_size=self.training_config.batch_size,
-            shuffle=True,
-            num_workers=num_workers,
-            pin_memory=True,
-            persistent_workers=num_workers > 0,  # Keep workers alive
-            prefetch_factor=6,  # Increased prefetch for speed
-            drop_last=True,
-            # Use memory-mapped files for large datasets
-            generator=torch.Generator().manual_seed(42)
-        )
-    
-    def train(self, train_dataset: Dataset, eval_dataset: Optional[Dataset] = None):
-        """Ultra-fast training loop with maximum optimizations"""
-        
-        # Create optimized data loaders
-        train_loader = self.create_fast_dataloader(train_dataset)
-        eval_loader = self.create_fast_dataloader(eval_dataset) if eval_dataset else None
-        
-        # Calculate training parameters
-        steps_per_epoch = len(train_loader) // self.training_config.gradient_accumulation_steps
-        if self.training_config.max_steps:
-            total_steps = self.training_config.max_steps
-            num_epochs = math.ceil(total_steps / steps_per_epoch)
-        else:
-            num_epochs = self.training_config.max_epochs
-            total_steps = steps_per_epoch * num_epochs
-        
-        # Prepare optimizer and scheduler
-        self.prepare_optimizer_and_scheduler(total_steps)
-        
-        # Calculate intervals
-        eval_steps = max(1, int(steps_per_epoch * 0.1)) if self.training_config.eval_steps is None else self.training_config.eval_steps
-        save_steps = max(1, int(steps_per_epoch * 0.2)) if self.training_config.save_steps is None else self.training_config.save_steps
-        
-        # Pre-allocate gradient accumulation variables
-        self.accumulated_loss = 0.0
-        self.accumulation_count = 0
-        
-        # Training info
-        logging.info("🏋️ Ultra-Fast Training Plan with MAXIMUM optimizations:")
-        logging.info(f"   Epochs: {num_epochs}")
-        logging.info(f"   Steps per epoch: {steps_per_epoch:,}")
-        logging.info(f"   Total steps: {total_steps:,}")
-        logging.info(f"   GPU Memory Allocated: {torch.cuda.memory_allocated() / 1e9:.2f}GB")
-        
-        # Start training with performance monitoring
-        logging.info("🎯 Starting ULTRA-FAST training with MAXIMUM speed...")
-        start_time = datetime.now()
-        
-        # Pre-compile first batch for torch.compile
-        if TORCH_COMPILE_AVAILABLE:
-            self._warmup_model(train_loader)
-        
-        for epoch in range(num_epochs):
-            self.current_epoch = epoch
-            epoch_loss = self._train_epoch_ultra_fast(
-                train_loader, eval_loader, eval_steps, save_steps
-            )
-            
-            logging.info(f"📊 Epoch {epoch + 1}/{num_epochs} | Loss: {epoch_loss:.6f} | "
-                        f"Speed: {self._calculate_speed():.1f} steps/sec")
-            
-            if self.training_config.max_steps and self.global_step >= self.training_config.max_steps:
-                break
-        
-        # Training completed
-        total_time = (datetime.now() - start_time).total_seconds()
-        avg_speed = self.global_step / total_time if total_time > 0 else 0
-        
-        # Final save
-        self._save_checkpoint(force_save=True, is_final=True, total_training_time=total_time)
-        
-        logging.info("✅ Ultra-fast training completed with MAXIMUM speed!")
-        logging.info(f"   Total time: {total_time:.1f}s ({total_time/3600:.2f}h)")
-        logging.info(f"   Average speed: {avg_speed:.2f} steps/sec")
-        logging.info(f"   Peak GPU memory: {torch.cuda.max_memory_allocated() / 1e9:.2f}GB")
-    
-    def _warmup_model(self, train_loader: DataLoader):
-        """Warmup model for torch.compile"""
-        logging.info("🔥 Warming up compiled model...")
-        self.model.train()
-        
-        # Run a few dummy batches to compile the graph
-        for i, batch in enumerate(train_loader):
-            if i >= 3:  # Only need a few batches
-                break
-                
-            batch = {k: v.to(self.device, non_blocking=True) for k, v in batch.items()}
-            
-            with autocast(enabled=self.use_amp, dtype=torch.bfloat16 if self.precision_config.precision_type == "bf16" else torch.float16):
-                outputs = self.model(
-                    input_ids=batch['input_ids'],
-                    attention_mask=batch.get('attention_mask'),
-                    return_dict=True
-                )
-                loss = self.loss_fn(
-                    outputs['logits'], 
-                    batch['labels'],
-                    self.tokenizer.vocab.get("<|pad|>", 0)
-                )
-            
-            if self.use_amp:
-                self.scaler.scale(loss).backward()
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
-            else:
-                loss.backward()
-                self.optimizer.step()
-            
-            self.optimizer.zero_grad()
-        
-        logging.info("✅ Model warmup completed")
-    
-    def _train_epoch_ultra_fast(self, train_loader: DataLoader, eval_loader: Optional[DataLoader],
-                               eval_steps: int, save_steps: int) -> float:
-        """Ultra-optimized training epoch with MAXIMUM speed"""
+        logging.info("Starting conversational training...")
+        logging.info(f"Training steps: {self.config.max_steps}")
+        logging.info(f"Batch size: {self.config.batch_size}")
+        logging.info(f"Gradient accumulation: {self.config.gradient_accumulation_steps}")
+        logging.info(f"Effective batch size: {self.config.batch_size * self.config.gradient_accumulation_steps}")
         
         self.model.train()
-        epoch_loss = 0.0
-        num_batches = 0
+        accumulation_loss = 0.0
+        conversation_count = 0
         
-        # Disable progress bar for maximum speed in production
-        use_progress_bar = len(train_loader) < 5000  # Reduced threshold for speed
-        iterator = tqdm(train_loader, desc=f"Epoch {self.current_epoch + 1}", leave=False, disable=not use_progress_bar)
-        
-        # Pre-allocate tensors to avoid repeated allocation
-        pad_token_id = self.tokenizer.vocab.get("<|pad|>", 0)
-        
-        for step, batch in enumerate(iterator):
-            step_start = torch.cuda.Event(enable_timing=True) if torch.cuda.is_available() else None
-            step_end = torch.cuda.Event(enable_timing=True) if torch.cuda.is_available() else None
-            
-            if step_start:
-                step_start.record()
-            
-            # Ultra-fast batch processing
-            batch = {k: v.to(self.device, non_blocking=True) for k, v in batch.items()}
-            
-            # Forward pass with maximum optimization
-            with autocast(
-                enabled=self.use_amp, 
-                dtype=torch.bfloat16 if self.precision_config.precision_type == "bf16" else torch.float16
-            ):
-                outputs = self.model(
-                    input_ids=batch['input_ids'],
-                    attention_mask=batch.get('attention_mask'),
-                    return_dict=True
-                )
-                
-                # Optimized loss calculation
-                loss = self.loss_fn(outputs['logits'], batch['labels'], pad_token_id)
-                loss = loss / self.training_config.gradient_accumulation_steps
-            
-            # Ultra-fast backward pass
-            if self.use_amp:
-                self.scaler.scale(loss).backward()
-            else:
-                loss.backward()
-            
-            self.accumulated_loss += loss.item()
-            self.accumulation_count += 1
-            epoch_loss += loss.item()
-            num_batches += 1
-            
-            # Gradient accumulation step
-            if self.accumulation_count >= self.training_config.gradient_accumulation_steps:
-                if self.use_amp:
-                    # Optimized gradient operations
-                    self.scaler.unscale_(self.optimizer)
-                    torch.nn.utils.clip_grad_norm_(
-                        self.model.parameters(), 
-                        self.training_config.max_grad_norm,
-                        error_if_nonfinite=False  # Don't error on inf/nan for speed
-                    )
-                    self.scaler.step(self.optimizer)
-                    self.scaler.update()
-                else:
-                    torch.nn.utils.clip_grad_norm_(
-                        self.model.parameters(), 
-                        self.training_config.max_grad_norm,
-                        error_if_nonfinite=False
-                    )
-                    self.optimizer.step()
-                
-                self.scheduler.step()
-                self.optimizer.zero_grad(set_to_none=True)  # Faster than zero_grad()
-                
-                self.global_step += 1
-                
-                # Record step time
-                if step_end:
-                    step_end.record()
-                    torch.cuda.synchronize()
-                    step_time = step_start.elapsed_time(step_end) / 1000.0  # Convert to seconds
-                    self.step_times.append(step_time)
-                    if len(self.step_times) > 100:  # Keep only recent times
-                        self.step_times.pop(0)
-                
-                # Fast logging (less frequent for speed)
-                if self.global_step % (self.logging_steps * 5) == 0:
-                    avg_loss = self.accumulated_loss / self.accumulation_count
-                    self._log_training_step_fast(avg_loss)
-                
-                # Reset accumulation
-                self.accumulated_loss = 0.0
-                self.accumulation_count = 0
-                
-                # Evaluation (less frequent for speed)
-                if eval_loader and self.global_step % eval_steps == 0:
-                    eval_loss = self._evaluate_fast(eval_loader)
-                    if eval_loss < self.best_loss:
-                        self.best_loss = eval_loss
-                
-                # Save checkpoint
-                if self.global_step % save_steps == 0:
-                    self._save_checkpoint()
-                
-                # Check max steps
-                if self.training_config.max_steps and self.global_step >= self.training_config.max_steps:
-                    break
-            
-            # Update progress bar less frequently
-            if use_progress_bar and step % 10 == 0:
-                iterator.set_postfix({
-                    'loss': f'{loss.item():.4f}',
-                    'lr': f'{self.scheduler.get_last_lr()[0]:.2e}',
-                    'step': self.global_step,
-                    'speed': f'{self._calculate_speed():.1f}/s'
-                })
-        
-        return epoch_loss / max(num_batches, 1)
-    
-    def _evaluate_fast(self, eval_loader: DataLoader) -> float:
-        """Ultra-fast evaluation"""
-        self.model.eval()
-        total_loss = 0.0
-        num_batches = 0
-        pad_token_id = self.tokenizer.vocab.get("<|pad|>", 0)
-        
-        with torch.no_grad():
-            # Limit evaluation size for speed
-            max_eval_batches = min(100, len(eval_loader))
-            
-            for i, batch in enumerate(eval_loader):
-                if i >= max_eval_batches:
+        while self.step < self.config.max_steps:
+            for batch in train_loader:
+                if self.step >= self.config.max_steps:
                     break
                 
                 batch = {k: v.to(self.device, non_blocking=True) for k, v in batch.items()}
                 
-                with autocast(
-                    enabled=self.use_amp,
-                    dtype=torch.bfloat16 if self.precision_config.precision_type == "bf16" else torch.float16
-                ):
-                    outputs = self.model(
-                        input_ids=batch['input_ids'],
-                        attention_mask=batch.get('attention_mask'),
-                        return_dict=True
-                    )
-                    loss = self.loss_fn(outputs['logits'], batch['labels'], pad_token_id)
+                with autocast(enabled=self.use_amp, 
+                             dtype=torch.bfloat16 if self.config.precision == "bf16" else torch.float16):
+                    logits = self.model(batch['input_ids'], batch['attention_mask'])
+                    
+                    # Compute loss with special token weighting
+                    loss = self.compute_conversation_loss(logits, batch['labels'])
+                    loss = loss / self.config.gradient_accumulation_steps
                 
-                total_loss += loss.item()
-                num_batches += 1
+                if self.use_amp:
+                    self.scaler.scale(loss).backward()
+                else:
+                    loss.backward()
+                
+                accumulation_loss += loss.item()
+                conversation_count += batch['input_ids'].size(0)
+                
+                # Update weights
+                if (self.step + 1) % self.config.gradient_accumulation_steps == 0:
+                    if self.use_amp:
+                        self.scaler.unscale_(self.optimizer)
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.max_grad_norm)
+                        self.scaler.step(self.optimizer)
+                        self.scaler.update()
+                    else:
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.config.max_grad_norm)
+                        self.optimizer.step()
+                    
+                    self.optimizer.zero_grad()
+                    self.scheduler.step()
+                    
+                    # Logging
+                    if (self.step + 1) % 100 == 0:
+                        lr = self.scheduler.get_last_lr()[0]
+                        conversations_per_sec = conversation_count / 100 if (self.step + 1) % 100 == 0 else 0
+                        logging.info(f"Step {self.step + 1}: loss={accumulation_loss:.6f}, "
+                                   f"lr={lr:.2e}, conv/s={conversations_per_sec:.1f}")
+                        conversation_count = 0
+                    
+                    # Evaluation
+                    if eval_dataset and (self.step + 1) % self.config.eval_interval == 0:
+                        eval_loss = self.evaluate(eval_dataset)
+                        logging.info(f"Eval loss: {eval_loss:.6f}")
+                        self.model.train()
+                    
+                    # Save checkpoint
+                    if (self.step + 1) % self.config.save_interval == 0:
+                        self.save_checkpoint()
+                    
+                    accumulation_loss = 0.0
+                
+                self.step += 1
         
-        self.model.train()
+        logging.info("Conversational training completed!")
+        self.save_checkpoint(final=True)
+    
+    def compute_conversation_loss(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        """Compute loss with special weighting for conversational tokens."""
+        # Standard cross-entropy loss
+        loss = F.cross_entropy(
+            logits.view(-1, logits.size(-1)),
+            labels.view(-1),
+            ignore_index=0,  # Ignore padding
+            reduction='none'
+        ).view_as(labels)
+        
+        # Apply weights to focus on important tokens
+        weights = torch.ones_like(labels, dtype=torch.float)
+        
+        # Higher weight for assistant responses (tokens after <|assistant|>)
+        assistant_token = self.tokenizer.special_tokens.get("<|assistant|>", -1)
+        if assistant_token != -1:
+            assistant_mask = (labels == assistant_token).float()
+            # Create a forward-fill mask for assistant responses
+            for i in range(1, labels.size(1)):
+                assistant_mask[:, i] = torch.max(assistant_mask[:, i], assistant_mask[:, i-1] * 0.9)
+            weights = weights + assistant_mask * 0.5  # 1.5x weight for assistant tokens
+        
+        # Apply weights and compute final loss
+        weighted_loss = loss * weights
+        mask = (labels != 0).float()  # Don't count padding tokens
+        
+        return weighted_loss.sum() / mask.sum().clamp(min=1)
+    
+    @torch.no_grad()
+    def evaluate(self, eval_dataset: ConversationDataset) -> float:
+        """Evaluate model on conversational eval dataset."""
+        self.model.eval()
+        
+        eval_loader = DataLoader(
+            eval_dataset,
+            batch_size=self.config.batch_size,
+            num_workers=self.config.num_workers,
+            pin_memory=True
+        )
+        
+        total_loss = 0.0
+        num_batches = 0
+        
+        for batch in eval_loader:
+            if num_batches >= 50:  # Limit eval time
+                break
+                
+            batch = {k: v.to(self.device, non_blocking=True) for k, v in batch.items()}
+            
+            with autocast(enabled=self.use_amp, 
+                         dtype=torch.bfloat16 if self.config.precision == "bf16" else torch.float16):
+                logits = self.model(batch['input_ids'], batch['attention_mask'])
+                loss = self.compute_conversation_loss(logits, batch['labels'])
+            
+            total_loss += loss.item()
+            num_batches += 1
+        
         return total_loss / max(num_batches, 1)
     
-    def _calculate_speed(self) -> float:
-        """Calculate current training speed"""
-        if len(self.step_times) < 2:
-            return 0.0
-        recent_times = self.step_times[-10:]  # Last 10 steps
-        avg_time = sum(recent_times) / len(recent_times)
-        return 1.0 / avg_time if avg_time > 0 else 0.0
-    
-    def _log_training_step_fast(self, loss: float):
-        """Fast logging with minimal overhead"""
-        logging.info(
-            f"Step {self.global_step:6,} | "
-            f"Loss: {loss:.6f} | "
-            f"Speed: {self._calculate_speed():.1f}/s"
-        )
-    
-    def _save_checkpoint(self, force_save: bool = False, is_final: bool = False,
-                        total_training_time: float = 0.0):
-        """Fast checkpoint saving"""
+    def save_checkpoint(self, final: bool = False):
+        """Save model checkpoint."""
+        os.makedirs("checkpoints", exist_ok=True)
+        suffix = "final" if final else f"step_{self.step}"
+        path = f"checkpoints/conversation_model_{suffix}.pt"
         
-        metadata = ModelMetadata(
-            model_name=self.experiment_name,
-            version="1.0",
-            model_config=self.model_config.__dict__,
-            training_config=self.training_config.__dict__,
-            precision_config=self.precision_config.__dict__,
-            data_config=self.data_config.__dict__,
-            epochs_trained=self.current_epoch,
-            total_training_time=total_training_time,
-            best_loss=self.best_loss,
-            best_perplexity=math.exp(min(self.best_loss, 20)),
-            performance_metrics={
-                "final_loss": self.best_loss,
-                "steps_trained": self.global_step,
-                "avg_speed": self._calculate_speed()
-            },
-            hardware_used=str(self.device),
-            notes=f"Ultra-fast training with MAXIMUM BPE optimizations completed at step {self.global_step}",
-            tags=["ultra_fast_training", "maximum_bpe_speed", self.precision_config.precision_type]
-        )
+        checkpoint = {
+            'model': self.model.state_dict(),
+            'optimizer': self.optimizer.state_dict(),
+            'scheduler': self.scheduler.state_dict() if self.scheduler else None,
+            'step': self.step,
+            'config': self.config,
+            'tokenizer_vocab': self.tokenizer.vocab,
+            'tokenizer_merges': self.tokenizer.merges
+        }
         
-        # Save using ModelManager
-        model_id = self.model_manager.save_model(
-            model=self.model,
-            tokenizer=self.tokenizer,
-            metadata=metadata,
-            optimizer=self.optimizer,
-            scheduler=self.scheduler
-        )
-        
-        if model_id:
-            logging.info(f"💾 Checkpoint saved: {model_id}")
-
-# ============================================================================
-# ULTRA-FAST DATA LOADING WITH MULTIPROCESSING
-# ============================================================================
-
-def process_data_chunk(args):
-    """Process a chunk of the file - moved to module level for multiprocessing"""
-    chunk_start, chunk_size, file_path, config_dict = args
+        torch.save(checkpoint, path)
+        logging.info(f"Saved checkpoint: {path}")
     
-    # Recreate config object in subprocess
-    data_config = DataConfig(**config_dict)
-    
-    texts = []
-    seen = set() if data_config.remove_duplicates else None
-    
-    with open(file_path, 'r', encoding='utf-8') as f:
-        f.seek(chunk_start)
+    @torch.no_grad()
+    def generate_response(self, prompt: str, max_new_tokens: int = 256, 
+                         temperature: float = 0.8, top_p: float = 0.9) -> str:
+        """Generate a conversational response to a prompt."""
+        self.model.eval()
         
-        # Skip partial line at start (except for first chunk)
-        if chunk_start > 0:
-            f.readline()
+        # Format prompt as conversation
+        conversation = {
+            'messages': [
+                {'role': 'prompter', 'content': prompt}
+            ]
+        }
         
-        bytes_read = 0
-        while bytes_read < chunk_size:
-            line = f.readline()
-            if not line:
+        # Encode input
+        input_tokens = self.tokenizer.encode_conversation(conversation)
+        
+        # Add assistant token to start response
+        input_tokens.append(self.tokenizer.special_tokens["<|assistant|>"])
+        
+        input_ids = torch.tensor([input_tokens], dtype=torch.long, device=self.device)
+        
+        # Generate
+        generated = input_ids.clone()
+        
+        for _ in range(max_new_tokens):
+            with autocast(enabled=self.use_amp, 
+                         dtype=torch.bfloat16 if self.config.precision == "bf16" else torch.float16):
+                logits = self.model(generated)
+            
+            next_token_logits = logits[0, -1, :] / temperature
+            
+            # Top-p sampling
+            if top_p < 1.0:
+                sorted_logits, sorted_indices = torch.sort(next_token_logits, descending=True)
+                cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+                sorted_indices_to_remove = cumulative_probs > top_p
+                sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+                sorted_indices_to_remove[..., 0] = 0
+                indices_to_remove = sorted_indices_to_remove.scatter(0, sorted_indices, sorted_indices_to_remove)
+                next_token_logits[indices_to_remove] = float('-inf')
+            
+            probs = F.softmax(next_token_logits, dim=-1)
+            next_token = torch.multinomial(probs, 1)
+            
+            generated = torch.cat([generated, next_token.unsqueeze(0)], dim=1)
+            
+            # Stop at conversation end or turn token
+            if next_token.item() in [
+                self.tokenizer.special_tokens.get("<|conversation_end|>", -1),
+                self.tokenizer.special_tokens.get("<|turn|>", -1),
+                self.tokenizer.special_tokens.get("</s>", -1)
+            ]:
                 break
-            
-            bytes_read += len(line.encode('utf-8'))
-            
-            try:
-                data = json.loads(line.strip())
-                text = extract_text_from_data(data, data_config)
-                
-                if text and filter_text(text, data_config, seen):
-                    texts.append(text)
-                    
-                    if (data_config.max_samples_train and 
-                        len(texts) >= data_config.max_samples_train // len(args) if len(args) > 4 else data_config.max_samples_train // 8):
-                        break
-                        
-            except (json.JSONDecodeError, Exception):
-                continue
-    
-    return texts
+        
+        # Extract response
+        response_tokens = generated[0][len(input_tokens):].cpu().tolist()
+        response = self.tokenizer.decode(response_tokens, skip_special_tokens=True)
+        
+        return response.strip()
 
-def load_data_ultra_fast(file_path: str, data_config: DataConfig) -> List[str]:
-    """Ultra-fast data loading with multiprocessing and streaming"""
-    import multiprocessing as mp
-    from concurrent.futures import ProcessPoolExecutor, as_completed
-    
-    logging.info(f"🚀 Ultra-fast loading data from: {file_path}")
-    
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"Training data file not found: {file_path}")
-    
-    # Get file size for progress tracking
-    file_size = os.path.getsize(file_path)
-    
-    # Calculate optimal chunk size based on file size and CPU count
-    num_processes = min(mp.cpu_count(), 12)  # Increased max processes
-    chunk_size = max(2 * 1024 * 1024, file_size // (num_processes * 4))  # Larger chunks
-    
-    # Create chunks
-    chunks = []
-    with open(file_path, 'rb') as f:
-        chunk_start = 0
-        while chunk_start < file_size:
-            chunks.append((chunk_start, chunk_size, file_path, data_config.__dict__))
-            chunk_start += chunk_size
-    
-    logging.info(f"   Processing {len(chunks)} chunks with {num_processes} processes...")
-    
-    # Process chunks in parallel
-    all_texts = []
-    with ProcessPoolExecutor(max_workers=num_processes) as executor:
-        future_to_chunk = {executor.submit(process_data_chunk, chunk): chunk for chunk in chunks}
-        
-        with tqdm(total=len(chunks), desc="🔥 Processing chunks") as pbar:
-            for future in as_completed(future_to_chunk):
-                chunk_texts = future.result()
-                all_texts.extend(chunk_texts)
-                pbar.update(1)
-    
-    # Apply final deduplication if needed
-    if data_config.remove_duplicates:
-        logging.info("   Final deduplication...")
-        seen = set()
-        deduplicated = []
-        for text in all_texts:
-            text_hash = hash(text)
-            if text_hash not in seen:
-                seen.add(text_hash)
-                deduplicated.append(text)
-        all_texts = deduplicated
-    
-    # Apply final sample limit
-    if data_config.max_samples_train and len(all_texts) > data_config.max_samples_train:
-        all_texts = all_texts[:data_config.max_samples_train]
-    
-    logging.info(f"✅ Ultra-fast loading completed: {len(all_texts):,} texts")
-    return all_texts
-
-def extract_text_from_data(data: dict, data_config: DataConfig) -> Optional[str]:
-    """Extract text from data dictionary"""
-    # Extract text based on common field names
-    text = None
-    for field in ['text', 'content', 'message', 'body', 'output']:
-        if field in data and data[field]:
-            text = data[field]
-            break
-    
-    # Handle conversation format
-    if not text and 'messages' in data:
-        messages = data['messages']
-        conversation_parts = []
-        
-        for msg in messages:
-            role = msg.get('role', '').lower()
-            content = msg.get('content', '').strip()
-            
-            if role == 'system':
-                conversation_parts.append(f"{data_config.system_token}{content}{data_config.end_token}")
-            elif role == 'user':
-                conversation_parts.append(f"{data_config.user_token}{content}{data_config.end_token}")
-            elif role == 'assistant':
-                conversation_parts.append(f"{data_config.assistant_token}{content}{data_config.end_token}")
-        
-        text = '\n'.join(conversation_parts)
-    
-    return text.strip() if text else None
-
-def filter_text(text: str, data_config: DataConfig, seen: Optional[set] = None) -> bool:
-    """Filter text based on criteria"""
-    if len(text) < data_config.min_text_length:
-        return False
-    
-    if data_config.max_text_length and len(text) > data_config.max_text_length:
-        text = text[:data_config.max_text_length]
-    
-    if data_config.lowercase:
-        text = text.lower()
-    
-    if data_config.remove_duplicates and seen is not None:
-        text_hash = hash(text)
-        if text_hash in seen:
-            return False
-        seen.add(text_hash)
-    
-    return True
-
-# ============================================================================
-# ULTRA-FAST MAIN FUNCTION
-# ============================================================================
-
-def setup_ultra_fast_environment():
-    """Setup environment for maximum performance"""
-    
-    # Set environment variables for performance
-    os.environ['OMP_NUM_THREADS'] = str(min(12, os.cpu_count()))  # Increased
-    os.environ['MKL_NUM_THREADS'] = str(min(12, os.cpu_count()))
-    os.environ['NUMEXPR_NUM_THREADS'] = str(min(12, os.cpu_count()))
-    
-    # CUDA optimizations
-    if torch.cuda.is_available():
-        # Enable optimizations
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
-        torch.backends.cudnn.benchmark = True
-        torch.backends.cudnn.deterministic = False
-        
-        # Set memory allocation strategy
-        os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:256'  # Increased
-        
-        # Optimize CUDA cache
-        torch.cuda.empty_cache()
-        
-        logging.info("🔥 CUDA optimizations enabled for maximum speed")
+# =============================================================================
+# MAIN TRAINING SCRIPT
+# =============================================================================
 
 def main():
-    """Ultra-fast main training function with MAXIMUM BPE optimizations"""
-    
-    # Setup ultra-fast environment
-    setup_ultra_fast_environment()
-    
+    """Main conversational training function."""
     # Setup logging
-    log_file = setup_logging(TRAINING_CONFIG["system"]["log_dir"])
-    
-    # Set random seed
-    seed = TRAINING_CONFIG["system"]["seed"]
-    torch.manual_seed(seed)
-    random.seed(seed)
-    np.random.seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-    
-    # Header
-    logging.info("🚀 ULTRA-FAST ModernSubwordTransformer Training with MAXIMUM BPE Speed")
-    logging.info("=" * 90)
-    logging.info(f"📝 Log file: {log_file}")
-    logging.info(f"🌱 Random seed: {seed}")
-    
-    # Performance info
-    logging.info("⚡ MAXIMUM Performance Optimizations:")
-    logging.info(f"   PyTorch: {torch.__version__}")
-    logging.info(f"   CUDA Available: {torch.cuda.is_available()}")
-    logging.info(f"   TF32 Enabled: {torch.backends.cuda.matmul.allow_tf32}")
-    logging.info(f"   cuDNN Benchmark: {torch.backends.cudnn.benchmark}")
-    logging.info(f"   Torch Compile: {TORCH_COMPILE_AVAILABLE}")
-    logging.info(f"   Numba BPE Acceleration: {NUMBA_AVAILABLE}")
-    
-    get_device_info()
-    
-    try:
-        # Parse configuration with fixed logging_steps handling
-        model_config, training_config, precision_config, data_config, experiment_name, data_path = parse_config()
-        
-        # Log configuration
-        logging.info("⚙️ Ultra-Fast Configuration with MAXIMUM optimizations:")
-        logging.info(f"   Experiment: {experiment_name}")
-        logging.info(f"   Model: {model_config.hidden_size}d × {model_config.num_layers}L")
-        logging.info(f"   Batch size: {training_config.batch_size}")
-        logging.info(f"   Precision: {precision_config.precision_type}")
-        logging.info(f"   Compile mode: {precision_config.compile_mode}")
-        
-        # Ultra-fast data loading
-        logging.info("🚀 Ultra-fast data loading with MAXIMUM speed...")
-        start_time = datetime.now()
-        texts = load_data_ultra_fast(data_path, data_config)
-        load_time = (datetime.now() - start_time).total_seconds()
-        logging.info(f"   Data loaded in {load_time:.1f}s ({len(texts)/load_time:.0f} texts/sec)")
-        
-        if len(texts) == 0:
-            raise ValueError("No valid texts found!")
-        
-        # Ultra-fast data split
-        eval_split = TRAINING_CONFIG["data"].get("eval_split", 0.1)
-        split_idx = int((1 - eval_split) * len(texts))
-        train_texts = texts[:split_idx]
-        eval_texts = texts[split_idx:] if eval_split > 0 else []
-        
-        logging.info(f"📊 Data split: {len(train_texts):,} train, {len(eval_texts):,} eval")
-        
-        # MAXIMUM SPEED BPE tokenizer training
-        logging.info("🚀 MAXIMUM SPEED BPE tokenizer training...")
-        start_time = datetime.now()
-        
-        tokenizer = UltraFastTokenizer()
-        tokenizer_texts = train_texts
-        if len(train_texts) > data_config.tokenizer_train_size:
-            # Use random sampling for speed
-            tokenizer_texts = random.sample(train_texts, data_config.tokenizer_train_size)
-        
-        # Create progress callback for BPE training
-        def bpe_progress_callback(progress, current, total):
-            if progress % 10 == 0:  # Every 10%
-                logging.info(f"🚀 BPE Progress: {progress:.1f}% ({current:,}/{total:,})")
-        
-        # Train with ultra-fast BPE
-        tokenizer.train_from_text_ultra_fast(
-            '\n'.join(tokenizer_texts), 
-            vocab_size=model_config.vocab_size,
-            min_freq=data_config.min_frequency,
-            progress_callback=bpe_progress_callback
-        )
-        
-        tokenizer_time = (datetime.now() - start_time).total_seconds()
-        logging.info(f"✅ MAXIMUM SPEED tokenizer trained in {tokenizer_time:.1f}s")
-        
-        # Update model config
-        model_config.vocab_size = tokenizer.vocab_size()
-        
-        # Extract logging_steps from config before creating trainer
-        logging_steps = TRAINING_CONFIG["training"]["logging_steps"]
-        
-        # Initialize ultra-fast trainer with logging_steps
-        logging.info("🚀 Initializing ultra-fast trainer with MAXIMUM optimizations...")
-        trainer = UltraFastTrainer(
-            model_config=model_config,
-            training_config=training_config,
-            precision_config=precision_config,
-            data_config=data_config,
-            experiment_name=experiment_name,
-            logging_steps=logging_steps
-        )
-        trainer.tokenizer = tokenizer
-        
-        # Create ultra-fast datasets
-        logging.info("🚀 Creating ultra-fast datasets with MAXIMUM caching...")
-        start_time = datetime.now()
-        
-        train_dataset = UltraFastDataset(
-            train_texts, tokenizer, model_config.seq_length - 1, data_config
-        )
-        
-        eval_dataset = None
-        if eval_texts:
-            eval_dataset = UltraFastDataset(
-                eval_texts, tokenizer, model_config.seq_length - 1, data_config
-            )
-        
-        dataset_time = (datetime.now() - start_time).total_seconds()
-        logging.info(f"   Datasets created in {dataset_time:.1f}s")
-        
-        # Memory info
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            memory_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
-            logging.info(f"💾 GPU Memory: {memory_gb:.1f}GB available")
-        
-        # Start ultra-fast training
-        logging.info("🎯 Starting ULTRA-FAST training with MAXIMUM BPE optimizations...")
-        training_start = datetime.now()
-        
-        trainer.train(train_dataset, eval_dataset)
-        
-        total_training_time = (datetime.now() - training_start).total_seconds()
-        
-        # Final statistics
-        logging.info("🎉 ULTRA-FAST Training with MAXIMUM BPE Speed Completed!")
-        logging.info("=" * 80)
-        logging.info(f"📊 Performance Summary:")
-        logging.info(f"   Data loading: {load_time:.1f}s")
-        logging.info(f"   MAXIMUM SPEED BPE training: {tokenizer_time:.1f}s")
-        logging.info(f"   Dataset creation: {dataset_time:.1f}s")
-        logging.info(f"   Model training: {total_training_time:.1f}s")
-        logging.info(f"   Total time: {(datetime.now() - training_start).total_seconds():.1f}s")
-        logging.info(f"   Average speed: {trainer._calculate_speed():.2f} steps/sec")
-        
-        if torch.cuda.is_available():
-            peak_memory = torch.cuda.max_memory_allocated() / 1e9
-            logging.info(f"   Peak GPU memory: {peak_memory:.2f}GB")
-        
-        # Print model summary
-        trainer.model_manager.print_model_summary()
-        
-        # Cleanup
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        
-    except KeyboardInterrupt:
-        logging.warning("⚠️ Training interrupted by user")
-        sys.exit(1)
-    except Exception as e:
-        logging.error(f"❌ Training failed: {str(e)}")
-        import traceback
-        logging.error(traceback.format_exc())
-        raise
-
-def setup_logging(log_dir: str = "logs") -> str:
-    """Enhanced logging setup"""
-    os.makedirs(log_dir, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = os.path.join(log_dir, f"ultra_fast_max_bpe_training_{timestamp}.log")
-    
-    formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler('conversation_training.log'),
+            logging.StreamHandler()
+        ]
     )
     
-    file_handler = logging.FileHandler(log_file, encoding='utf-8')
-    file_handler.setLevel(logging.INFO)
-    file_handler.setFormatter(formatter)
-    
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(formatter)
-    
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.INFO)
-    root_logger.addHandler(file_handler)
-    root_logger.addHandler(console_handler)
-    
-    return log_file
-
-def get_device_info():
-    """Enhanced device information"""
-    if torch.cuda.is_available():
-        device_count = torch.cuda.device_count()
-        logging.info("🔥 CUDA Devices Detected:")
-        
-        for i in range(device_count):
-            props = torch.cuda.get_device_properties(i)
-            memory_gb = props.total_memory / 1e9
-            compute_capability = f"{props.major}.{props.minor}"
-            
-            logging.info(f"   GPU {i}: {props.name}")
-            logging.info(f"     Memory: {memory_gb:.1f}GB")
-            logging.info(f"     Compute Capability: {compute_capability}")
-            logging.info(f"     Multi-Processors: {props.multi_processor_count}")
-        
-        logging.info(f"   CUDA Version: {torch.version.cuda}")
-        logging.info(f"   cuDNN Version: {torch.backends.cudnn.version()}")
-        
-        torch.cuda.empty_cache()
-        memory_allocated = torch.cuda.memory_allocated() / 1e9
-        memory_reserved = torch.cuda.memory_reserved() / 1e9
-        logging.info(f"   Current Memory: {memory_allocated:.1f}GB allocated, {memory_reserved:.1f}GB reserved")
-        
-    else:
-        logging.info("💻 Using CPU")
-        logging.info(f"   CPU Count: {torch.get_num_threads()}")
-
-def parse_config() -> Tuple[ModelConfig, TrainingConfig, PrecisionConfig, DataConfig, str, str]:
-    """Parse hardcoded configuration with fixed logging_steps handling"""
-    
-    data_cfg = TRAINING_CONFIG["data"]
-    data_config = DataConfig(
-        train_data_path=data_cfg["training_data_path"],
-        use_conversation_format=data_cfg["use_conversation_format"],
-        max_samples_train=data_cfg["max_samples_train"],
-        max_samples_eval=data_cfg["max_samples_eval"],
-        min_text_length=data_cfg["min_text_length"],
-        max_text_length=data_cfg["max_text_length"],
-        remove_duplicates=data_cfg["remove_duplicates"],
-        lowercase=data_cfg["lowercase"],
-        tokenizer_train_size=data_cfg["tokenizer_train_size"],
-        min_frequency=data_cfg["min_frequency"]
+    # Configuration
+    model_config = ModelConfig(
+        vocab_size=32000,  # Will be updated after tokenizer training
+        hidden_size=1024,  # Smaller for faster training
+        num_layers=12,
+        num_heads=16,
+        num_kv_heads=4,
+        seq_length=2048,
+        intermediate_size=2816
     )
     
-    model_cfg = TRAINING_CONFIG["model"]
-    if model_cfg["config_preset"] == "auto":
-        model_config, _, _, _ = auto_select_config()
-    elif model_cfg["config_preset"] == "tiny":
-        model_config, _, _, _ = ConfigPresets.tiny_debug()
-    elif model_cfg["config_preset"] == "research":
-        model_config, _, _, _ = ConfigPresets.research_7b()
-    elif model_cfg["config_preset"] == "custom":
-        custom_cfg = model_cfg["custom"]
-        model_config = ModelConfig(**custom_cfg)
-    else:
-        raise ValueError(f"Unknown model config preset: {model_cfg['config_preset']}")
-    
-    train_cfg = TRAINING_CONFIG["training"]
-    # Create TrainingConfig without logging_steps
     training_config = TrainingConfig(
-        batch_size=train_cfg["batch_size"],
-        gradient_accumulation_steps=train_cfg["gradient_accumulation_steps"],
-        max_epochs=train_cfg["max_epochs"],
-        max_steps=train_cfg["max_steps"],
-        learning_rate=train_cfg["learning_rate"],
-        weight_decay=train_cfg["weight_decay"],
-        warmup_ratio=train_cfg["warmup_ratio"],
-        scheduler_type=train_cfg["scheduler_type"],
-        optimizer_type=train_cfg["optimizer_type"],
-        max_grad_norm=train_cfg["max_grad_norm"],
-        eval_steps=train_cfg["eval_steps"],
-        save_steps=train_cfg["save_steps"],
-        save_total_limit=train_cfg["save_total_limit"],
-        use_dataloader_workers=train_cfg["use_dataloader_workers"],
-        num_workers=train_cfg["num_workers"]
+        batch_size=2,  # Small batch for conversation data
+        gradient_accumulation_steps=8,  # Larger effective batch
+        learning_rate=5e-4,
+        max_steps=20000,
+        warmup_steps=2000,
+        eval_interval=1000,
+        save_interval=2500,
+        precision="bf16" if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8 else "fp16"
     )
     
-    training_config.output_dir = TRAINING_CONFIG["system"]["output_dir"]
-    
-    if TRAINING_CONFIG["experiment"]["wandb_project"]:
-        training_config.wandb_project = TRAINING_CONFIG["experiment"]["wandb_project"]
-    
-    prec_cfg = TRAINING_CONFIG["precision"]
-    precision_config = PrecisionConfig(
-        precision_type=prec_cfg["precision_type"],
-        use_mixed_precision=prec_cfg["use_mixed_precision"],
-        use_compile=prec_cfg["use_compile"],
-        compile_mode=prec_cfg["compile_mode"],
-        use_dynamic_loss_scaling=prec_cfg["use_dynamic_loss_scaling"]
+    data_config = DataConfig(
+        max_conversations=10000  # Limit for faster experimentation
     )
     
-    if TRAINING_CONFIG["experiment"]["debug_mode"]:
-        logging.info("🐛 Debug mode enabled")
+    # Device setup
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    logging.info(f"Using device: {device}")
+    
+    if torch.cuda.is_available():
+        logging.info(f"GPU: {torch.cuda.get_device_name()}")
+        logging.info(f"GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.1f}GB")
+    
+    # Load conversational data
+    train_conversations = load_conversations(data_config.train_data_path, data_config.max_conversations)
+    eval_conversations = load_conversations(data_config.eval_data_path, data_config.max_conversations // 10)
+    
+    if not train_conversations:
+        logging.error("No training conversations loaded! Check your data paths.")
+        logging.error(f"Expected: {data_config.train_data_path}")
+        logging.error("Make sure you've run the dataset download script first.")
+        return 1
+    
+    logging.info(f"Loaded {len(train_conversations)} training conversations")
+    logging.info(f"Loaded {len(eval_conversations)} evaluation conversations")
+    
+    # Analyze conversation statistics
+    analyze_conversation_data(train_conversations)
+    
+    # Initialize and train tokenizer
+    tokenizer = ConversationTokenizer()
+    tokenizer.train_from_conversations(
+        train_conversations, 
+        vocab_size=data_config.vocab_size, 
+        min_freq=data_config.min_frequency
+    )
+    
+    # Update model config with actual vocab size
+    model_config.vocab_size = len(tokenizer.vocab)
+    logging.info(f"Updated model vocab size to: {model_config.vocab_size}")
+    
+    # Create datasets
+    train_dataset = ConversationDataset(train_conversations, tokenizer, data_config.seq_length)
+    eval_dataset = ConversationDataset(eval_conversations, tokenizer, data_config.seq_length) if eval_conversations else None
+    
+    # Initialize model
+    model = TransformerModel(model_config)
+    
+    # Initialize trainer
+    trainer = ConversationTrainer(model, tokenizer, training_config, device)
+    
+    # Start training
+    logging.info("="*60)
+    logging.info("STARTING CONVERSATIONAL TRAINING")
+    logging.info("="*60)
+    
+    trainer.train(train_dataset, eval_dataset)
+    
+    # Save tokenizer
+    save_tokenizer(tokenizer)
+    
+    # Test generation
+    test_generation(trainer)
+    
+    logging.info("Conversational training completed successfully!")
+    return 0
+
+def analyze_conversation_data(conversations: List[Dict]):
+    """Analyze the structure of conversational data."""
+    logging.info("Analyzing conversational data...")
+    
+    total_messages = 0
+    role_counts = Counter()
+    turn_counts = []
+    
+    for conv in conversations:
+        messages = conv.get('messages', [])
+        turn_counts.append(len(messages))
+        total_messages += len(messages)
+        
+        for msg in messages:
+            role_counts[msg.get('role', 'unknown')] += 1
+    
+    logging.info(f"Total conversations: {len(conversations)}")
+    logging.info(f"Total messages: {total_messages}")
+    logging.info(f"Average turns per conversation: {np.mean(turn_counts):.1f}")
+    logging.info(f"Turn distribution - Min: {min(turn_counts)}, Max: {max(turn_counts)}")
+    
+    logging.info("Role distribution:")
+    for role, count in role_counts.most_common():
+        logging.info(f"  {role}: {count:,} ({count/total_messages*100:.1f}%)")
+
+def save_tokenizer(tokenizer: ConversationTokenizer):
+    """Save tokenizer vocabulary and merges."""
+    os.makedirs("checkpoints", exist_ok=True)
+    
+    with open('checkpoints/conversation_tokenizer_vocab.json', 'w') as f:
+        json.dump(tokenizer.vocab, f, indent=2)
+    
+    with open('checkpoints/conversation_tokenizer_merges.txt', 'w') as f:
+        f.write("#version: 0.2\n")
+        for merge in tokenizer.merges:
+            f.write(f"{merge[0]} {merge[1]}\n")
+    
+    logging.info("Saved conversation tokenizer files")
+
+def test_generation(trainer: ConversationTrainer):
+    """Test text generation with the trained model."""
+    logging.info("Testing conversation generation...")
+    
+    test_prompts = [
+        "How can I learn Python programming?",
+        "What's the weather like today?",
+        "Explain quantum computing in simple terms.",
+        "How do I make a good impression in a job interview?"
+    ]
+    
+    for prompt in test_prompts:
+        logging.info(f"\nPrompt: {prompt}")
+        response = trainer.generate_response(prompt, max_new_tokens=128, temperature=0.8)
+        logging.info(f"Response: {response}")
+
+# =============================================================================
+# CONFIGURATION PRESETS FOR CONVERSATIONS
+# =============================================================================
+
+class ConversationConfigPresets:
+    """Predefined configurations optimized for conversational training."""
+    
+    @staticmethod
+    def debug_tiny() -> Tuple[ModelConfig, TrainingConfig, DataConfig]:
+        """Tiny model for debugging conversational training."""
         model_config = ModelConfig(
-            vocab_size=1000,
+            vocab_size=5000,
             hidden_size=256,
             num_layers=4,
-            num_heads=4,
-            seq_length=512
+            num_heads=8,
+            num_kv_heads=2,
+            seq_length=512,
+            intermediate_size=688
         )
-        training_config.batch_size = 2
-        training_config.max_epochs = 2
-        data_config.max_samples_train = 1000
-        precision_config.use_mixed_precision = False
-        precision_config.use_compile = False
+        
+        training_config = TrainingConfig(
+            batch_size=1,
+            gradient_accumulation_steps=2,
+            max_steps=500,
+            warmup_steps=50,
+            eval_interval=100,
+            save_interval=250,
+            precision="fp32",
+            compile=False
+        )
+        
+        data_config = DataConfig(
+            seq_length=512,
+            vocab_size=5000,
+            max_conversations=100
+        )
+        
+        return model_config, training_config, data_config
     
-    if TRAINING_CONFIG["experiment"]["name"] == "auto":
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        experiment_name = f"ultra_fast_max_bpe_transformer_{timestamp}"
-    else:
-        experiment_name = TRAINING_CONFIG["experiment"]["name"]
+    @staticmethod
+    def small_conversational() -> Tuple[ModelConfig, TrainingConfig, DataConfig]:
+        """Small model optimized for conversation."""
+        model_config = ModelConfig(
+            vocab_size=32000,
+            hidden_size=1024,
+            num_layers=12,
+            num_heads=16,
+            num_kv_heads=4,
+            seq_length=2048,
+            intermediate_size=2816
+        )
+        
+        training_config = TrainingConfig(
+            batch_size=2,
+            gradient_accumulation_steps=8,
+            learning_rate=5e-4,
+            max_steps=20000,
+            warmup_steps=2000,
+            eval_interval=1000,
+            save_interval=2500,
+            precision="bf16"
+        )
+        
+        data_config = DataConfig(
+            seq_length=2048,
+            vocab_size=32000,
+            max_conversations=10000
+        )
+        
+        return model_config, training_config, data_config
     
-    return model_config, training_config, precision_config, data_config, experiment_name, data_config.train_data_path
+    @staticmethod
+    def production_conversational() -> Tuple[ModelConfig, TrainingConfig, DataConfig]:
+        """Production-ready conversational model."""
+        model_config = ModelConfig(
+            vocab_size=32000,
+            hidden_size=2048,
+            num_layers=24,
+            num_heads=16,
+            num_kv_heads=8,
+            seq_length=4096,
+            intermediate_size=5504
+        )
+        
+        training_config = TrainingConfig(
+            batch_size=1,
+            gradient_accumulation_steps=16,
+            learning_rate=3e-4,
+            max_steps=100000,
+            warmup_steps=5000,
+            eval_interval=2000,
+            save_interval=10000,
+            precision="bf16"
+        )
+        
+        data_config = DataConfig(
+            seq_length=4096,
+            vocab_size=32000,
+            max_conversations=None  # Use all data
+        )
+        
+        return model_config, training_config, data_config
+
+# =============================================================================
+# UTILITIES AND HELPERS
+# =============================================================================
+
+def load_checkpoint(checkpoint_path: str, model: TransformerModel, 
+                   optimizer: torch.optim.Optimizer = None) -> Dict:
+    """Load model checkpoint."""
+    logging.info(f"Loading checkpoint from {checkpoint_path}")
+    
+    checkpoint = torch.load(checkpoint_path, map_location='cpu')
+    model.load_state_dict(checkpoint['model'])
+    
+    if optimizer and 'optimizer' in checkpoint:
+        optimizer.load_state_dict(checkpoint['optimizer'])
+    
+    return checkpoint
+
+def estimate_training_time(num_conversations: int, config: TrainingConfig, 
+                          device_name: str = "unknown") -> str:
+    """Estimate training time based on configuration."""
+    # Rough estimates based on empirical data
+    base_time_per_step = {
+        'cpu': 2.0,
+        'gpu_slow': 0.5,  # Older GPUs
+        'gpu_fast': 0.1   # Modern GPUs like A100
+    }
+    
+    device_type = 'cpu'
+    if 'cuda' in str(device_name).lower():
+        if any(gpu in device_name.lower() for gpu in ['a100', 'h100', '4090']):
+            device_type = 'gpu_fast'
+        else:
+            device_type = 'gpu_slow'
+    
+    time_per_step = base_time_per_step[device_type]
+    total_seconds = config.max_steps * time_per_step
+    
+    hours = total_seconds // 3600
+    minutes = (total_seconds % 3600) // 60
+    
+    return f"Estimated training time: {hours:.0f}h {minutes:.0f}m (on {device_type})"
+
+def create_conversation_from_text(user_text: str, assistant_text: str) -> Dict:
+    """Helper to create a conversation dict from text pairs."""
+    return {
+        'conversation_id': 'synthetic',
+        'messages': [
+            {'role': 'prompter', 'content': user_text, 'turn': 1},
+            {'role': 'assistant', 'content': assistant_text, 'turn': 2}
+        ],
+        'total_turns': 2
+    }
 
 if __name__ == "__main__":
-    main()
+    exit(main())
