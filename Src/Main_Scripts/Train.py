@@ -3,14 +3,13 @@
 
 import json
 import logging
-import os
 import time
 import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union, Iterator
 import warnings
-
+import gc, torch
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -19,6 +18,11 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import OneCycleLR
 import numpy as np
 import tiktoken
+import os
+
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+gc.collect()
+torch.cuda.empty_cache()
 
 # High-performance imports
 try:
@@ -54,8 +58,8 @@ class Config:
     dropout: float = 0.0
     
     # Training parameters
-    batch_size: int = 4
-    gradient_accumulation_steps: int = 8
+    batch_size: int = 1
+    gradient_accumulation_steps: int = 4
     learning_rate: float = 3e-4
     weight_decay: float = 0.1
     max_steps: int = 10000  # Reduced from 50000
@@ -204,14 +208,17 @@ class RotaryEmbedding(nn.Module):
         self._sin_cached = None
     
     def forward(self, seq_len: int, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
-        if seq_len > self._seq_len_cached or self._cos_cached is None or self._cos_cached.device != device:
-            self._seq_len_cached = seq_len
-            t = torch.arange(seq_len, device=device, dtype=torch.float32)
-            freqs = torch.outer(t, self.inv_freq.to(device))
-            emb = torch.cat((freqs, freqs), dim=-1)
-            self._cos_cached = emb.cos()
-            self._sin_cached = emb.sin()
-        return self._cos_cached[:seq_len], self._sin_cached[:seq_len]
+              if seq_len > self._seq_len_cached or self._cos_cached is None or self._cos_cached.device != device:
+                    self._seq_len_cached = seq_len
+                    t = torch.arange(seq_len, device=device, dtype=torch.float32)
+                    freqs = torch.outer(t, self.inv_freq.to(device))
+                    emb = torch.cat((freqs, freqs), dim=-1)
+
+                    self._cos_cached = emb.cos().clone()
+                    self._sin_cached = emb.sin().clone()
+
+              return self._cos_cached[:seq_len], self._sin_cached[:seq_len]
+
 
 def apply_rotary_pos_emb(q: torch.Tensor, k: torch.Tensor, 
                         cos: torch.Tensor, sin: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -882,7 +889,7 @@ class ConfigPresets:
             intermediate_size=2048,
             
             # Training config
-            batch_size=8,
+            batch_size=2,
             gradient_accumulation_steps=4,
             learning_rate=5e-4,
             max_steps=10000,  # Reduced from 50000
@@ -905,7 +912,7 @@ class ConfigPresets:
             intermediate_size=4096,
             
             # Training config
-            batch_size=4,
+            batch_size=2,
             gradient_accumulation_steps=8,
             learning_rate=3e-4,
             max_steps=20000,  # Reduced from 100000
