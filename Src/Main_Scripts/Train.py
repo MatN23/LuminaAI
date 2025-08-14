@@ -3,13 +3,14 @@
 
 import json
 import logging
+import os
 import time
 import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union, Iterator
 import warnings
-import gc, torch
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -18,11 +19,6 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import OneCycleLR
 import numpy as np
 import tiktoken
-import os
-
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-gc.collect()
-torch.cuda.empty_cache()
 
 # High-performance imports
 try:
@@ -58,8 +54,8 @@ class Config:
     dropout: float = 0.0
     
     # Training parameters
-    batch_size: int = 1
-    gradient_accumulation_steps: int = 4
+    batch_size: int = 4
+    gradient_accumulation_steps: int = 8
     learning_rate: float = 3e-4
     weight_decay: float = 0.1
     max_steps: int = 10000  # Reduced from 50000
@@ -68,7 +64,7 @@ class Config:
     save_steps: int = 2000  # Reduced from 5000
     max_grad_norm: float = 1.0
     precision: str = "fp16"
-    compile: bool = True
+    compile: bool = False  # Disabled by default to avoid CUDA graph issues
     
     # Data parameters  
     train_data_path: str = "oasst1_data/oasst1_train.jsonl"
@@ -199,26 +195,39 @@ class RMSNorm(nn.Module):
         return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps) * self.weight
 
 class RotaryEmbedding(nn.Module):
+    """CUDA Graph compatible RoPE implementation."""
     def __init__(self, dim: int, max_seq_len: int = 8192, theta: float = 10000.0):
         super().__init__()
+        self.dim = dim
+        self.max_seq_len = max_seq_len
         inv_freq = 1.0 / (theta ** (torch.arange(0, dim, 2).float() / dim))
         self.register_buffer("inv_freq", inv_freq, persistent=False)
-        self._seq_len_cached = 0
-        self._cos_cached = None
-        self._sin_cached = None
+        
+        # Pre-compute and cache embeddings for maximum sequence length
+        self._build_cache(max_seq_len)
+    
+    def _build_cache(self, seq_len: int):
+        """Build cache for cos/sin embeddings."""
+        t = torch.arange(seq_len, dtype=torch.float32)
+        freqs = torch.outer(t, self.inv_freq)
+        emb = torch.cat((freqs, freqs), dim=-1)
+        
+        # Register as buffers to make them CUDA graph compatible
+        self.register_buffer("cos_cached", emb.cos(), persistent=False)
+        self.register_buffer("sin_cached", emb.sin(), persistent=False)
+        self._cached_seq_len = seq_len
     
     def forward(self, seq_len: int, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
-              if seq_len > self._seq_len_cached or self._cos_cached is None or self._cos_cached.device != device:
-                    self._seq_len_cached = seq_len
-                    t = torch.arange(seq_len, device=device, dtype=torch.float32)
-                    freqs = torch.outer(t, self.inv_freq.to(device))
-                    emb = torch.cat((freqs, freqs), dim=-1)
-
-                    self._cos_cached = emb.cos().clone()
-                    self._sin_cached = emb.sin().clone()
-
-              return self._cos_cached[:seq_len], self._sin_cached[:seq_len]
-
+        """Return cos/sin embeddings for the given sequence length."""
+        # Extend cache if needed
+        if seq_len > self._cached_seq_len:
+            self._build_cache(max(seq_len, self._cached_seq_len * 2))
+        
+        # Move to correct device if needed
+        cos = self.cos_cached[:seq_len].to(device)
+        sin = self.sin_cached[:seq_len].to(device)
+        
+        return cos, sin
 
 def apply_rotary_pos_emb(q: torch.Tensor, k: torch.Tensor, 
                         cos: torch.Tensor, sin: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -514,13 +523,16 @@ class ConversationTrainer:
         self.dtype = torch.bfloat16 if config.precision == "bf16" else torch.float16
         self.scaler = GradScaler() if config.precision == "fp16" else None
         
-        # Compile model
+        # Compile model with better error handling
         if config.compile and hasattr(torch, 'compile'):
             try:
-                self.model = torch.compile(self.model, mode='reduce-overhead')
+                logging.info("Attempting to compile model...")
+                # Use less aggressive compilation mode to avoid CUDA graph issues
+                self.model = torch.compile(self.model, mode='default', disable=False)
                 logging.info("Model compiled successfully")
             except Exception as e:
                 logging.warning(f"Model compilation failed: {e}")
+                logging.info("Continuing without compilation")
         
         self.global_step = 0
         self.scheduler = None
@@ -584,6 +596,10 @@ class ConversationTrainer:
     def train_step(self, batch: Dict[str, torch.Tensor]) -> float:
         """Single training step."""
         self.model.train()
+        
+        # Mark CUDA graph step if using compiled model
+        if hasattr(torch.compiler, 'cudagraph_mark_step_begin'):
+            torch.compiler.cudagraph_mark_step_begin()
         
         # Move batch to device
         batch = {k: v.to(self.device, non_blocking=True) for k, v in batch.items()}
@@ -867,12 +883,12 @@ class ConfigPresets:
             # Fast training
             batch_size=2,
             gradient_accumulation_steps=2,
-            max_steps=500,  # Reduced from 1000
+            max_steps=500,
             warmup_ratio=0.1,
-            eval_steps=100,  # Reduced from 200
-            save_steps=200,  # Reduced from 500
+            eval_steps=100,
+            save_steps=200,
             precision="fp32",
-            compile=False,
+            compile=False,  # Disabled for debugging
             num_workers=0
         )
     
@@ -889,14 +905,15 @@ class ConfigPresets:
             intermediate_size=2048,
             
             # Training config
-            batch_size=2,
+            batch_size=8,
             gradient_accumulation_steps=4,
             learning_rate=5e-4,
-            max_steps=10000,  # Reduced from 50000
+            max_steps=10000,
             warmup_ratio=0.1,
-            eval_steps=500,   # Reduced from 1000
-            save_steps=2000,  # Reduced from 5000
-            num_workers=2,    # Reduced from default
+            eval_steps=500,
+            save_steps=2000,
+            num_workers=2,
+            compile=False,  # Safer default
         )
     
     @staticmethod
@@ -912,14 +929,15 @@ class ConfigPresets:
             intermediate_size=4096,
             
             # Training config
-            batch_size=2,
+            batch_size=4,
             gradient_accumulation_steps=8,
             learning_rate=3e-4,
-            max_steps=20000,  # Reduced from 100000
+            max_steps=20000,
             warmup_ratio=0.1,
-            eval_steps=1000,  # Reduced from 2000
-            save_steps=4000,  # Reduced from 10000
-            num_workers=2,    # Reduced from default
+            eval_steps=1000,
+            save_steps=4000,
+            num_workers=2,
+            compile=False,  # Safer default
         )
     
     @staticmethod
@@ -938,11 +956,12 @@ class ConfigPresets:
             batch_size=2,
             gradient_accumulation_steps=16,
             learning_rate=2e-4,
-            max_steps=40000,  # Reduced from 200000
+            max_steps=40000,
             warmup_ratio=0.05,
-            eval_steps=2000,  # Reduced from 2500
-            save_steps=8000,  # Reduced from 10000
-            num_workers=2,    # Reduced from default
+            eval_steps=2000,
+            save_steps=8000,
+            num_workers=2,
+            compile=False,  # Safer default
         )
 
 # =============================================================================
@@ -1259,6 +1278,7 @@ def main():
     logging.info(f"  Learning rate: {config.learning_rate:.2e}")
     logging.info(f"  Precision: {config.precision}")
     logging.info(f"  Gradient accumulation steps: {config.gradient_accumulation_steps}")
+    logging.info(f"  Compilation enabled: {config.compile}")
     
     # Estimate training time
     if torch.cuda.is_available():
