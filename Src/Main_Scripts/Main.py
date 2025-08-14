@@ -1,11 +1,5 @@
-#!/usr/bin/env python3
-"""
-Production-Ready Conversational Transformer Training System
-Entry Point - Main.py
-
-This is the main entry point for the training system.
-Run with: python Main.py [arguments]
-"""
+# Copyright (c) 2025 Matias Nielsen. All rights reserved.
+# Licensed under the Custom License below.
 
 import os
 import sys
