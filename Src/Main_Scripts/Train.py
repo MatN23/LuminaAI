@@ -67,8 +67,8 @@ class Config:
     compile: bool = True
     
     # Data parameters  
-    train_data_path: str = "oasst1_data/oasst1_train"
-    eval_data_path: str = "oasst1_data/oasst1_validation"
+    train_data_path: str = "oasst1_data/oasst1_train.jsonl"
+    eval_data_path: str = "oasst1_data/oasst1_validation.jsonl"
     num_workers: int = 8
     assistant_loss_weight: float = 2.0
     max_conversations_per_file: int = 10000  # For memory management
@@ -1071,148 +1071,6 @@ def setup_logging(log_file: str = "training.log"):
     logging.info(f"PyTorch version: {torch.__version__}")
     logging.info(f"Flash Attention available: {HAS_FLASH_ATTN}")
 
-def main():
-    """Main training function."""
-    import argparse
-    
-    parser = argparse.ArgumentParser(description="Train conversational transformer")
-    parser.add_argument("--config", type=str, choices=["debug", "small", "medium", "large"],
-                       default="small", help="Configuration preset")
-    parser.add_argument("--train_data", type=str, required=True, 
-                       help="Path to training data (JSONL format)")
-    parser.add_argument("--eval_data", type=str, 
-                       help="Path to evaluation data (JSONL format)")
-    parser.add_argument("--resume", type=str, 
-                       help="Path to checkpoint to resume from")
-    parser.add_argument("--create_sample_data", action="store_true",
-                       help="Create sample data for testing")
-    parser.add_argument("--validate_data", action="store_true", 
-                       help="Validate data format before training")
-    args = parser.parse_args()
-    
-    # Setup logging
-    setup_logging()
-    
-    # Create sample data if requested
-    if args.create_sample_data:
-        logging.info("Creating sample training data...")
-        create_sample_data("data/sample_train.jsonl", 5000)
-        create_sample_data("data/sample_eval.jsonl", 500)
-        logging.info("Sample data created. Update --train_data and --eval_data paths.")
-        return 0
-    
-    # Get configuration
-    config_map = {
-        "debug": ConfigPresets.debug,
-        "small": ConfigPresets.small,
-        "medium": ConfigPresets.medium,
-        "large": ConfigPresets.large
-    }
-    
-    config = config_map[args.config]()
-    config.train_data_path = args.train_data
-    if args.eval_data:
-        config.eval_data_path = args.eval_data
-    
-    logging.info(f"Using {args.config} configuration")
-    logging.info(f"Model parameters: ~{estimate_parameters(config):,}")
-    
-    # Initialize tokenizer
-    tokenizer = ConversationTokenizer("gpt2")
-    config.vocab_size = tokenizer.vocab_size
-    
-    logging.info(f"Tokenizer initialized (vocab_size={tokenizer.vocab_size})")
-    
-    # Validate data if requested
-    if args.validate_data:
-        logging.info("Validating training data...")
-        stats = validate_data(config.train_data_path, tokenizer)
-        
-        logging.info(f"Validation results:")
-        logging.info(f"  Total conversations: {stats['total_conversations']:,}")
-        logging.info(f"  Valid conversations: {stats['valid_conversations']:,}")
-        
-        if stats.get('avg_token_length'):
-            logging.info(f"  Avg token length: {stats['avg_token_length']:.1f}")
-            logging.info(f"  Token length range: {stats['min_token_length']}-{stats['max_token_length']}")
-        
-        if stats['errors']:
-            logging.warning(f"Found {len(stats['errors'])} errors:")
-            for error in stats['errors'][:10]:  # Show first 10 errors
-                logging.warning(f"  {error}")
-        
-        if stats['valid_conversations'] == 0:
-            logging.error("No valid conversations found! Check your data format.")
-            return 1
-    
-    # Create datasets
-    logging.info("Creating datasets...")
-    train_dataset = ConversationDataset(config.train_data_path, tokenizer, config, "train")
-    
-    eval_dataset = None
-    if args.eval_data and os.path.exists(config.eval_data_path):
-        eval_dataset = ConversationDataset(config.eval_data_path, tokenizer, config, "eval")
-    
-    # Create dataloaders
-    train_dataloader = create_dataloader(train_dataset, config, shuffle=True)
-    eval_dataloader = create_dataloader(eval_dataset, config, shuffle=False) if eval_dataset else None
-    
-    # Initialize model
-    logging.info("Initializing model...")
-    model = TransformerModel(config)
-    
-    # Initialize trainer
-    trainer = ConversationTrainer(model, tokenizer, config)
-    
-    # Resume from checkpoint if requested
-    start_step = 0
-    if args.resume:
-        start_step = trainer.load_checkpoint(args.resume)
-    
-    # Log training info
-    logging.info("Training configuration:")
-    logging.info(f"  Max steps: {config.max_steps:,}")
-    logging.info(f"  Effective batch size: {config.effective_batch_size:,}")
-    logging.info(f"  Learning rate: {config.learning_rate:.2e}")
-    logging.info(f"  Precision: {config.precision}")
-    logging.info(f"  Gradient accumulation steps: {config.gradient_accumulation_steps}")
-    
-    # Estimate training time
-    if torch.cuda.is_available():
-        device_name = torch.cuda.get_device_name()
-    else:
-        device_name = "CPU"
-    
-    estimated_time = estimate_training_time(config.max_steps - start_step, config, device_name)
-    logging.info(f"Estimated training time: {estimated_time}")
-    
-    # Start training
-    logging.info("Starting training...")
-    try:
-        trainer.train(train_dataloader, eval_dataloader)
-    except KeyboardInterrupt:
-        logging.info("Training interrupted by user")
-        trainer.save_checkpoint(trainer.global_step, final=True)
-    except Exception as e:
-        logging.error(f"Training failed: {e}")
-        return 1
-    
-    # Test generation
-    logging.info("Testing generation...")
-    test_prompts = [
-        "How do I learn Python programming?",
-        "Explain machine learning in simple terms.",
-        "What are the benefits of exercise?",
-    ]
-    
-    for prompt in test_prompts:
-        logging.info(f"\nPrompt: {prompt}")
-        response = trainer.generate(prompt, max_new_tokens=128)
-        logging.info(f"Response: {response}")
-    
-    logging.info("Training completed successfully!")
-    return 0
-
 def estimate_parameters(config: Config) -> int:
     """Estimate total model parameters."""
     # Embedding parameters
@@ -1275,6 +1133,147 @@ def estimate_training_time(steps: int, config: Config, device_name: str) -> str:
     minutes = int((total_seconds % 3600) // 60)
     
     return f"{hours}h {minutes}m"
+
+def main():
+    """Main training function - no command line arguments needed."""
+    
+    # Setup logging
+    setup_logging()
+    
+    # Configuration setup - modify these as needed
+    USE_CONFIG = "small"  # Options: "debug", "small", "medium", "large"
+    CREATE_SAMPLE_DATA = True  # Set to True to create sample data
+    VALIDATE_DATA = True  # Set to True to validate data before training
+    RESUME_CHECKPOINT = None  # Path to checkpoint if resuming
+    
+    # Data paths
+    TRAIN_DATA_PATH = "data/sample_train.jsonl"
+    EVAL_DATA_PATH = "data/sample_eval.jsonl"
+    
+    # Create sample data if requested and doesn't exist
+    if CREATE_SAMPLE_DATA:
+        if not os.path.exists(TRAIN_DATA_PATH):
+            logging.info("Creating sample training data...")
+            create_sample_data(TRAIN_DATA_PATH, 5000)
+        
+        if not os.path.exists(EVAL_DATA_PATH):
+            logging.info("Creating sample evaluation data...")
+            create_sample_data(EVAL_DATA_PATH, 500)
+        
+        if not os.path.exists(TRAIN_DATA_PATH):
+            logging.error("Failed to create sample data!")
+            return 1
+    
+    # Get configuration
+    config_map = {
+        "debug": ConfigPresets.debug,
+        "small": ConfigPresets.small,
+        "medium": ConfigPresets.medium,
+        "large": ConfigPresets.large
+    }
+    
+    config = config_map[USE_CONFIG]()
+    config.train_data_path = TRAIN_DATA_PATH
+    config.eval_data_path = EVAL_DATA_PATH
+    
+    logging.info(f"Using {USE_CONFIG} configuration")
+    logging.info(f"Model parameters: ~{estimate_parameters(config):,}")
+    
+    # Initialize tokenizer
+    tokenizer = ConversationTokenizer("gpt2")
+    config.vocab_size = tokenizer.vocab_size
+    
+    logging.info(f"Tokenizer initialized (vocab_size={tokenizer.vocab_size})")
+    
+    # Validate data if requested
+    if VALIDATE_DATA:
+        logging.info("Validating training data...")
+        stats = validate_data(config.train_data_path, tokenizer)
+        
+        logging.info(f"Validation results:")
+        logging.info(f"  Total conversations: {stats['total_conversations']:,}")
+        logging.info(f"  Valid conversations: {stats['valid_conversations']:,}")
+        
+        if stats.get('avg_token_length'):
+            logging.info(f"  Avg token length: {stats['avg_token_length']:.1f}")
+            logging.info(f"  Token length range: {stats['min_token_length']}-{stats['max_token_length']}")
+        
+        if stats['errors']:
+            logging.warning(f"Found {len(stats['errors'])} errors:")
+            for error in stats['errors'][:10]:  # Show first 10 errors
+                logging.warning(f"  {error}")
+        
+        if stats['valid_conversations'] == 0:
+            logging.error("No valid conversations found! Check your data format.")
+            return 1
+    
+    # Create datasets
+    logging.info("Creating datasets...")
+    train_dataset = ConversationDataset(config.train_data_path, tokenizer, config, "train")
+    
+    eval_dataset = None
+    if os.path.exists(config.eval_data_path):
+        eval_dataset = ConversationDataset(config.eval_data_path, tokenizer, config, "eval")
+    
+    # Create dataloaders
+    train_dataloader = create_dataloader(train_dataset, config, shuffle=True)
+    eval_dataloader = create_dataloader(eval_dataset, config, shuffle=False) if eval_dataset else None
+    
+    # Initialize model
+    logging.info("Initializing model...")
+    model = TransformerModel(config)
+    
+    # Initialize trainer
+    trainer = ConversationTrainer(model, tokenizer, config)
+    
+    # Resume from checkpoint if requested
+    start_step = 0
+    if RESUME_CHECKPOINT and os.path.exists(RESUME_CHECKPOINT):
+        start_step = trainer.load_checkpoint(RESUME_CHECKPOINT)
+    
+    # Log training info
+    logging.info("Training configuration:")
+    logging.info(f"  Max steps: {config.max_steps:,}")
+    logging.info(f"  Effective batch size: {config.effective_batch_size:,}")
+    logging.info(f"  Learning rate: {config.learning_rate:.2e}")
+    logging.info(f"  Precision: {config.precision}")
+    logging.info(f"  Gradient accumulation steps: {config.gradient_accumulation_steps}")
+    
+    # Estimate training time
+    if torch.cuda.is_available():
+        device_name = torch.cuda.get_device_name()
+    else:
+        device_name = "CPU"
+    
+    estimated_time = estimate_training_time(config.max_steps - start_step, config, device_name)
+    logging.info(f"Estimated training time: {estimated_time}")
+    
+    # Start training
+    logging.info("Starting training...")
+    try:
+        trainer.train(train_dataloader, eval_dataloader)
+    except KeyboardInterrupt:
+        logging.info("Training interrupted by user")
+        trainer.save_checkpoint(trainer.global_step, final=True)
+    except Exception as e:
+        logging.error(f"Training failed: {e}")
+        return 1
+    
+    # Test generation
+    logging.info("Testing generation...")
+    test_prompts = [
+        "How do I learn Python programming?",
+        "Explain machine learning in simple terms.",
+        "What are the benefits of exercise?",
+    ]
+    
+    for prompt in test_prompts:
+        logging.info(f"\nPrompt: {prompt}")
+        response = trainer.generate(prompt, max_new_tokens=128)
+        logging.info(f"Response: {response}")
+    
+    logging.info("Training completed successfully!")
+    return 0
 
 if __name__ == "__main__":
     exit(main())
