@@ -58,18 +58,18 @@ class Config:
     gradient_accumulation_steps: int = 8
     learning_rate: float = 3e-4
     weight_decay: float = 0.1
-    max_steps: int = 50000
+    max_steps: int = 10000  # Reduced from 50000
     warmup_ratio: float = 0.1
-    eval_steps: int = 1000
-    save_steps: int = 5000
+    eval_steps: int = 500   # Reduced from 1000
+    save_steps: int = 2000  # Reduced from 5000
     max_grad_norm: float = 1.0
-    precision: str = "bf16"
+    precision: str = "fp16"
     compile: bool = True
     
     # Data parameters  
     train_data_path: str = "oasst1_data/oasst1_train.jsonl"
     eval_data_path: str = "oasst1_data/oasst1_validation.jsonl"
-    num_workers: int = 8
+    num_workers: int = 2  # Reduced from 8 to match system recommendation
     assistant_loss_weight: float = 2.0
     max_conversations_per_file: int = 10000  # For memory management
     
@@ -283,7 +283,18 @@ class GroupedQueryAttention(nn.Module):
                 causal_mask = torch.triu(torch.ones(L, L, device=x.device, dtype=torch.bool), diagonal=1)
                 scores.masked_fill_(causal_mask, float('-inf'))
             else:
-                scores = scores + attention_mask
+                # Fix the broadcasting issue: reshape attention_mask from [B, L] to [B, 1, 1, L]
+                if attention_mask.dim() == 2:  # [batch_size, seq_len]
+                    attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)  # [batch_size, 1, 1, seq_len]
+                    # Create causal mask and combine with attention mask
+                    causal_mask = torch.triu(torch.ones(L, L, device=x.device, dtype=attention_mask.dtype), diagonal=1)
+                    # Convert boolean mask to additive mask (0 for valid, -inf for invalid)
+                    causal_mask = causal_mask * float('-inf')
+                    # Combine masks
+                    combined_mask = attention_mask + causal_mask.unsqueeze(0).unsqueeze(0)
+                    scores = scores + combined_mask
+                else:
+                    scores = scores + attention_mask
             
             attn = F.softmax(scores, dim=-1, dtype=torch.float32).to(q.dtype)
             out = torch.matmul(attn, v)
@@ -570,7 +581,7 @@ class ConversationTrainer:
         # Move batch to device
         batch = {k: v.to(self.device, non_blocking=True) for k, v in batch.items()}
         
-        with autocast(enabled=self.use_amp, dtype=self.dtype):
+        with torch.amp.autocast("cuda", enabled=self.use_amp, dtype=self.dtype):
             logits = self.model(batch['input_ids'], batch['attention_mask'])
             loss = self.compute_loss(logits, batch['labels'], batch['loss_weights'])
             loss = loss / self.config.gradient_accumulation_steps
@@ -849,10 +860,10 @@ class ConfigPresets:
             # Fast training
             batch_size=2,
             gradient_accumulation_steps=2,
-            max_steps=1000,
+            max_steps=500,  # Reduced from 1000
             warmup_ratio=0.1,
-            eval_steps=200,
-            save_steps=500,
+            eval_steps=100,  # Reduced from 200
+            save_steps=200,  # Reduced from 500
             precision="fp32",
             compile=False,
             num_workers=0
@@ -874,10 +885,11 @@ class ConfigPresets:
             batch_size=8,
             gradient_accumulation_steps=4,
             learning_rate=5e-4,
-            max_steps=50000,
+            max_steps=10000,  # Reduced from 50000
             warmup_ratio=0.1,
-            eval_steps=1000,
-            save_steps=5000,
+            eval_steps=500,   # Reduced from 1000
+            save_steps=2000,  # Reduced from 5000
+            num_workers=2,    # Reduced from default
         )
     
     @staticmethod
@@ -896,10 +908,11 @@ class ConfigPresets:
             batch_size=4,
             gradient_accumulation_steps=8,
             learning_rate=3e-4,
-            max_steps=100000,
+            max_steps=20000,  # Reduced from 100000
             warmup_ratio=0.1,
-            eval_steps=2000,
-            save_steps=10000,
+            eval_steps=1000,  # Reduced from 2000
+            save_steps=4000,  # Reduced from 10000
+            num_workers=2,    # Reduced from default
         )
     
     @staticmethod
@@ -918,10 +931,11 @@ class ConfigPresets:
             batch_size=2,
             gradient_accumulation_steps=16,
             learning_rate=2e-4,
-            max_steps=200000,
+            max_steps=40000,  # Reduced from 200000
             warmup_ratio=0.05,
-            eval_steps=2500,
-            save_steps=10000,
+            eval_steps=2000,  # Reduced from 2500
+            save_steps=8000,  # Reduced from 10000
+            num_workers=2,    # Reduced from default
         )
 
 # =============================================================================
@@ -1147,8 +1161,8 @@ def main():
     RESUME_CHECKPOINT = None  # Path to checkpoint if resuming
     
     # Data paths
-    TRAIN_DATA_PATH = "data/sample_train.jsonl"
-    EVAL_DATA_PATH = "data/sample_eval.jsonl"
+    TRAIN_DATA_PATH = "oasst1_data/train.jsonl"
+    EVAL_DATA_PATH = "oasst1_data/validation.jsonl"
     
     # Create sample data if requested and doesn't exist
     if CREATE_SAMPLE_DATA:
