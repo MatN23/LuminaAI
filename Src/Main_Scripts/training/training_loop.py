@@ -1,7 +1,5 @@
-"""
-Training Loop Implementation
-Contains the main training loop with comprehensive monitoring.
-"""
+# Copyright (c) 2025 Matias Nielsen. All rights reserved.
+# Licensed under the Custom License below.
 
 import math
 import time

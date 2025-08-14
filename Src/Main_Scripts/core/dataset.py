@@ -1,7 +1,5 @@
-"""
-Dataset Module
-Enhanced dataset handling with validation and monitoring.
-"""
+# Copyright (c) 2025 Matias Nielsen. All rights reserved.
+# Licensed under the Custom License below. dataset handling with validation and monitoring.
 
 import json
 import logging

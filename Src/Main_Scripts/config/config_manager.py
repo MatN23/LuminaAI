@@ -1,7 +1,5 @@
-"""
-Configuration Management Module
-Handles all configuration settings and presets for the training system.
-"""
+# Copyright (c) 2025 Matias Nielsen. All rights reserved.
+# Licensed under the Custom License below.
 
 import yaml
 from dataclasses import dataclass, asdict

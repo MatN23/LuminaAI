@@ -1,7 +1,5 @@
-"""
-Data Processing Utilities
-Enhanced data processing and validation functions.
-"""
+# Copyright (c) 2025 Matias Nielsen. All rights reserved.
+# Licensed under the Custom License below.
 
 import json
 import logging

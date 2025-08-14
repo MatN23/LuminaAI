@@ -1,7 +1,5 @@
-"""
-Enhanced Training Module
-Main trainer class with comprehensive monitoring and fault tolerance.
-"""
+# Copyright (c) 2025 Matias Nielsen. All rights reserved.
+# Licensed under the Custom License below.
 
 import math
 import time

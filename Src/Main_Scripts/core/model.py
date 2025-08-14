@@ -1,7 +1,5 @@
-"""
-Model Architecture Module
-Contains the transformer model implementation with enhanced stability features.
-"""
+# Copyright (c) 2025 Matias Nielsen. All rights reserved.
+# Licensed under the Custom License below.
 
 import math
 import logging

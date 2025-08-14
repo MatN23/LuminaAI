@@ -1,7 +1,5 @@
-"""
-Training Orchestrator Module
-Orchestrates training with fault tolerance and monitoring.
-"""
+# Copyright (c) 2025 Matias Nielsen. All rights reserved.
+# Licensed under the Custom License below.
 
 import json
 import logging

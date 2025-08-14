@@ -1,7 +1,5 @@
-"""
-Environment Utilities
-Environment validation and system resource estimation.
-"""
+# Copyright (c) 2025 Matias Nielsen. All rights reserved.
+# Licensed under the Custom License below.
 
 import shutil
 import torch

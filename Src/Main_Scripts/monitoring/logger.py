@@ -1,7 +1,5 @@
-"""
-Production Logging and Monitoring Module
-Enhanced logging with structured format and monitoring backends.
-"""
+# Copyright (c) 2025 Matias Nielsen. All rights reserved.
+# Licensed under the Custom License below.
 
 import json
 import logging

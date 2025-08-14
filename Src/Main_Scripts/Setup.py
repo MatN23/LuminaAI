@@ -1,198 +1,141 @@
-# Copyright (c) 2025 Matias Nielsen. All rights reserved.
-# Licensed under the Custom License below.
+#!/usr/bin/env python3
+"""
+Setup and Installation Script
+Creates directory structure and validates environment.
+"""
 
 import os
 import sys
-import subprocess
-import importlib.util
+import logging
 from pathlib import Path
 
-def check_python_version():
-    """Check if Python version is compatible."""
-    if sys.version_info < (3, 8):
-        print("❌ Python 3.8 or higher is required!")
-        print(f"Current version: {sys.version}")
-        return False
-    print(f"✅ Python version: {sys.version.split()[0]}")
-    return True
 
-def check_and_install_packages():
-    """Check and install required packages."""
+def setup_directories():
+    """Create necessary directory structure."""
+    directories = [
+        'data',
+        'checkpoints', 
+        'experiments',
+        'logs',
+        'backups',
+        'config',
+        'core',
+        'training',
+        'monitoring',
+        'utils'
+    ]
+    
+    for directory in directories:
+        Path(directory).mkdir(exist_ok=True)
+        # Create __init__.py files for Python packages
+        if directory in ['core', 'training', 'monitoring', 'utils', 'config']:
+            init_file = Path(directory) / '__init__.py'
+            if not init_file.exists():
+                init_file.touch()
+    
+    print("✓ Directory structure created")
+
+
+def check_dependencies():
+    """Check if required dependencies are installed."""
     required_packages = [
-        ("torch", "torch>=2.0.0"),
-        ("datasets", "datasets>=2.14.0"),
-        ("huggingface_hub", "huggingface_hub"),
-        ("numpy", "numpy"),
-        ("tqdm", "tqdm"),
+        'torch',
+        'numpy', 
+        'tiktoken',
+        'yaml',
+        'psutil'
     ]
     
     missing_packages = []
     
-    print("🔍 Checking required packages...")
-    
-    for package_name, pip_name in required_packages:
+    for package in required_packages:
         try:
-            importlib.import_module(package_name)
-            print(f"✅ {package_name} is installed")
+            __import__(package)
+            print(f"✓ {package} is installed")
         except ImportError:
-            print(f"❌ {package_name} is missing")
-            missing_packages.append(pip_name)
+            missing_packages.append(package)
+            print(f"✗ {package} is missing")
     
     if missing_packages:
-        print(f"\n📦 Installing missing packages: {', '.join(missing_packages)}")
-        try:
-            subprocess.check_call([
-                sys.executable, "-m", "pip", "install", "--upgrade"
-            ] + missing_packages)
-            print("✅ All packages installed successfully!")
-        except subprocess.CalledProcessError as e:
-            print(f"❌ Failed to install packages: {e}")
-            return False
-    
-    return True
-
-def check_required_files():
-    """Check if all required files are present."""
-    required_files = [
-        "model_manager.py",
-        "word_transformer.py",
-        "Train.py",
-        "Dataset_download.py"
-    ]
-    
-    missing_files = []
-    
-    print("📁 Checking required files...")
-    for file_name in required_files:
-        if Path(file_name).exists():
-            print(f"✅ {file_name}")
-        else:
-            print(f"❌ {file_name} is missing")
-            missing_files.append(file_name)
-    
-    if missing_files:
-        print(f"\n❌ Missing files: {', '.join(missing_files)}")
-        print("Please ensure all required files are in the current directory.")
+        print("\nMissing packages detected. Install them with:")
+        print(f"pip install {' '.join(missing_packages)}")
         return False
     
     return True
 
-def check_torch_device():
-    """Check available PyTorch devices."""
-    try:
-        import torch
-        
-        print("🖥️  Checking available devices...")
-        
-        if torch.cuda.is_available():
-            print(f"✅ CUDA available: {torch.cuda.get_device_name()}")
-            print(f"   Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB")
-            return "cuda"
-        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-            print("✅ Apple Silicon (MPS) available")
-            return "mps"
-        else:
-            print("⚠️  Using CPU (training will be slower)")
-            return "cpu"
-    
-    except ImportError:
-        print("❌ PyTorch not available")
-        return None
 
-def download_dataset():
-    """Download the OASST1 dataset."""
-    dataset_dir = Path("oasst1_data")
-    train_file = dataset_dir / "oasst1_train.jsonl"
-    val_file = dataset_dir / "oasst1_validation.jsonl"
+def create_sample_data():
+    """Create sample training data for testing."""
+    from utils.data_processing import create_sample_data
     
-    if train_file.exists() and val_file.exists():
-        print("✅ Dataset files already exist")
-        return True
+    # Create sample training data
+    train_path = "data/train.jsonl"
+    eval_path = "data/eval.jsonl"
     
-    print("📥 Downloading OASST1 dataset...")
+    if not Path(train_path).exists():
+        create_sample_data(train_path, num_conversations=1000)
+        print(f"✓ Created sample training data: {train_path}")
+    
+    if not Path(eval_path).exists():
+        create_sample_data(eval_path, num_conversations=100)
+        print(f"✓ Created sample evaluation data: {eval_path}")
+
+
+def validate_setup():
+    """Validate the complete setup."""
+    print("\nValidating setup...")
+    
+    # Check if we can import our modules
     try:
-        result = subprocess.run([sys.executable, "Dataset_download.py"], 
-                              capture_output=True, text=True)
-        if result.returncode == 0:
-            print("✅ Dataset downloaded successfully!")
-            return True
-        else:
-            print(f"❌ Dataset download failed: {result.stderr}")
-            return False
-    except Exception as e:
-        print(f"❌ Error downloading dataset: {e}")
+        from config.config_manager import Config
+        from core.tokenizer import ConversationTokenizer
+        from core.model import TransformerModel
+        print("✓ All modules import successfully")
+    except ImportError as e:
+        print(f"✗ Import error: {e}")
         return False
-
-def estimate_training_time(device_type):
-    """Estimate training time based on device."""
-    estimates = {
-        "cuda": "2-6 hours (depending on GPU)",
-        "mps": "4-8 hours (Apple Silicon)",
-        "cpu": "12-24 hours (very slow, not recommended)"
-    }
     
-    return estimates.get(device_type, "Unknown")
-
-def run_training():
-    """Run the training script."""
-    print("🚀 Starting training...")
-    print("Note: You can interrupt training with Ctrl+C")
-    print("The best model will be saved automatically.")
-    print("-" * 50)
-    
+    # Check if we can create a basic config
     try:
-        subprocess.run([sys.executable, "Train.py"])
-    except KeyboardInterrupt:
-        print("\n⚠️  Training interrupted by user")
+        config = Config()
+        print("✓ Configuration system works")
     except Exception as e:
-        print(f"❌ Training failed: {e}")
+        print(f"✗ Configuration error: {e}")
+        return False
+    
+    return True
+
 
 def main():
-    """Main setup and run function."""
-    print("=" * 60)
-    print("🤖 OASST1 Word Transformer Training Setup")
-    print("=" * 60)
-    
-    # Check Python version
-    if not check_python_version():
-        return 1
-    
-    # Check and install packages
-    if not check_and_install_packages():
-        return 1
-    
-    # Check required files
-    if not check_required_files():
-        return 1
-    
-    # Check PyTorch device
-    device_type = check_torch_device()
-    if device_type is None:
-        return 1
-    
-    # Show training estimate
-    time_estimate = estimate_training_time(device_type)
-    print(f"⏱️  Estimated training time: {time_estimate}")
-    
-    # Download dataset
-    if not download_dataset():
-        return 1
-    
-    print("\n" + "=" * 60)
-    print("✅ Setup completed successfully!")
+    """Main setup function."""
+    print("Setting up Production Conversational Transformer Training System...")
     print("=" * 60)
     
-    # Ask user if they want to start training
+    # Setup directories
+    setup_directories()
+    
+    # Check dependencies
+    if not check_dependencies():
+        print("\nPlease install missing dependencies and run setup again.")
+        sys.exit(1)
+    
+    # Create sample data
     try:
-        response = input("\n🚀 Start training now? (y/n): ").strip().lower()
-        if response in ['y', 'yes']:
-            run_training()
-        else:
-            print("👍 Setup complete. Run 'python Train.py' when ready to train.")
-    except KeyboardInterrupt:
-        print("\n👍 Setup complete. Run 'python Train.py' when ready to train.")
+        create_sample_data()
+    except Exception as e:
+        print(f"Warning: Could not create sample data: {e}")
     
-    return 0
+    # Validate setup
+    if validate_setup():
+        print("\n" + "=" * 60)
+        print("✓ Setup completed successfully!")
+        print("\nYou can now run training with:")
+        print("python Main.py --config debug --test-generation")
+    else:
+        print("\n" + "=" * 60)
+        print("✗ Setup validation failed")
+        sys.exit(1)
+
 
 if __name__ == "__main__":
-    exit(main())
+    main()
