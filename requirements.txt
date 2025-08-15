@@ -123,3 +123,5 @@ python-dotenv>=1.0.0
 # Intel Math Kernel Library (optional, for Intel CPUs)
 mkl>=2023.2.0; platform_machine == "x86_64"
 intel-extension-for-pytorch>=2.1.0; platform_machine == "x86_64"
+
+pytest>=7.4.0
