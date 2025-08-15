@@ -73,9 +73,9 @@ def main():
     estimate_time = True            # Set to False to skip time estimation
     
     # Advanced overrides (set to None to use preset defaults)
-    epochs_override = None          # e.g., 10
+    epochs_override = 100          # e.g., 10
     learning_rate_override = None   # e.g., 1e-4
-    batch_size_override = None      # e.g., 8
+    batch_size_override = 4      # e.g., 8
     
     # ================================
     # END CONFIGURATION SECTION
