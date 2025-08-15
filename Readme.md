@@ -1,4 +1,4 @@
-# Production-Ready Conversational Transformer Training System
+# LuminaAI, A Production-Ready Conversational Transformer Training System
 
 A modular, production-ready system for training conversational transformers with comprehensive monitoring, fault tolerance, and debugging capabilities.
 
