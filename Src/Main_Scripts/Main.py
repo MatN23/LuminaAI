@@ -64,7 +64,7 @@ def main():
     # ================================
     # Modify these variables to customize behavior:
     
-    config_preset = 'debug'          # Options: 'debug', 'small', 'medium', 'large'
+    config_preset = 'large'          # Options: 'debug', 'small', 'medium', 'large'
     train_data_path = 'oasst1_data/train.jsonl'  # Path to training data
     eval_data_path = 'oasst1_data/validation_conversations.jsonl'  # Path to evaluation data
     seed = 42
