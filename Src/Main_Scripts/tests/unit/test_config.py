@@ -1,3 +1,6 @@
+# Copyright (c) 2025 Matias Nielsen. All rights reserved.
+# Licensed under the Custom License below.
+
 import pytest
 import tempfile
 from pathlib import Path

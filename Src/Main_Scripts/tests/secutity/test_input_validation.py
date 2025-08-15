@@ -1,4 +1,6 @@
-# tests/security/test_input_validation.py
+# Copyright (c) 2025 Matias Nielsen. All rights reserved.
+# Licensed under the Custom License below.
+
 import pytest
 from core.tokenizer import ConversationTokenizer
 

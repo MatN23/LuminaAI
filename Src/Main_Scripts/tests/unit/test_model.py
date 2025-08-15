@@ -1,4 +1,6 @@
-# tests/unit/test_model.py
+# Copyright (c) 2025 Matias Nielsen. All rights reserved.
+# Licensed under the Custom License below.
+
 import pytest
 import torch
 from core.model import TransformerModel, estimate_parameters, RMSNorm, RotaryEmbedding
