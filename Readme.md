@@ -41,8 +41,7 @@ A modular, production-ready system for training conversational transformers with
 
 1. **Clone and setup**:
 ```bash
-git clone <repository>
-cd conversational-transformer
+git clone https://github.com/MatN23/LuminaAI.git
 ```
 
 2. **Install dependencies**:
