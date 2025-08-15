@@ -88,12 +88,12 @@ python Main.py --config medium --epochs 10 --experiment-name my_production_run
 
 ## ⚙️ Configuration Presets
 
-| Preset | Parameters | Memory | Use Case | Training Time* |
-|--------|------------|---------|----------|----------------|
-| `debug` | ~6M | ~2GB | Testing & debugging | Minutes |
-| `small` | ~50M | ~8GB | Limited resources | Hours |
-| `medium` | ~400M | ~16GB | Serious training | Days |
-| `large` | ~1.2B | ~32GB+ | Production scale | Weeks |
+| Preset | Parameters | Memory | Use Case |
+|--------|------------|---------|----------|
+| `debug` | ~6M | ~2GB | Testing & debugging |
+| `small` | ~50M | ~8GB | Limited resources |
+| `medium` | ~400M | ~16GB | Serious training |
+| `large` | ~1.2B | ~32GB+ | Production scale |
 
 *Approximate times vary based on dataset size and hardware
 
@@ -305,12 +305,6 @@ This project is licensed under a Custom License. See [LICENSE](LICENSE) file for
 - **Open Assistant** for high-quality conversation datasets
 - **Anthropic** for constitutional AI and safety research
 - **Research Community** for advances in attention mechanisms and model architecture
-
-## 📞 Support & Community
-
-- **Issues**: [GitHub Issues](https://github.com/MatN23/LuminaAI/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/MatN23/LuminaAI/discussions)
-- **Documentation**: [Wiki](https://github.com/MatN23/LuminaAI/wiki)
 
 ---
 
