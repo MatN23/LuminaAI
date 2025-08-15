@@ -190,7 +190,7 @@ python Main.py --config small --batch-size 2 --grad-accum 8
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under a custom License - see the LICENSE file for details.
 
 ## 🙏 Acknowledgments
 
