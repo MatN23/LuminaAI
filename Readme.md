@@ -65,7 +65,7 @@ python Main.py --config debug --test-generation
 
 ### 2. Small Model Training
 ```bash
-python Main.py --config small --train-data data/train.jsonl --eval-data data/eval.jsonl
+python Main.py --config small --train-data oasst1_data/oasst1_train.jsonl --eval-data data/eval.jsonl
 ```
 
 ### 3. Production Training

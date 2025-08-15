@@ -4,7 +4,6 @@
 import os
 import sys
 import logging
-import argparse
 import traceback
 from pathlib import Path
 from datetime import datetime
@@ -53,78 +52,42 @@ def create_directory_structure():
 
 
 def main():
-    """Enhanced main function with comprehensive CLI and error handling."""
+    """Simplified main function with default settings."""
     # Setup basic logging first
     setup_logging_basic()
     
     # Create directory structure
     create_directory_structure()
     
-    parser = argparse.ArgumentParser(
-        description='Production-Ready Conversational Transformer Training System',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Quick debug run
-  python Main.py --config debug --test-generation
-  
-  # Production training
-  python Main.py --config medium --train-data data/train.jsonl --eval-data data/eval.jsonl
-  
-  # Resume training
-  python Main.py --config medium --resume checkpoints/model_epoch_005.pt
-  
-  # Data processing and validation
-  python Main.py --process-oasst raw_data.jsonl processed_data.jsonl
-  python Main.py --validate-data processed_data.jsonl --create-report
-  
-  # Custom configuration
-  python Main.py --config small --epochs 10 --lr 1e-4 --batch-size 8
-        """
-    )
+    # ================================
+    # EASY CONFIGURATION SECTION
+    # ================================
+    # Modify these variables to customize behavior:
     
-    # Configuration options
-    parser.add_argument('--config', choices=['debug', 'small', 'medium', 'large'], 
-                       default='debug', help='Configuration preset')
-    parser.add_argument('--config-file', type=str, help='Load config from YAML file')
+    config_preset = 'debug'          # Options: 'debug', 'small', 'medium', 'large'
+    train_data_path = 'oasst1_data/train.jsonl'  # Path to training data
+    eval_data_path = 'oasst1_data/validation_conversations.jsonl'  # Path to evaluation data
+    seed = 42
+    test_generation = True           # Set to False to skip generation testing
+    check_environment = True         # Set to False to skip environment check
+    estimate_time = True            # Set to False to skip time estimation
     
-    # Data options
-    parser.add_argument('--train-data', type=str, default='data/train.jsonl',
-                       help='Training data path')
-    parser.add_argument('--eval-data', type=str, default='data/eval.jsonl',
-                       help='Evaluation data path')
+    # Advanced overrides (set to None to use preset defaults)
+    epochs_override = None          # e.g., 10
+    learning_rate_override = None   # e.g., 1e-4
+    batch_size_override = None      # e.g., 8
     
-    # Training overrides
-    parser.add_argument('--epochs', type=int, help='Override number of epochs')
-    parser.add_argument('--lr', type=float, help='Override learning rate')
-    parser.add_argument('--batch-size', type=int, help='Override batch size')
-    parser.add_argument('--grad-accum', type=int, help='Override gradient accumulation steps')
-    parser.add_argument('--precision', choices=['fp16', 'bf16', 'fp32'], help='Override precision')
+    # ================================
+    # END CONFIGURATION SECTION
+    # ================================
     
-    # Experiment options
-    parser.add_argument('--experiment-name', type=str, help='Experiment name')
-    parser.add_argument('--resume', type=str, help='Resume from checkpoint')
-    parser.add_argument('--seed', type=int, default=42, help='Random seed')
-    
-    # Testing and validation
-    parser.add_argument('--test-generation', action='store_true', help='Test generation after training')
-    parser.add_argument('--validate-data', type=str, help='Validate data file format')
-    parser.add_argument('--create-report', action='store_true', help='Create comprehensive data report')
-    
-    # Data processing
-    parser.add_argument('--process-oasst', nargs=2, metavar=('INPUT', 'OUTPUT'),
-                       help='Process OASST data: input_file output_file')
-    parser.add_argument('--max-conversations', type=int, help='Limit conversations processed')
-    
-    # System options
-    parser.add_argument('--check-environment', action='store_true', help='Check training environment')
-    parser.add_argument('--estimate-time', action='store_true', help='Estimate training time')
-    parser.add_argument('--dry-run', action='store_true', help='Setup everything but don\'t train')
-    
-    args = parser.parse_args()
+    logging.info("="*80)
+    logging.info("PRODUCTION CONVERSATIONAL TRANSFORMER TRAINING")
+    logging.info("="*80)
+    logging.info(f"Using configuration preset: {config_preset}")
     
     # Environment validation
-    if args.check_environment:
+    if check_environment:
         logging.info("Checking training environment...")
         issues = validate_environment()
         if issues:
@@ -133,87 +96,50 @@ Examples:
                 logging.warning(f"  - {issue}")
         else:
             logging.info("Environment looks good!")
-        
-        if not args.dry_run:
-            return 0
     
-    # Data processing
-    if args.process_oasst:
-        input_file, output_file = args.process_oasst
-        try:
-            count = process_oasst_data(input_file, output_file, args.max_conversations)
-            logging.info(f"Successfully processed {count} conversations")
-            return 0
-        except Exception as e:
-            logging.error(f"Data processing failed: {e}")
-            return 1
-    
-    # Data validation
-    if args.validate_data:
-        try:
-            tokenizer = ConversationTokenizer()
-            stats = validate_data_comprehensive(args.validate_data, tokenizer)
-            
-            logging.info("Data Validation Results:")
-            logging.info(f"  Valid conversations: {stats['conversation_stats']['valid_conversations']:,}")
-            logging.info(f"  Success rate: {stats['quality_metrics']['success_rate']:.2%}")
-            logging.info(f"  Average tokens: {stats['token_stats']['avg_tokens']:.1f}")
-            
-            if args.create_report:
-                create_data_summary_report([args.validate_data], tokenizer)
-            
-            return 0
-        except Exception as e:
-            logging.error(f"Data validation failed: {e}")
-            return 1
-    
-    # Load configuration
+    # Load default configuration
     try:
-        if args.config_file:
-            config = Config.load(args.config_file)
-        else:
-            config_map = {
-                'debug': ConfigPresets.debug,
-                'small': ConfigPresets.small,
-                'medium': ConfigPresets.medium,
-                'large': ConfigPresets.large,
-            }
-            config = config_map[args.config]()
+        config_map = {
+            'debug': ConfigPresets.debug,
+            'small': ConfigPresets.small,
+            'medium': ConfigPresets.medium,
+            'large': ConfigPresets.large,
+        }
+        config = config_map[config_preset]()
         
-        # Apply CLI overrides
-        if args.epochs is not None:
-            config.num_epochs = args.epochs
-        if args.lr is not None:
-            config.learning_rate = args.lr
-        if args.batch_size is not None:
-            config.batch_size = args.batch_size
-        if args.grad_accum is not None:
-            config.gradient_accumulation_steps = args.grad_accum
-        if args.precision is not None:
-            config.precision = args.precision
-        if args.experiment_name is not None:
-            config.experiment_name = args.experiment_name
+        # Set default paths and settings
+        config.train_data_path = train_data_path
+        config.eval_data_path = eval_data_path
+        config.seed = seed
         
-        config.train_data_path = args.train_data
-        config.eval_data_path = args.eval_data
-        config.seed = args.seed
+        # Apply overrides if provided
+        if epochs_override is not None:
+            config.num_epochs = epochs_override
+            logging.info(f"Override: epochs = {epochs_override}")
+        if learning_rate_override is not None:
+            config.learning_rate = learning_rate_override
+            logging.info(f"Override: learning_rate = {learning_rate_override}")
+        if batch_size_override is not None:
+            config.batch_size = batch_size_override
+            logging.info(f"Override: batch_size = {batch_size_override}")
         
-        # Re-validate after overrides
+        # Validate configuration
         config.validate()
         
     except Exception as e:
         logging.error(f"Configuration error: {e}")
         return 1
     
-    # Training time estimation
-    if args.estimate_time:
+    # Training time estimation (if enabled and data exists)
+    if estimate_time:
         try:
-            # Estimate dataset size
             if Path(config.train_data_path).exists():
                 with open(config.train_data_path, 'r') as f:
                     dataset_size = sum(1 for _ in f)
             else:
-                dataset_size = 10000  # Default estimate
+                dataset_size = 1000  # Default estimate for debug mode
+                logging.warning(f"Training data not found at {config.train_data_path}")
+                logging.info(f"Using estimated dataset size: {dataset_size}")
             
             estimates = estimate_training_time(config, dataset_size)
             
@@ -226,37 +152,31 @@ Examples:
             
             if estimates['memory_warning']:
                 logging.warning("  ⚠️  High memory utilization expected - consider reducing batch size")
-            
-            if not args.dry_run:
-                return 0
+                
         except Exception as e:
-            logging.error(f"Time estimation failed: {e}")
-            return 1
-    
-    # Dry run
-    if args.dry_run:
-        logging.info("Dry run completed successfully!")
-        return 0
+            logging.warning(f"Could not estimate training time: {e}")
     
     # Main training
-    logging.info("="*80)
-    logging.info("PRODUCTION CONVERSATIONAL TRANSFORMER TRAINING")
-    logging.info("="*80)
-    
     try:
         # Initialize training orchestrator
         orchestrator = TrainingOrchestrator(config)
         
-        # Log configuration
-        logging.info(f"Configuration: {args.config}")
-        logging.info(f"Model parameters: ~{estimate_parameters(config):,}")
-        logging.info(f"Experiment: {config.experiment_name}")
+        # Log configuration details
+        logging.info("\nTraining Configuration:")
+        logging.info(f"  Preset: {config_preset}")
+        logging.info(f"  Model parameters: ~{estimate_parameters(config):,}")
+        logging.info(f"  Experiment: {config.experiment_name}")
+        logging.info(f"  Epochs: {config.num_epochs}")
+        logging.info(f"  Learning rate: {config.learning_rate}")
+        logging.info(f"  Batch size: {config.batch_size}")
+        logging.info(f"  Precision: {getattr(config, 'precision', 'fp32')}")
         
         # Run training
+        logging.info("\nStarting training...")
         orchestrator.run_training()
         
-        # Test generation if requested
-        if args.test_generation and orchestrator.trainer:
+        # Test generation if enabled
+        if test_generation and hasattr(orchestrator, 'trainer') and orchestrator.trainer:
             logging.info("\n" + "="*60)
             logging.info("TESTING GENERATION")
             logging.info("="*60)
@@ -270,7 +190,7 @@ Examples:
             ]
             
             for i, prompt in enumerate(test_prompts, 1):
-                logging.info(f"\nTest {i}/5:")
+                logging.info(f"\nTest {i}/{len(test_prompts)}:")
                 logging.info(f"User: {prompt}")
                 try:
                     response = orchestrator.trainer.generate(prompt)
@@ -280,13 +200,25 @@ Examples:
                 logging.info("-" * 50)
         
         logging.info("\n🎉 Training completed successfully!")
+        logging.info("="*80)
+        
+        # Final summary
+        logging.info("Training Summary:")
+        logging.info(f"  Configuration: {config_preset}")
+        logging.info(f"  Experiment: {config.experiment_name}")
+        logging.info(f"  Data: {config.train_data_path}")
+        logging.info(f"  Checkpoints saved to: checkpoints/")
+        logging.info(f"  Logs saved to: logs/")
+        logging.info("="*80)
+        
         return 0
         
     except KeyboardInterrupt:
-        logging.info("Training interrupted by user")
+        logging.info("\n❌ Training interrupted by user (Ctrl+C)")
         return 1
     except Exception as e:
-        logging.error(f"Training failed: {e}")
+        logging.error(f"\n❌ Training failed: {e}")
+        logging.error("Full traceback:")
         logging.error(traceback.format_exc())
         return 1
 
