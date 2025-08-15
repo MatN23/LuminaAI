@@ -90,8 +90,8 @@ python Main.py --config medium --epochs 10 --experiment-name my_production_run
 
 | Preset | Parameters | Memory | Use Case |
 |--------|------------|---------|----------|
-| `debug` | ~6M | ~2GB | Testing & debugging |
-| `small` | ~50M | ~8GB | Limited resources |
+| `debug` | ~6M | ~8GB | Testing & debugging |
+| `small` | ~50M | ~12GB | Limited resources |
 | `medium` | ~400M | ~16GB | Serious training |
 | `large` | ~1.2B | ~32GB+ | Production scale |
 
