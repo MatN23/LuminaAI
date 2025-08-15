@@ -74,12 +74,15 @@ class EnhancedConversationTrainer:
     def _setup_gpu(self):
         """Setup GPU with optimal configuration."""
         if torch.cuda.is_available():
-            # Clear cache
-            torch.cuda.empty_cache()
-            torch.cuda.synchronize()
-            
-            # Set memory fraction
-            torch.cuda.set_per_process_memory_fraction(0.85)
+            try:
+                # Clear cache
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                
+                # Set memory fraction carefully
+                torch.cuda.set_per_process_memory_fraction(0.85)
+            except Exception as e:
+                logging.warning(f"GPU setup failed: {e}")
             
             # Log GPU info
             gpu_props = torch.cuda.get_device_properties(0)
@@ -106,7 +109,7 @@ class EnhancedConversationTrainer:
         ]
         
         try:
-            # Use fused optimizer if available
+            # Try fused optimizer if available
             return AdamW(
                 param_groups,
                 lr=self.config.learning_rate,
@@ -114,7 +117,7 @@ class EnhancedConversationTrainer:
                 eps=1e-8,
                 fused=torch.cuda.is_available()
             )
-        except Exception:
+        except (TypeError, RuntimeError):
             # Fallback to standard AdamW
             return AdamW(
                 param_groups,
@@ -197,17 +200,22 @@ class EnhancedConversationTrainer:
         """Enhanced training step with comprehensive monitoring."""
         self.model.train()
         
-        # Move batch to device
-        batch = {k: v.to(self.device, non_blocking=True) for k, v in batch.items()}
+        # Move batch to device safely
+        device_batch = {}
+        for k, v in batch.items():
+            if isinstance(v, torch.Tensor):
+                device_batch[k] = v.to(self.device, non_blocking=True)
+            else:
+                device_batch[k] = v
         
         # Skip empty batches
-        if batch['input_ids'].numel() == 0:
+        if device_batch['input_ids'].numel() == 0:
             return {'loss': 0.0, 'perplexity': float('inf'), 'valid_tokens': 0}
         
         # Forward pass with autocast
-        with autocast(device_type='cuda', enabled=self.use_amp, dtype=self.dtype):
-            logits = self.model(batch['input_ids'], batch['attention_mask'])
-            loss_dict = self.compute_loss(logits, batch['labels'], batch['loss_weights'])
+        with autocast(enabled=self.use_amp):
+            logits = self.model(device_batch['input_ids'], device_batch['attention_mask'])
+            loss_dict = self.compute_loss(logits, device_batch['labels'], device_batch['loss_weights'])
             loss = loss_dict['loss'] / self.config.gradient_accumulation_steps
         
         # Check for valid loss
@@ -285,14 +293,20 @@ class EnhancedConversationTrainer:
             if batch_idx >= max_batches:
                 break
             
-            batch = {k: v.to(self.device, non_blocking=True) for k, v in batch.items()}
+            # Move batch to device safely
+            device_batch = {}
+            for k, v in batch.items():
+                if isinstance(v, torch.Tensor):
+                    device_batch[k] = v.to(self.device, non_blocking=True)
+                else:
+                    device_batch[k] = v
             
-            if batch['input_ids'].numel() == 0:
+            if device_batch['input_ids'].numel() == 0:
                 continue
             
-            with autocast(device_type='cuda', enabled=self.use_amp, dtype=self.dtype):
-                logits = self.model(batch['input_ids'], batch['attention_mask'])
-                loss_dict = self.compute_loss(logits, batch['labels'], batch['loss_weights'])
+            with autocast(enabled=self.use_amp):
+                logits = self.model(device_batch['input_ids'], device_batch['attention_mask'])
+                loss_dict = self.compute_loss(logits, device_batch['labels'], device_batch['loss_weights'])
             
             if not (torch.isnan(loss_dict['loss']).any() or torch.isinf(loss_dict['loss']).any()):
                 total_loss += loss_dict['loss'].item()
@@ -322,6 +336,164 @@ class EnhancedConversationTrainer:
             'eval_throughput': throughput
         }
     
+    def train(self, train_dataset, eval_dataset):
+        """Main training loop with comprehensive monitoring and fault tolerance."""
+        logging.info("Starting training...")
+        
+        # Create data loaders
+        train_dataloader = create_dataloader(train_dataset, self.config, shuffle=True)
+        
+        # Calculate total steps and setup scheduler
+        total_steps = len(train_dataloader) * self.config.num_epochs // self.config.gradient_accumulation_steps
+        self._setup_scheduler(total_steps)
+        
+        logging.info(f"Training for {self.config.num_epochs} epochs, {total_steps:,} total steps")
+        logging.info(f"Effective batch size: {self.config.effective_batch_size}")
+        
+        # Training metrics
+        step_losses = []
+        step_times = []
+        
+        try:
+            for epoch in range(self.current_epoch, self.config.num_epochs):
+                self.current_epoch = epoch
+                epoch_start_time = time.time()
+                
+                logging.info(f"\n{'='*60}")
+                logging.info(f"EPOCH {epoch + 1}/{self.config.num_epochs}")
+                logging.info(f"{'='*60}")
+                
+                # Training phase
+                epoch_loss = 0.0
+                num_batches = 0
+                
+                for batch_idx, batch in enumerate(train_dataloader):
+                    step_start_time = time.time()
+                    
+                    # Training step
+                    step_metrics = self.train_step(batch)
+                    
+                    # Accumulate gradients
+                    if (batch_idx + 1) % self.config.gradient_accumulation_steps == 0:
+                        # Optimizer step
+                        opt_metrics = self.optimizer_step()
+                        self.global_step += 1
+                        
+                        # Log metrics
+                        current_lr = opt_metrics['lr']
+                        grad_norm = opt_metrics['grad_norm']
+                        
+                        # Update health monitor
+                        self.health_monitor.update(step_metrics['loss'], grad_norm)
+                        
+                        # Accumulate for logging
+                        step_losses.append(step_metrics['loss'])
+                        step_times.append(time.time() - step_start_time)
+                        
+                        # Log progress
+                        if self.global_step % 10 == 0:  # Log every 10 steps for debug
+                            avg_loss = sum(step_losses[-10:]) / min(len(step_losses), 10)
+                            throughput = len(step_losses[-10:]) / sum(step_times[-10:]) if step_times[-10:] else 0
+                            
+                            logging.info(f"Step {self.global_step:6d} | "
+                                       f"Loss: {avg_loss:.4f} | "
+                                       f"LR: {current_lr:.2e} | "
+                                       f"Grad: {grad_norm:.3f} | "
+                                       f"Throughput: {throughput:.1f} steps/s")
+                        
+                        # Log detailed metrics
+                        if self.global_step % self.config.eval_every_n_batches == 0:
+                            # Evaluation
+                            eval_metrics = self.evaluate(eval_dataset)
+                            
+                            # Log to monitoring
+                            train_metrics = {
+                                'train_loss': avg_loss,
+                                'learning_rate': current_lr,
+                                'grad_norm': grad_norm,
+                                'perplexity': math.exp(min(avg_loss, 10))
+                            }
+                            
+                            # Combine metrics
+                            all_metrics = {**train_metrics, **eval_metrics}
+                            self.logger.log_metrics(all_metrics, self.global_step)
+                            self.logger.log_system_stats(self.global_step)
+                            
+                            # Check if this is the best model
+                            is_best = eval_metrics['eval_loss'] < self.best_eval_loss
+                            if is_best:
+                                self.best_eval_loss = eval_metrics['eval_loss']
+                                self.patience_counter = 0
+                            else:
+                                self.patience_counter += 1
+                            
+                            # Save checkpoint
+                            if self.global_step % self.config.save_every_n_batches == 0:
+                                self.save_checkpoint(self.global_step, is_best=is_best)
+                            
+                            logging.info(f"Eval Loss: {eval_metrics['eval_loss']:.6f} | "
+                                       f"Eval PPL: {eval_metrics['eval_perplexity']:.2f} | "
+                                       f"Best: {self.best_eval_loss:.6f}")
+                            
+                            # Early stopping check
+                            if (self.config.early_stopping_patience and 
+                                self.patience_counter >= self.config.early_stopping_patience):
+                                logging.info(f"Early stopping triggered after {self.patience_counter} evaluations without improvement")
+                                return
+                            
+                            # Health check
+                            health_status = self.health_monitor.get_status()
+                            if health_status == "CRITICAL":
+                                logging.error("Training health critical - stopping")
+                                self.save_checkpoint(self.global_step, emergency=True)
+                                raise RuntimeError("Training became unstable")
+                            elif health_status == "WARNING":
+                                logging.warning("Training health warning detected")
+                    
+                    epoch_loss += step_metrics['loss']
+                    num_batches += 1
+                    
+                    # Memory cleanup
+                    if batch_idx % 100 == 0:
+                        if torch.cuda.is_available():
+                            torch.cuda.empty_cache()
+                
+                # End of epoch
+                epoch_time = time.time() - epoch_start_time
+                avg_epoch_loss = epoch_loss / max(num_batches, 1)
+                
+                logging.info(f"\nEpoch {epoch + 1} completed in {epoch_time:.1f}s")
+                logging.info(f"Average loss: {avg_epoch_loss:.6f}")
+                
+                # Save epoch checkpoint
+                self.save_checkpoint(epoch + 1)
+                
+                # Log epoch metrics
+                epoch_metrics = {
+                    'epoch': epoch + 1,
+                    'epoch_loss': avg_epoch_loss,
+                    'epoch_time': epoch_time,
+                    'learning_rate': self.scheduler.get_last_lr()[0] if self.scheduler else self.config.learning_rate
+                }
+                self.logger.log_metrics(epoch_metrics, self.global_step, prefix="epoch")
+                
+                # Memory logging
+                self._log_memory_usage(f"End of Epoch {epoch + 1}")
+        
+        except KeyboardInterrupt:
+            logging.info("Training interrupted by user")
+            self.save_checkpoint(self.global_step, emergency=True)
+            raise
+        except Exception as e:
+            logging.error(f"Training failed: {e}")
+            self.save_checkpoint(self.global_step, emergency=True)
+            raise
+        
+        # Final checkpoint
+        logging.info("Training completed!")
+        final_checkpoint = self.save_checkpoint(self.config.num_epochs, final=True)
+        logging.info(f"Final checkpoint saved: {final_checkpoint}")
+    
     def _log_memory_usage(self, context: str):
         """Log memory usage information."""
         if torch.cuda.is_available():
@@ -340,13 +512,13 @@ class EnhancedConversationTrainer:
         except ImportError:
             pass
     
-    def save_checkpoint(self, epoch_or_step: int, emergency: bool = False, final: bool = False):
+    def save_checkpoint(self, epoch_or_step: int, emergency: bool = False, final: bool = False, is_best: bool = False):
         """Save checkpoint (delegated to checkpoint manager)."""
-        suffix = "emergency" if emergency else ("final" if final else f"manual_{epoch_or_step}")
+        suffix = "emergency" if emergency else ("final" if final else None)
         return self.checkpoint_manager.save_checkpoint(
             self.model, self.optimizer, self.scheduler,
             self.global_step, self.current_epoch, self.metrics,
-            suffix
+            suffix, is_best
         )
     
     def load_checkpoint(self, checkpoint_path: str) -> int:

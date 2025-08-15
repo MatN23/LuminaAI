@@ -115,23 +115,23 @@ class ConfigPresets:
         """Minimal config for debugging and testing."""
         return Config(
             # Tiny model for fast iteration
-            vocab_size=1024,
-            hidden_size=256,
-            num_layers=4,
-            num_heads=4,
-            num_kv_heads=2,
-            seq_length=512,
-            intermediate_size=512,
+            vocab_size=10000,
+            hidden_size=2048,
+            num_layers=24,
+            num_heads=16,
+            num_kv_heads=16,
+            seq_length=1024,
+            intermediate_size=1024,
             
             # Fast training settings
             batch_size=2,
-            gradient_accumulation_steps=2,
-            num_epochs=1,
-            learning_rate=1e-3,
+            gradient_accumulation_steps=1,
+            num_epochs=100,
+            learning_rate=1e-4,
             weight_decay=0.01,
             eval_every_n_batches=50,
             save_every_n_batches=100,
-            precision="fp32",
+            precision="fp16",
             compile=False,
             num_workers=0,
             
@@ -226,7 +226,7 @@ class ConfigPresets:
             # Large-scale training
             batch_size=2,
             gradient_accumulation_steps=16,
-            num_epochs=3,
+            num_epochs=200,
             learning_rate=2e-4,
             weight_decay=0.01,
             eval_every_n_batches=2000,
