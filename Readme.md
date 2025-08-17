@@ -287,11 +287,8 @@ python Main.py --serve-model checkpoints/best.pt --port 8000
 ```
 
 ### **📞 Getting Help**
-- 💬 **Discord Community**: [Join LuminaAI Discord](https://discord.gg/luminaai)
-- 📚 **Documentation**: [Full Documentation](https://luminaai.readthedocs.io)
-- 🐛 **Bug Reports**: [GitHub Issues](https://github.com/MatN23/LuminaAI/issues)
-- 💡 **Feature Requests**: [Discussions](https://github.com/MatN23/LuminaAI/discussions)
-- 📧 **Enterprise Support**: contact@luminaai.dev
+- 💬 **Email My Work Email**: matiasnhmb@gmail.com
+
 
 ---
 
