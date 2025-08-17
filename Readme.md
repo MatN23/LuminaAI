@@ -4,7 +4,6 @@
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-orange.svg)](https://pytorch.org/)
 [![Transformers](https://img.shields.io/badge/🤗%20Transformers-4.0+-yellow.svg)](https://huggingface.co/transformers/)
 [![License: Custom](https://img.shields.io/badge/License-Custom-red.svg)](LICENSE)
-[![Discord](https://img.shields.io/discord/123456789?logo=discord)](https://discord.gg/luminaai)
 [![GitHub stars](https://img.shields.io/github/stars/MatN23/LuminaAI?style=social)](https://github.com/MatN23/LuminaAI/stargazers)
 
 > **Production-ready ChatGPT/GPT-4 style model training platform** - Train your own conversational AI from scratch with enterprise-grade reliability, fault tolerance, and scalability.
