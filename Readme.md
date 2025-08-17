@@ -45,32 +45,6 @@ LuminaAI follows a modular, enterprise-grade architecture designed for maintaina
 └─────────────────┴─────────────────┴─────────────────┴──────────┘
 ```
 
-### 📁 Project Structure
-
-```
-LuminaAI/
-├── 🎯 Main.py                    # Zero-config entry point
-├── ⚙️ Setup.py                   # Environment validation & setup  
-├── 🔧 deepspeed_config.json      # DeepSpeed configuration
-├── config/
-│   └── config_manager.py         # Advanced configuration system
-├── core/
-│   ├── tokenizer.py              # Production tokenizer with conversation handling
-│   ├── model.py                  # Modern transformer with GQA, RoPE, SwiGLU
-│   └── dataset.py                # Robust dataset with validation & streaming
-├── training/
-│   ├── orchestrator.py           # Training coordination & fault tolerance  
-│   ├── trainer.py                # Core training engine
-│   ├── training_loop.py          # Enhanced training loop
-│   └── checkpoint.py             # Advanced checkpoint management
-├── monitoring/
-│   └── logger.py                 # Multi-backend logging & health monitoring
-└── utils/
-    ├── data_processing.py        # Data validation & processing
-    ├── environment.py            # System optimization & validation  
-    └── reporting.py              # Automated report generation
-```
-
 ---
 
 ## 🚀 Quick Start
@@ -78,10 +52,10 @@ LuminaAI/
 ### 1. **Lightning Setup** ⚡
 ```bash
 # Clone and setup
-git clone https://github.com/YourUsername/LuminaAI.git
+git clone https://github.com/MatN23/LuminaAI.git
 cd LuminaAI
 pip install -r requirements.txt
-python Setup.py
+python Setup.py[]
 ```
 
 ### 2. **First Training in 30 Seconds** 🏃‍♂️
@@ -128,6 +102,14 @@ test_generation = True
 **Advanced Configuration**: Full control through config system and command line
 
 ---
+
+## Enterprise-grade ML infrastructure built by a 13-year-old, $0 budget
+
+🚀 Complete training orchestration with fault tolerance
+🔧 Production-ready checkpoint management 
+📊 Real-time health monitoring and recovery
+💬 Built-in chat interface for testing
+⚡ Runs on free Colab or any CUDA GPU
 
 ## 📊 Intelligent Presets
 
