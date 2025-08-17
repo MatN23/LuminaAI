@@ -467,7 +467,7 @@ If you use LuminaAI in your research, please cite:
   title={LuminaAI: Enterprise-Grade Conversational Transformer Training Platform},
   author={Nielsen, Matias},
   year={2025},
-  url={https://github.com/YourUsername/LuminaAI}
+  url={https://github.com/MatN23/LuminaAI}
 }
 ```
 
@@ -485,23 +485,7 @@ Built with inspiration from and gratitude to:
 
 ---
 
-## 📞 Support & Community
-
-- **📖 Documentation**: [docs.luminaai.dev](https://docs.luminaai.dev)
-- **💬 Discord**: [LuminaAI Community](https://discord.gg/luminaai)
-- **🐛 Issues**: [GitHub Issues](https://github.com/YourUsername/LuminaAI/issues)
-- **📧 Contact**: support@luminaai.dev
-
----
-
 <div align="center">
-
-**🌟 Star us on GitHub if LuminaAI helps your AI journey! 🌟**
-
-[![GitHub stars](https://img.shields.io/github/stars/YourUsername/LuminaAI?style=social)](https://github.com/YourUsername/LuminaAI)
-[![Twitter Follow](https://img.shields.io/twitter/follow/LuminaAI?style=social)](https://twitter.com/LuminaAI)
-
----
 
 *Built with ❤️ for the AI research and development community*
 
