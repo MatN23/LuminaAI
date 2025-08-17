@@ -380,13 +380,7 @@ Custom License - Free for research and non-commercial use. See [LICENSE](LICENSE
 ---
 
 <div align="center">
-
-### 🌟 **Star us on GitHub if LuminaAI helps your AI projects!** 
-
-[![GitHub stars](https://img.shields.io/github/stars/MatN23/LuminaAI?style=social&label=Star)](https://github.com/MatN23/LuminaAI)
-[![Twitter Follow](https://img.shields.io/twitter/follow/LuminaAI?style=social)](https://twitter.com/LuminaAI)
-
-**[🚀 Get Started](https://github.com/MatN23/LuminaAI)** • **[📚 Documentation](https://luminaai.readthedocs.io)** • **[💬 Discord](https://discord.gg/luminaai)** • **[🐦 Twitter](https://twitter.com/LuminaAI)**
+*
 
 *Built with ❤️ for the AI research and development community*
 
