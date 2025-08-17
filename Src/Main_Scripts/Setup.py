@@ -7,32 +7,6 @@ import logging
 from pathlib import Path
 
 
-def setup_directories():
-    """Create necessary directory structure."""
-    directories = [
-        'data',
-        'checkpoints', 
-        'experiments',
-        'logs',
-        'backups',
-        'config',
-        'core',
-        'training',
-        'monitoring',
-        'utils'
-    ]
-    
-    for directory in directories:
-        Path(directory).mkdir(exist_ok=True)
-        # Create __init__.py files for Python packages
-        if directory in ['core', 'training', 'monitoring', 'utils', 'config']:
-            init_file = Path(directory) / '__init__.py'
-            if not init_file.exists():
-                init_file.touch()
-    
-    print("✓ Directory structure created")
-
-
 def check_dependencies():
     """Check if required dependencies are installed."""
     required_packages = [
@@ -107,9 +81,6 @@ def main():
     """Main setup function."""
     print("Setting up Production Conversational Transformer Training System...")
     print("=" * 60)
-    
-    # Setup directories
-    setup_directories()
     
     # Check dependencies
     if not check_dependencies():
