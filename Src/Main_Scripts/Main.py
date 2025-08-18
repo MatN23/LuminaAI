@@ -20,8 +20,8 @@ import psutil
 import gc
 
 # Import our modules (fixed imports)
-from dataset import ConversationDataset, create_dataloader
-from model import TransformerModel, estimate_parameters
+from core.dataset import ConversationDataset, create_dataloader
+from core.model import TransformerModel, estimate_parameters
 
 
 # Missing tokenizer implementation (simplified for compatibility)
