@@ -9,7 +9,7 @@ from datetime import datetime
 from dataclasses import asdict
 
 import torch
-from dataset import create_dataloader
+from core.dataset import create_dataloader
 
 
 class EnhancedTrainingMixin:
