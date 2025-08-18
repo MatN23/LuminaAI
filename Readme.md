@@ -351,7 +351,7 @@ python Main.py --config debug --dev-mode
 ### **⚖️ License**
 Custom License - Free for research and non-commercial use. See [LICENSE](LICENSE) for details.
 
-**Commercial licensing available** - Contact: license@luminaai.dev
+**Commercial licensing available** - Contact: matiasnhmb@gmail.com
 
 ---
 
