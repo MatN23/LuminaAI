@@ -125,3 +125,14 @@ mkl>=2023.2.0; platform_machine == "x86_64"
 intel-extension-for-pytorch>=2.1.0; platform_machine == "x86_64"
 
 pytest>=7.4.0
+
+torch>=2.0.0
+numpy>=1.21.0
+psutil>=5.8.0
+PyYAML>=6.0
+tqdm>=4.64.0
+
+# Optional dependencies for enhanced features
+# flash-attn>=2.0.0  # For flash attention (requires CUDA)
+# wandb>=0.13.0      # For experiment tracking
+# tensorboard>=2.10.0 # For tensorboard logging

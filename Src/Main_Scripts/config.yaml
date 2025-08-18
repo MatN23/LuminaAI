@@ -1,0 +1,76 @@
+# Training Configuration for Conversational Transformer
+# Optimized for Tesla T4 (15GB VRAM)
+
+# Model Architecture
+model:
+  hidden_size: 768
+  num_layers: 12
+  num_heads: 12
+  num_kv_heads: 4  # Grouped Query Attention for efficiency
+  intermediate_size: 3072
+  seq_length: 2048
+  dropout: 0.1
+  
+  # Stability settings
+  init_std: 0.02
+  rms_norm_eps: 1.0e-6
+  rope_theta: 10000.0
+  use_stable_embedding: true
+
+# Training Parameters
+training:
+  # Memory-optimized batch sizes for T4
+  batch_size: 2  # Reduced for T4 memory
+  gradient_accumulation_steps: 16  # Effective batch size = 32
+  learning_rate: 3.0e-4
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  
+  # Steps
+  max_steps: 50000
+  warmup_steps: 1000
+  eval_steps: 1000
+  save_steps: 2500
+  
+  # Optimization
+  optimizer_type: "adamw"
+  scheduler_type: "cosine"
+  
+  # Memory optimization for T4
+  use_amp: true
+  gradient_checkpointing: true
+  mixed_precision: "fp16"  # Use fp16 for T4
+
+# Loss Configuration
+loss:
+  assistant_loss_weight: 2.0
+
+# Data Configuration
+data:
+  train_data_path: "oasst1_data/oasst1_train.jsonl"
+  val_data_path: "oasst1_data/oasst1_val.jsonl"
+  num_workers: 2  # Reduced for stability
+  max_conversation_length: 2048
+
+# System Configuration
+system:
+  device: "auto"
+  compile_model: false  # Disabled for T4 stability
+  
+# Monitoring and Logging
+monitoring:
+  log_level: "INFO"
+  use_wandb: false
+  experiment_name: null  # Auto-generated if null
+
+# Checkpointing
+checkpoints:
+  checkpoint_dir: "checkpoints/medium_model"
+  keep_best: 3
+  resume_from: null
+
+# Security (for production deployment)
+security:
+  enable_auth: false
+  max_message_length: 4000
+  rate_limit_per_minute: 60
