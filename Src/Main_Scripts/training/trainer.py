@@ -1,5 +1,7 @@
-# trainer.py - Fixed version without circular imports
-# Copyright (c) 2025 Matias Nielsen. All rights reserved.
+"""
+Enhanced Training Module
+Main trainer class with comprehensive monitoring and fault tolerance.
+"""
 
 import math
 import time
@@ -13,57 +15,9 @@ from torch.cuda.amp import autocast, GradScaler
 from typing import Dict, Optional, Any
 from pathlib import Path
 
-from dataset import create_dataloader
-from checkpoint import CheckpointManager
-
-
-# Simple monitoring classes (can be replaced with more sophisticated ones)
-class TrainingHealthMonitor:
-    """Training health monitoring."""
-    
-    def __init__(self):
-        self.loss_history = []
-        self.grad_norm_history = []
-        self.nan_count = 0
-        self.inf_count = 0
-        self.divergence_count = 0
-        
-    def update(self, loss: float, grad_norm: float):
-        """Update metrics."""
-        self.loss_history.append(loss)
-        self.grad_norm_history.append(grad_norm)
-        
-        # Check for numerical issues
-        if math.isnan(loss):
-            self.nan_count += 1
-        if math.isinf(loss):
-            self.inf_count += 1
-        
-        # Check for divergence (loss increasing rapidly)
-        if len(self.loss_history) >= 10:
-            recent_losses = self.loss_history[-10:]
-            if recent_losses[-1] > recent_losses[0] * 2:
-                self.divergence_count += 1
-    
-    def get_status(self) -> str:
-        """Get health status."""
-        if self.nan_count > 5 or self.inf_count > 5 or self.divergence_count > 3:
-            return "CRITICAL"
-        elif self.nan_count > 0 or self.inf_count > 0 or self.divergence_count > 0:
-            return "WARNING"
-        else:
-            return "HEALTHY"
-    
-    def get_summary(self) -> Dict[str, Any]:
-        """Get summary statistics."""
-        return {
-            'total_steps': len(self.loss_history),
-            'nan_count': self.nan_count,
-            'inf_count': self.inf_count,
-            'divergence_count': self.divergence_count,
-            'avg_loss': sum(self.loss_history) / len(self.loss_history) if self.loss_history else 0,
-            'avg_grad_norm': sum(self.grad_norm_history) / len(self.grad_norm_history) if self.grad_norm_history else 0
-        }
+from core.dataset import create_dataloader
+from monitoring.logger import TrainingHealthMonitor
+from training.checkpoint import CheckpointManager
 
 
 class EnhancedConversationTrainer:
@@ -87,9 +41,9 @@ class EnhancedConversationTrainer:
         self.scheduler = None
         
         # Mixed precision setup
-        self.use_amp = getattr(config, 'precision', 'fp32') in ["fp16", "bf16"]
-        self.dtype = torch.bfloat16 if getattr(config, 'precision', 'fp32') == "bf16" else torch.float16
-        self.scaler = GradScaler() if getattr(config, 'precision', 'fp32') == "fp16" else None
+        self.use_amp = config.precision in ["fp16", "bf16"]
+        self.dtype = torch.bfloat16 if config.precision == "bf16" else torch.float16
+        self.scaler = GradScaler() if config.precision == "fp16" else None
         
         # Model compilation
         self._compile_model()
@@ -99,7 +53,6 @@ class EnhancedConversationTrainer:
         self.current_epoch = 0
         self.best_eval_loss = float('inf')
         self.patience_counter = 0
-        self.should_stop = False
         
         # Metrics and monitoring
         self.metrics = {
@@ -123,13 +76,14 @@ class EnhancedConversationTrainer:
     def _setup_gpu(self):
         """Setup GPU with optimal configuration."""
         if torch.cuda.is_available():
-            try:
-                torch.cuda.empty_cache()
-                torch.cuda.synchronize()
-                torch.cuda.set_per_process_memory_fraction(0.85)
-            except Exception as e:
-                logging.warning(f"GPU setup failed: {e}")
+            # Clear cache
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
             
+            # Set memory fraction
+            torch.cuda.set_per_process_memory_fraction(0.85)
+            
+            # Log GPU info
             gpu_props = torch.cuda.get_device_properties(0)
             logging.info(f"GPU: {gpu_props.name}, Memory: {gpu_props.total_memory / 1e9:.1f}GB")
         else:
@@ -137,6 +91,7 @@ class EnhancedConversationTrainer:
     
     def _create_optimizer(self) -> torch.optim.Optimizer:
         """Create optimizer with parameter grouping."""
+        # Separate parameters for weight decay
         decay_params = []
         no_decay_params = []
         
@@ -153,6 +108,7 @@ class EnhancedConversationTrainer:
         ]
         
         try:
+            # Use fused optimizer if available
             return AdamW(
                 param_groups,
                 lr=self.config.learning_rate,
@@ -160,7 +116,8 @@ class EnhancedConversationTrainer:
                 eps=1e-8,
                 fused=torch.cuda.is_available()
             )
-        except (TypeError, RuntimeError):
+        except Exception:
+            # Fallback to standard AdamW
             return AdamW(
                 param_groups,
                 lr=self.config.learning_rate,
@@ -170,7 +127,7 @@ class EnhancedConversationTrainer:
     
     def _compile_model(self):
         """Compile model with error handling."""
-        if getattr(self.config, 'compile', False) and hasattr(torch, 'compile'):
+        if self.config.compile and hasattr(torch, 'compile'):
             try:
                 logging.info("Compiling model...")
                 self.model = torch.compile(self.model, mode='default')
@@ -180,29 +137,21 @@ class EnhancedConversationTrainer:
     
     def _setup_scheduler(self, total_steps: int):
         """Setup learning rate scheduler."""
-        warmup_steps = int(total_steps * getattr(self.config, 'warmup_ratio', 0.02))
+        warmup_steps = int(total_steps * self.config.warmup_ratio)
         
-        lr_scheduler = getattr(self.config, 'lr_scheduler', 'cosine')
-        
-        if lr_scheduler == "cosine":
+        if self.config.lr_scheduler == "cosine":
             self.scheduler = CosineAnnealingLR(
-                self.optimizer, 
-                T_max=total_steps, 
-                eta_min=getattr(self.config, 'min_lr', self.config.learning_rate * 0.1)
+                self.optimizer, T_max=total_steps, eta_min=self.config.min_lr
             )
-        elif lr_scheduler == "onecycle":
+        elif self.config.lr_scheduler == "onecycle":
             self.scheduler = OneCycleLR(
-                self.optimizer, 
-                max_lr=self.config.learning_rate,
-                total_steps=total_steps, 
-                pct_start=getattr(self.config, 'warmup_ratio', 0.02)
+                self.optimizer, max_lr=self.config.learning_rate,
+                total_steps=total_steps, pct_start=self.config.warmup_ratio
             )
         else:  # linear
             from torch.optim.lr_scheduler import LinearLR
             self.scheduler = LinearLR(
-                self.optimizer, 
-                start_factor=0.1, 
-                total_iters=warmup_steps
+                self.optimizer, start_factor=0.1, total_iters=warmup_steps
             )
     
     def compute_loss(self, logits: torch.Tensor, labels: torch.Tensor, 
@@ -250,22 +199,17 @@ class EnhancedConversationTrainer:
         """Enhanced training step with comprehensive monitoring."""
         self.model.train()
         
-        # Move batch to device safely
-        device_batch = {}
-        for k, v in batch.items():
-            if isinstance(v, torch.Tensor):
-                device_batch[k] = v.to(self.device, non_blocking=True)
-            else:
-                device_batch[k] = v
+        # Move batch to device
+        batch = {k: v.to(self.device, non_blocking=True) for k, v in batch.items()}
         
         # Skip empty batches
-        if device_batch['input_ids'].numel() == 0:
+        if batch['input_ids'].numel() == 0:
             return {'loss': 0.0, 'perplexity': float('inf'), 'valid_tokens': 0}
         
         # Forward pass with autocast
-        with autocast(enabled=self.use_amp):
-            logits = self.model(device_batch['input_ids'], device_batch['attention_mask'])
-            loss_dict = self.compute_loss(logits, device_batch['labels'], device_batch['loss_weights'])
+        with autocast(device_type='cuda', enabled=self.use_amp, dtype=self.dtype):
+            logits = self.model(batch['input_ids'], batch['attention_mask'])
+            loss_dict = self.compute_loss(logits, batch['labels'], batch['loss_weights'])
             loss = loss_dict['loss'] / self.config.gradient_accumulation_steps
         
         # Check for valid loss
@@ -343,20 +287,14 @@ class EnhancedConversationTrainer:
             if batch_idx >= max_batches:
                 break
             
-            # Move batch to device safely
-            device_batch = {}
-            for k, v in batch.items():
-                if isinstance(v, torch.Tensor):
-                    device_batch[k] = v.to(self.device, non_blocking=True)
-                else:
-                    device_batch[k] = v
+            batch = {k: v.to(self.device, non_blocking=True) for k, v in batch.items()}
             
-            if device_batch['input_ids'].numel() == 0:
+            if batch['input_ids'].numel() == 0:
                 continue
             
-            with autocast(enabled=self.use_amp):
-                logits = self.model(device_batch['input_ids'], device_batch['attention_mask'])
-                loss_dict = self.compute_loss(logits, device_batch['labels'], device_batch['loss_weights'])
+            with autocast(device_type='cuda', enabled=self.use_amp, dtype=self.dtype):
+                logits = self.model(batch['input_ids'], batch['attention_mask'])
+                loss_dict = self.compute_loss(logits, batch['labels'], batch['loss_weights'])
             
             if not (torch.isnan(loss_dict['loss']).any() or torch.isinf(loss_dict['loss']).any()):
                 total_loss += loss_dict['loss'].item()
@@ -404,13 +342,13 @@ class EnhancedConversationTrainer:
         except ImportError:
             pass
     
-    def save_checkpoint(self, epoch_or_step: int, emergency: bool = False, final: bool = False, is_best: bool = False):
+    def save_checkpoint(self, epoch_or_step: int, emergency: bool = False, final: bool = False):
         """Save checkpoint (delegated to checkpoint manager)."""
-        suffix = "emergency" if emergency else ("final" if final else None)
+        suffix = "emergency" if emergency else ("final" if final else f"manual_{epoch_or_step}")
         return self.checkpoint_manager.save_checkpoint(
             self.model, self.optimizer, self.scheduler,
             self.global_step, self.current_epoch, self.metrics,
-            suffix, is_best
+            suffix
         )
     
     def load_checkpoint(self, checkpoint_path: str) -> int:
@@ -425,7 +363,7 @@ class EnhancedConversationTrainer:
         self.model.eval()
         
         if max_new_tokens is None:
-            max_new_tokens = getattr(self.config, 'max_new_tokens', 512)
+            max_new_tokens = self.config.max_new_tokens
         
         try:
             # Create conversation format
@@ -437,11 +375,10 @@ class EnhancedConversationTrainer:
             input_tokens = self.tokenizer.encode_conversation(conversation)
             
             # Add assistant start tokens
-            if hasattr(self.tokenizer, 'special_tokens'):
-                input_tokens.extend([
-                    self.tokenizer.special_tokens.get("<|im_start|>", 1),
-                    self.tokenizer.special_tokens.get("<|assistant|>", 3)
-                ])
+            input_tokens.extend([
+                self.tokenizer.special_tokens["<|im_start|>"],
+                self.tokenizer.special_tokens["<|assistant|>"]
+            ])
             
             # Ensure reasonable context length
             if len(input_tokens) >= self.config.seq_length:
@@ -462,22 +399,20 @@ class EnhancedConversationTrainer:
                     logits = self.model(input_ids)
                 
                 # Get next token logits
-                next_token_logits = logits[0, -1, :] / getattr(self.config, 'temperature', 1.0)
+                next_token_logits = logits[0, -1, :] / self.config.temperature
                 
                 # Apply top-k filtering
-                top_k = getattr(self.config, 'top_k', 50)
-                if top_k > 0:
-                    top_k_logits, top_k_indices = torch.topk(next_token_logits, top_k)
+                if self.config.top_k > 0:
+                    top_k_logits, top_k_indices = torch.topk(next_token_logits, self.config.top_k)
                     next_token_logits = torch.full_like(next_token_logits, float('-inf'))
                     next_token_logits.scatter_(0, top_k_indices, top_k_logits)
                 
                 # Apply top-p filtering
-                top_p = getattr(self.config, 'top_p', 0.9)
-                if top_p < 1.0:
+                if self.config.top_p < 1.0:
                     sorted_logits, sorted_indices = torch.sort(next_token_logits, descending=True)
                     cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
                     
-                    sorted_indices_to_remove = cumulative_probs > top_p
+                    sorted_indices_to_remove = cumulative_probs > self.config.top_p
                     sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
                     sorted_indices_to_remove[..., 0] = 0
                     
@@ -489,7 +424,7 @@ class EnhancedConversationTrainer:
                 next_token = torch.multinomial(probs, 1)
                 
                 # Check for stop tokens
-                if hasattr(self.tokenizer, 'special_tokens') and next_token.item() == self.tokenizer.special_tokens.get("<|im_end|>", -1):
+                if next_token.item() == self.tokenizer.special_tokens["<|im_end|>"]:
                     break
                 
                 generated_tokens.append(next_token.item())
@@ -506,10 +441,3 @@ class EnhancedConversationTrainer:
         except Exception as e:
             logging.error(f"Generation failed: {e}")
             return "I apologize, but I encountered an error while generating a response."
-
-
-# Import and apply the enhanced training mixin
-from training_loop import create_enhanced_trainer_class
-
-# Create the enhanced trainer class
-EnhancedConversationTrainer = create_enhanced_trainer_class(EnhancedConversationTrainer)

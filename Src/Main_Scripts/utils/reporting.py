@@ -1,5 +1,7 @@
-# Copyright (c) 2025 Matias Nielsen. All rights reserved.
-# Licensed under the Custom License below.
+"""
+Reporting Utilities
+Create comprehensive reports and summaries.
+"""
 
 import os
 import logging

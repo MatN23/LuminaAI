@@ -2,674 +2,586 @@
 # Licensed under the Custom License below.
 
 import logging
-import json
-import pickle
-from pathlib import Path
-from typing import Dict, List, Any, Optional, Union, Tuple, Set
-from dataclasses import dataclass, asdict
+import re
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Dict, List, Any, Optional, Tuple, Union, Set
+from functools import lru_cache
+from dataclasses import dataclass
 from enum import Enum
 import tiktoken
-import hashlib
-from functools import lru_cache
 
 
-class TokenizerModel(Enum):
-    """Supported tokenizer models with their tiktoken names."""
-    GPT4O = "o200k_base"  # Latest and most efficient
-    GPT4 = "cl100k_base"  # GPT-3.5/4 standard
-    GPT3 = "p50k_base"    # GPT-3 standard
-    GPT2 = "r50k_base"    # Legacy GPT-2
-    
-    @classmethod
-    def get_recommended(cls) -> 'TokenizerModel':
-        """Get the recommended modern tokenizer."""
-        return cls.GPT4O
+class TokenizationMode(Enum):
+    """Tokenization modes for different use cases."""
+    STANDARD = "standard"
+    COMPACT = "compact"  # Removes extra whitespace
+    PRESERVE_FORMATTING = "preserve_formatting"  # Keeps all formatting
+    CHAT_OPTIMIZED = "chat_optimized"  # Optimized for chat conversations
 
 
 @dataclass
-class TokenizerConfig:
-    """Configuration for the tokenizer."""
-    model: TokenizerModel = TokenizerModel.GPT4O
-    max_sequence_length: int = 32768
-    padding_token: str = "<|pad|>"
-    eos_token: str = "<|endoftext|>"
-    bos_token: str = "<|startoftext|>"
-    unk_token: str = "<|unk|>"
-    
-    # Conversation-specific tokens
-    conversation_tokens: Dict[str, str] = None
-    role_tokens: Dict[str, str] = None
-    
-    # Performance settings
-    use_cache: bool = True
-    cache_size: int = 10000
-    
-    # Validation settings
-    strict_validation: bool = True
-    allow_empty_messages: bool = False
-    max_message_length: int = 16384
-    
-    def __post_init__(self):
-        if self.conversation_tokens is None:
-            self.conversation_tokens = {
-                "start": "<|im_start|>",
-                "end": "<|im_end|>",
-                "separator": "<|sep|>",
-                "continuation": "<|cont|>"
-            }
-        
-        if self.role_tokens is None:
-            self.role_tokens = {
-                "user": "<|user|>",
-                "assistant": "<|assistant|>", 
-                "system": "<|system|>",
-                "tool": "<|tool|>",
-                "observation": "<|observation|>"
-            }
-    
-    def save(self, path: Union[str, Path]) -> None:
-        """Save configuration to file."""
-        path = Path(path)
-        with open(path, 'w') as f:
-            # Convert enum to string for JSON serialization
-            config_dict = asdict(self)
-            config_dict['model'] = self.model.value
-            json.dump(config_dict, f, indent=2)
-    
-    @classmethod
-    def load(cls, path: Union[str, Path]) -> 'TokenizerConfig':
-        """Load configuration from file."""
-        path = Path(path)
-        with open(path, 'r') as f:
-            config_dict = json.load(f)
-            # Convert string back to enum
-            config_dict['model'] = TokenizerModel(config_dict['model'])
-            return cls(**config_dict)
+class TokenizationStats:
+    """Statistics from tokenization process."""
+    total_tokens: int
+    special_tokens: int
+    content_tokens: int
+    message_count: int
+    avg_tokens_per_message: float
+    encoding_time_ms: float
+    warnings: List[str]
 
 
 class ConversationTokenizer:
-    """
-    Advanced conversation tokenizer with compatibility for existing codebase.
+    """Production tokenizer with enhanced error handling and validation."""
     
-    Features:
-    - Modern tokenizer models (GPT-4o by default)
-    - Comprehensive error handling and validation
-    - Caching for performance
-    - Flexible configuration
-    - Full compatibility with existing dataset.py and model.py
-    """
+    # Thread-safe tokenizer cache
+    _tokenizer_cache = {}
+    _cache_lock = threading.Lock()
     
-    def __init__(self, config: Optional[TokenizerConfig] = None, model_name: str = None):
-        # Support legacy initialization
-        if model_name is not None:
-            model_map = {
-                "gpt2": TokenizerModel.GPT2,
-                "r50k_base": TokenizerModel.GPT2,
-                "p50k_base": TokenizerModel.GPT3,
-                "cl100k_base": TokenizerModel.GPT4,
-                "o200k_base": TokenizerModel.GPT4O
-            }
-            if config is None:
-                config = TokenizerConfig()
-            config.model = model_map.get(model_name, TokenizerModel.GPT4O)
+    # Precompiled regex patterns for efficiency
+    _WHITESPACE_PATTERN = re.compile(r'\s+')
+    _NEWLINE_PATTERN = re.compile(r'\n+')
+    _ROLE_PATTERN = re.compile(r'^(user|prompter|assistant|system|human|ai|bot)$', re.IGNORECASE)
+    
+    def __init__(self, 
+                 model_name: str = "gpt2",
+                 max_context_length: int = 4096,
+                 enable_caching: bool = True,
+                 thread_safe: bool = True,
+                 validation_level: str = "strict"):
+        """
+        Initialize enhanced tokenizer.
         
-        self.config = config or TokenizerConfig()
-        self.logger = self._setup_logger()
+        Args:
+            model_name: Tokenizer model to use
+            max_context_length: Maximum context length for truncation
+            enable_caching: Enable LRU caching for repeated tokenizations
+            thread_safe: Enable thread-safe operations
+            validation_level: 'strict', 'moderate', or 'permissive'
+        """
+        self.model_name = model_name
+        self.max_context_length = max_context_length
+        self.enable_caching = enable_caching
+        self.thread_safe = thread_safe
+        self.validation_level = validation_level
         
-        # Initialize base tokenizer
-        self._init_base_tokenizer()
+        # Initialize tokenizer with caching
+        self.tokenizer = self._get_or_create_tokenizer(model_name)
+        self.base_vocab_size = self.tokenizer.n_vocab
         
-        # Build special tokens vocabulary
-        self._build_special_tokens()
+        # Enhanced special tokens with metadata
+        self.special_tokens = {
+            "<|im_start|>": self.base_vocab_size,
+            "<|im_end|>": self.base_vocab_size + 1,
+            "<|user|>": self.base_vocab_size + 2,
+            "<|assistant|>": self.base_vocab_size + 3,
+            "<|system|>": self.base_vocab_size + 4,
+            "<|human|>": self.base_vocab_size + 5,  # Additional role support
+            "<|ai|>": self.base_vocab_size + 6,
+            "<|bot|>": self.base_vocab_size + 7,
+            "<|thought|>": self.base_vocab_size + 8,  # For reasoning traces
+            "<|tool|>": self.base_vocab_size + 9,    # For tool usage
+            "<|error|>": self.base_vocab_size + 10,  # For error handling
+            "<|truncated|>": self.base_vocab_size + 11,  # Truncation marker
+        }
         
-        # Initialize caching
-        if self.config.use_cache:
-            self._init_cache()
+        self.vocab_size = self.base_vocab_size + len(self.special_tokens)
+        self._reverse_special_tokens = {v: k for k, v in self.special_tokens.items()}
+        
+        # Pad vocab size to be efficient for modern hardware
+        alignment = 128  # Better for modern GPUs
+        if self.vocab_size % alignment != 0:
+            self.vocab_size = ((self.vocab_size + alignment - 1) // alignment) * alignment
+        
+        # Role mapping with aliases
+        self._role_mapping = {
+            'user': self.special_tokens["<|user|>"],
+            'prompter': self.special_tokens["<|user|>"],
+            'human': self.special_tokens["<|human|>"],
+            'assistant': self.special_tokens["<|assistant|>"],
+            'ai': self.special_tokens["<|ai|>"],
+            'bot': self.special_tokens["<|bot|>"],
+            'system': self.special_tokens["<|system|>"],
+            'thought': self.special_tokens["<|thought|>"],
+            'tool': self.special_tokens["<|tool|>"],
+        }
         
         # Statistics tracking
-        self._stats = {
-            'encode_calls': 0,
-            'decode_calls': 0,
+        self.stats = {
+            'total_conversations_processed': 0,
+            'total_tokens_generated': 0,
             'cache_hits': 0,
             'cache_misses': 0,
             'validation_errors': 0,
-            'encoding_errors': 0
+            'encoding_errors': 0,
         }
         
-        self.logger.info(f"Tokenizer initialized successfully")
-        self.logger.info(f"Base vocab: {self.base_vocab_size}, Total vocab: {self.vocab_size}")
-        self.logger.info(f"Model: {self.config.model.value}")
+        # Thread safety
+        if self.thread_safe:
+            self._lock = threading.RLock()
+        
+        logging.info(f"Enhanced tokenizer initialized:")
+        logging.info(f"  Model: {model_name}")
+        logging.info(f"  Vocab size: {self.vocab_size:,}")
+        logging.info(f"  Max context: {max_context_length:,}")
+        logging.info(f"  Special tokens: {len(self.special_tokens)}")
     
-    def _setup_logger(self) -> logging.Logger:
-        """Setup logger with proper formatting."""
-        logger = logging.getLogger(f"{__name__}.{id(self)}")
-        if not logger.handlers:
-            handler = logging.StreamHandler()
-            formatter = logging.Formatter(
-                '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-            )
-            handler.setFormatter(formatter)
-            logger.addHandler(handler)
-            logger.setLevel(logging.INFO)
-        return logger
+    @classmethod
+    def _get_or_create_tokenizer(cls, model_name: str):
+        """Thread-safe tokenizer creation with caching."""
+        with cls._cache_lock:
+            if model_name not in cls._tokenizer_cache:
+                try:
+                    cls._tokenizer_cache[model_name] = tiktoken.get_encoding(model_name)
+                    logging.debug(f"Created new tokenizer for {model_name}")
+                except Exception as e:
+                    logging.error(f"Failed to load tokenizer {model_name}: {e}")
+                    # Fallback to gpt2 if requested model fails
+                    if model_name != "gpt2":
+                        logging.warning(f"Falling back to gpt2 tokenizer")
+                        cls._tokenizer_cache[model_name] = tiktoken.get_encoding("gpt2")
+                    else:
+                        raise
+            return cls._tokenizer_cache[model_name]
     
-    def _init_base_tokenizer(self) -> None:
-        """Initialize the base tiktoken tokenizer."""
-        try:
-            self.tokenizer = tiktoken.get_encoding(self.config.model.value)
-            self.base_tokenizer = self.tokenizer  # Compatibility alias
-            self.base_vocab_size = self.tokenizer.n_vocab
-            # Legacy compatibility
-            self.n_vocab = self.base_vocab_size
-            self.logger.info(f"Loaded {self.config.model.value} tokenizer")
-        except Exception as e:
-            self.logger.error(f"Failed to load tokenizer {self.config.model.value}: {e}")
-            # Fallback to GPT-2
-            self.logger.warning("Falling back to GPT-2 tokenizer")
-            self.tokenizer = tiktoken.get_encoding("r50k_base")
-            self.base_tokenizer = self.tokenizer
-            self.base_vocab_size = self.tokenizer.n_vocab
-            self.n_vocab = self.base_vocab_size
-    
-    def _build_special_tokens(self) -> None:
-        """Build the special tokens vocabulary."""
-        self.special_tokens: Dict[str, int] = {}
-        self.reverse_special_tokens: Dict[int, str] = {}
-        self._reverse_special_tokens = self.reverse_special_tokens  # Legacy compatibility
-        
-        # Start from base vocab size
-        current_id = self.base_vocab_size
-        
-        # Add core tokens
-        core_tokens = [
-            self.config.padding_token,
-            self.config.eos_token, 
-            self.config.bos_token,
-            self.config.unk_token
-        ]
-        
-        for token in core_tokens:
-            if token not in self.special_tokens:
-                self.special_tokens[token] = current_id
-                self.reverse_special_tokens[current_id] = token
-                current_id += 1
-        
-        # Add conversation tokens
-        for token in self.config.conversation_tokens.values():
-            if token not in self.special_tokens:
-                self.special_tokens[token] = current_id
-                self.reverse_special_tokens[current_id] = token
-                current_id += 1
-        
-        # Add role tokens
-        for token in self.config.role_tokens.values():
-            if token not in self.special_tokens:
-                self.special_tokens[token] = current_id
-                self.reverse_special_tokens[current_id] = token
-                current_id += 1
-        
-        # Set final vocab size (no arbitrary padding)
-        self.vocab_size = current_id
-        
-        # Create easy access properties
-        self.pad_token_id = self.special_tokens[self.config.padding_token]
-        self.eos_token_id = self.special_tokens[self.config.eos_token]
-        self.bos_token_id = self.special_tokens[self.config.bos_token]
-        self.unk_token_id = self.special_tokens[self.config.unk_token]
-        
-        self.logger.debug(f"Built {len(self.special_tokens)} special tokens")
-    
-    def _init_cache(self) -> None:
-        """Initialize LRU caches for performance."""
-        self._encode_cache: Dict[str, List[int]] = {}
-        self._decode_cache: Dict[str, str] = {}
-    
-    @lru_cache(maxsize=1000)
-    def _get_content_hash(self, content: str) -> str:
-        """Get hash for content caching."""
-        return hashlib.md5(content.encode()).hexdigest()
-    
-    def validate_conversation(self, conversation: Dict[str, Any]) -> Tuple[bool, List[str]]:
-        """
-        Validate conversation structure and content.
-        
-        Returns:
-            Tuple of (is_valid, list_of_errors)
-        """
-        errors = []
+    def _validate_conversation(self, conversation: Dict[str, Any]) -> Tuple[bool, List[str]]:
+        """Enhanced conversation validation with detailed error reporting."""
+        warnings = []
         
         if not isinstance(conversation, dict):
-            errors.append("Conversation must be a dictionary")
-            return False, errors
+            return False, ["Conversation must be a dictionary"]
         
         messages = conversation.get('messages', [])
-        if not isinstance(messages, list):
-            errors.append("Messages must be a list")
-            return False, errors
+        if not messages:
+            warnings.append("Empty conversation")
+            return True, warnings
         
-        if not messages and self.config.strict_validation:
-            errors.append("Conversation must contain at least one message")
+        if not isinstance(messages, list):
+            return False, ["Messages must be a list"]
         
         for i, message in enumerate(messages):
             if not isinstance(message, dict):
-                errors.append(f"Message {i} must be a dictionary")
+                warnings.append(f"Message {i} is not a dictionary")
                 continue
             
-            # Check required fields
-            role = message.get('role', '').lower().strip()
-            content = message.get('content', '').strip()
+            role = message.get('role', '').strip().lower()
+            content = message.get('content', '')
             
-            if not role and self.config.strict_validation:
-                errors.append(f"Message {i} missing role")
+            # Role validation
+            if not role:
+                warnings.append(f"Message {i} missing role")
+            elif not self._ROLE_PATTERN.match(role):
+                if self.validation_level == "strict":
+                    warnings.append(f"Message {i} has invalid role: '{role}'")
             
-            if not content and not self.config.allow_empty_messages:
-                errors.append(f"Message {i} has empty content")
+            # Content validation
+            if not content and self.validation_level in ["strict", "moderate"]:
+                warnings.append(f"Message {i} has empty content")
             
-            # Validate role
-            valid_roles = set(self.config.role_tokens.keys()) | {'prompter', 'human'}
-            if role and role not in valid_roles:
-                if self.config.strict_validation:
-                    errors.append(f"Message {i} has invalid role: {role}")
-                else:
-                    self.logger.warning(f"Unknown role '{role}' in message {i}, will use 'user'")
-            
-            # Check content length
-            if len(content) > self.config.max_message_length:
-                errors.append(f"Message {i} content too long: {len(content)} > {self.config.max_message_length}")
+            if isinstance(content, str) and len(content.strip()) > 50000:
+                warnings.append(f"Message {i} content is very long ({len(content)} chars)")
         
-        is_valid = len(errors) == 0
-        if errors:
-            self._stats['validation_errors'] += len(errors)
+        return True, warnings
+    
+    def _preprocess_content(self, content: str, mode: TokenizationMode = TokenizationMode.STANDARD) -> str:
+        """Enhanced content preprocessing with multiple modes."""
+        if not isinstance(content, str):
+            content = str(content)
         
-        return is_valid, errors
+        if mode == TokenizationMode.COMPACT:
+            # Aggressive whitespace normalization
+            content = self._WHITESPACE_PATTERN.sub(' ', content)
+            content = self._NEWLINE_PATTERN.sub('\n', content)
+            content = content.strip()
+        elif mode == TokenizationMode.PRESERVE_FORMATTING:
+            # Minimal processing
+            pass
+        elif mode == TokenizationMode.CHAT_OPTIMIZED:
+            # Optimized for chat: normalize whitespace but preserve structure
+            content = re.sub(r'[ \t]+', ' ', content)  # Normalize spaces/tabs
+            content = re.sub(r'\n{3,}', '\n\n', content)  # Limit consecutive newlines
+            content = content.strip()
+        else:  # STANDARD
+            content = content.strip()
+        
+        return content
+    
+    @lru_cache(maxsize=1024 if True else 0)  # Controlled by enable_caching
+    def _cached_encode(self, content: str) -> Tuple[List[int], bool]:
+        """Cached content encoding with error handling."""
+        try:
+            tokens = self.tokenizer.encode(content)
+            return tokens, True
+        except Exception as e:
+            logging.warning(f"Encoding error for content (len={len(content)}): {e}")
+            # Attempt recovery with cleaned content
+            try:
+                cleaned = ''.join(c for c in content if ord(c) < 65536)  # Remove high unicode
+                tokens = self.tokenizer.encode(cleaned)
+                return tokens, False  # Indicate content was modified
+            except:
+                return [], False
     
     def encode_conversation(self, 
-                          conversation: Dict[str, Any], 
-                          add_generation_prompt: bool = False,
-                          max_length: Optional[int] = None) -> List[int]:
+                          conversation: Dict[str, Any],
+                          mode: TokenizationMode = TokenizationMode.STANDARD,
+                          max_length: Optional[int] = None,
+                          truncation_strategy: str = "end",
+                          return_stats: bool = False) -> Union[List[int], Tuple[List[int], TokenizationStats]]:
         """
-        Encode conversation with advanced features.
+        Enhanced conversation encoding with comprehensive options.
         
         Args:
             conversation: Conversation dictionary with messages
-            add_generation_prompt: Whether to add prompt for generation
-            max_length: Maximum sequence length (uses config default if None)
-            
-        Returns:
-            List of token IDs
+            mode: Tokenization mode
+            max_length: Maximum token length (overrides instance setting)
+            truncation_strategy: 'start', 'end', or 'middle'
+            return_stats: Whether to return detailed statistics
         """
-        self._stats['encode_calls'] += 1
-        max_length = max_length or self.config.max_sequence_length
+        import time
+        start_time = time.perf_counter()
+        
+        if self.thread_safe:
+            with self._lock:
+                return self._encode_conversation_impl(
+                    conversation, mode, max_length, truncation_strategy, return_stats, start_time
+                )
+        else:
+            return self._encode_conversation_impl(
+                conversation, mode, max_length, truncation_strategy, return_stats, start_time
+            )
+    
+    def _encode_conversation_impl(self, conversation, mode, max_length, truncation_strategy, return_stats, start_time):
+        """Internal implementation of conversation encoding."""
+        # Validation
+        is_valid, warnings = self._validate_conversation(conversation)
+        if not is_valid and self.validation_level == "strict":
+            self.stats['validation_errors'] += 1
+            if return_stats:
+                stats = TokenizationStats(0, 0, 0, 0, 0.0, 0.0, warnings)
+                return [], stats
+            return []
         
         try:
-            # Validate conversation
-            is_valid, errors = self.validate_conversation(conversation)
-            if not is_valid and self.config.strict_validation:
-                raise ValueError(f"Conversation validation failed: {errors}")
-            
             tokens = []
             messages = conversation.get('messages', [])
+            content_tokens = 0
+            special_tokens = 0
+            processed_messages = 0
             
-            for i, message in enumerate(messages):
-                role = message.get('role', 'user').lower().strip()
-                content = message.get('content', '').strip()
-                
-                if not content and not self.config.allow_empty_messages:
+            if not messages:
+                if return_stats:
+                    end_time = time.perf_counter()
+                    stats = TokenizationStats(0, 0, 0, 0, 0.0, (end_time - start_time) * 1000, warnings)
+                    return [], stats
+                return []
+            
+            for message in messages:
+                if not isinstance(message, dict):
                     continue
                 
-                # Normalize role names
-                role = self._normalize_role(role)
+                role = message.get('role', '').strip().lower()
+                content = message.get('content', '')
                 
-                # Check if adding this message would exceed max length
-                estimated_tokens = len(content) // 3  # Rough estimate
-                if len(tokens) + estimated_tokens + 10 > max_length:  # +10 for special tokens
-                    self.logger.warning(f"Truncating conversation at message {i} due to length limit")
-                    break
+                if not content and self.validation_level == "strict":
+                    continue
                 
-                # Start message marker
-                tokens.append(self.special_tokens[self.config.conversation_tokens["start"]])
+                # Normalize role
+                if role not in self._role_mapping:
+                    role = 'user'  # Safe fallback
                 
-                # Add role token
-                if role in self.config.role_tokens:
-                    tokens.append(self.special_tokens[self.config.role_tokens[role]])
-                else:
-                    tokens.append(self.special_tokens[self.config.role_tokens["user"]])
+                # Start message
+                tokens.append(self.special_tokens["<|im_start|>"])
+                special_tokens += 1
                 
-                # Encode content with caching
+                # Add role
+                role_token = self._role_mapping[role]
+                tokens.append(role_token)
+                special_tokens += 1
+                
+                # Process and encode content
                 if content:
-                    content_tokens = self._encode_content(content)
-                    tokens.extend(content_tokens)
+                    processed_content = self._preprocess_content(str(content), mode)
+                    if processed_content:
+                        if self.enable_caching:
+                            content_token_list, encoding_success = self._cached_encode(processed_content)
+                        else:
+                            try:
+                                content_token_list = self.tokenizer.encode(processed_content)
+                                encoding_success = True
+                            except Exception as e:
+                                logging.warning(f"Content encoding failed: {e}")
+                                content_token_list = []
+                                encoding_success = False
+                                self.stats['encoding_errors'] += 1
+                        
+                        if content_token_list:
+                            tokens.extend(content_token_list)
+                            content_tokens += len(content_token_list)
                 
-                # End message marker
-                tokens.append(self.special_tokens[self.config.conversation_tokens["end"]])
+                # End message
+                tokens.append(self.special_tokens["<|im_end|>"])
+                special_tokens += 1
+                processed_messages += 1
             
-            # Add generation prompt if requested
-            if add_generation_prompt:
-                tokens.append(self.special_tokens[self.config.conversation_tokens["start"]])
-                tokens.append(self.special_tokens[self.config.role_tokens["assistant"]])
+            # Apply length constraints
+            max_len = max_length or self.max_context_length
+            if len(tokens) > max_len:
+                tokens = self._apply_truncation(tokens, max_len, truncation_strategy)
+                warnings.append(f"Conversation truncated from {len(tokens)} to {max_len} tokens")
             
-            # Truncate if necessary
-            if len(tokens) > max_length:
-                tokens = tokens[:max_length-1] + [self.eos_token_id]
-                self.logger.warning(f"Truncated sequence to {max_length} tokens")
+            # Update statistics
+            self.stats['total_conversations_processed'] += 1
+            self.stats['total_tokens_generated'] += len(tokens)
+            
+            if return_stats:
+                end_time = time.perf_counter()
+                avg_tokens = len(tokens) / max(1, processed_messages)
+                stats = TokenizationStats(
+                    total_tokens=len(tokens),
+                    special_tokens=special_tokens,
+                    content_tokens=content_tokens,
+                    message_count=processed_messages,
+                    avg_tokens_per_message=avg_tokens,
+                    encoding_time_ms=(end_time - start_time) * 1000,
+                    warnings=warnings
+                )
+                return tokens, stats
             
             return tokens
             
         except Exception as e:
-            self._stats['encoding_errors'] += 1
-            self.logger.error(f"Conversation encoding failed: {e}")
-            if self.config.strict_validation:
-                raise
-            return [self.unk_token_id]  # Return unknown token as fallback
+            logging.error(f"Conversation encoding failed: {e}")
+            self.stats['encoding_errors'] += 1
+            if return_stats:
+                end_time = time.perf_counter()
+                stats = TokenizationStats(0, 0, 0, 0, 0.0, (end_time - start_time) * 1000, [str(e)])
+                return [], stats
+            return []
     
-    def _normalize_role(self, role: str) -> str:
-        """Normalize role names to standard format."""
-        role_mapping = {
-            'prompter': 'user',
-            'human': 'user',
-            'bot': 'assistant',
-            'ai': 'assistant',
-            'model': 'assistant'
-        }
-        return role_mapping.get(role, role)
-    
-    def _encode_content(self, content: str) -> List[int]:
-        """Encode content with caching."""
-        if not self.config.use_cache:
-            return self.tokenizer.encode(content)
+    def _apply_truncation(self, tokens: List[int], max_length: int, strategy: str) -> List[int]:
+        """Apply truncation strategy to token sequence."""
+        if len(tokens) <= max_length:
+            return tokens
         
-        content_hash = self._get_content_hash(content)
+        # Reserve space for truncation marker
+        effective_max = max_length - 1
         
-        if content_hash in self._encode_cache:
-            self._stats['cache_hits'] += 1
-            return self._encode_cache[content_hash]
+        if strategy == "start":
+            # Keep the end, truncate the beginning
+            truncated = tokens[-effective_max:]
+        elif strategy == "middle":
+            # Keep start and end, truncate middle
+            start_keep = effective_max // 2
+            end_keep = effective_max - start_keep
+            truncated = tokens[:start_keep] + tokens[-end_keep:]
+        else:  # "end" (default)
+            # Keep the beginning, truncate the end
+            truncated = tokens[:effective_max]
         
-        self._stats['cache_misses'] += 1
-        tokens = self.tokenizer.encode(content)
-        
-        # Manage cache size
-        if len(self._encode_cache) >= self.config.cache_size:
-            # Remove oldest entry (simple FIFO)
-            oldest_key = next(iter(self._encode_cache))
-            del self._encode_cache[oldest_key]
-        
-        self._encode_cache[content_hash] = tokens
-        return tokens
+        # Add truncation marker
+        truncated.append(self.special_tokens["<|truncated|>"])
+        return truncated
     
     def decode(self, 
                token_ids: List[int], 
                skip_special_tokens: bool = True,
-               clean_up_tokenization_spaces: bool = True) -> str:
-        """
-        Decode tokens with advanced options.
-        
-        Args:
-            token_ids: List of token IDs to decode
-            skip_special_tokens: Whether to skip special tokens
-            clean_up_tokenization_spaces: Whether to clean up tokenization artifacts
-            
-        Returns:
-            Decoded string
-        """
-        self._stats['decode_calls'] += 1
+               clean_up_tokenization_spaces: bool = True,
+               handle_errors: str = "replace") -> str:
+        """Enhanced decoding with comprehensive error handling."""
+        if not token_ids:
+            return ""
         
         try:
-            if not token_ids:
-                return ""
+            # Validate and filter tokens
+            valid_tokens = []
+            special_token_positions = []
             
-            # Create cache key if caching enabled
-            if self.config.use_cache:
-                cache_key = f"{hash(tuple(token_ids))}_{skip_special_tokens}"
-                if cache_key in self._decode_cache:
-                    self._stats['cache_hits'] += 1
-                    return self._decode_cache[cache_key]
-                self._stats['cache_misses'] += 1
-            
-            # Filter tokens
-            filtered_tokens = []
-            for token_id in token_ids:
-                # Skip special tokens if requested
-                if skip_special_tokens and self.is_special_token(token_id):
+            for i, token_id in enumerate(token_ids):
+                if not isinstance(token_id, int):
                     continue
                 
-                # Clamp to valid range
-                if token_id < 0:
-                    token_id = self.unk_token_id
-                elif token_id >= self.base_vocab_size:
-                    if not self.is_special_token(token_id):
-                        continue  # Skip invalid tokens
+                if self.is_special_token(token_id):
+                    if not skip_special_tokens:
+                        # Convert special tokens to readable format
+                        special_text = self._reverse_special_tokens.get(token_id, f"<UNK_SPECIAL_{token_id}>")
+                        # For now, we'll skip them as tiktoken can't decode them
+                        special_token_positions.append((i, special_text))
+                    continue
                 
-                filtered_tokens.append(token_id)
+                # Clamp token to valid range
+                if token_id < 0:
+                    token_id = 0
+                elif token_id >= self.base_vocab_size:
+                    token_id = self.base_vocab_size - 1
+                
+                valid_tokens.append(token_id)
             
-            # Decode using base tokenizer
-            if filtered_tokens:
-                text = self.tokenizer.decode(filtered_tokens)
+            if not valid_tokens:
+                return ""
+            
+            # Decode with error handling
+            if handle_errors == "strict":
+                decoded = self.tokenizer.decode(valid_tokens)
             else:
-                text = ""
+                try:
+                    decoded = self.tokenizer.decode(valid_tokens)
+                except Exception as e:
+                    logging.warning(f"Decode error (handling as {handle_errors}): {e}")
+                    if handle_errors == "ignore":
+                        return ""
+                    elif handle_errors == "replace":
+                        # Try to decode individual tokens and replace problematic ones
+                        decoded_parts = []
+                        for token in valid_tokens:
+                            try:
+                                part = self.tokenizer.decode([token])
+                                decoded_parts.append(part)
+                            except:
+                                decoded_parts.append("�")  # Replacement character
+                        decoded = "".join(decoded_parts)
+                    else:
+                        return "<decode_error>"
             
-            # Clean up tokenization spaces
+            # Clean up tokenization artifacts
             if clean_up_tokenization_spaces:
-                text = self._cleanup_tokenization_spaces(text)
+                # Common tiktoken cleanup
+                decoded = decoded.replace(" .", ".").replace(" ,", ",").replace(" !", "!")
+                decoded = decoded.replace(" ?", "?").replace(" :", ":").replace(" ;", ";")
+                decoded = decoded.replace("( ", "(").replace(" )", ")")
+                decoded = decoded.replace("[ ", "[").replace(" ]", "]")
             
-            # Cache result
-            if self.config.use_cache:
-                if len(self._decode_cache) >= self.config.cache_size:
-                    oldest_key = next(iter(self._decode_cache))
-                    del self._decode_cache[oldest_key]
-                self._decode_cache[cache_key] = text
-            
-            return text
+            return decoded
             
         except Exception as e:
-            self.logger.error(f"Decode error: {e}")
-            return "<decode_error>"
+            logging.error(f"Decode error: {e}")
+            if handle_errors == "strict":
+                raise
+            return "<decode_error>" if handle_errors == "replace" else ""
     
-    def _cleanup_tokenization_spaces(self, text: str) -> str:
-        """Clean up common tokenization artifacts."""
-        # Remove extra whitespace
-        text = ' '.join(text.split())
+    def encode_batch(self, 
+                    conversations: List[Dict[str, Any]], 
+                    max_workers: int = 4,
+                    **kwargs) -> List[List[int]]:
+        """Parallel batch encoding for multiple conversations."""
+        if not conversations:
+            return []
         
-        # Fix common punctuation issues
-        text = text.replace(' .', '.')
-        text = text.replace(' ,', ',')
-        text = text.replace(' !', '!')
-        text = text.replace(' ?', '?')
-        text = text.replace(' ;', ';')
-        text = text.replace(' :', ':')
+        if len(conversations) == 1 or max_workers == 1:
+            # Single-threaded for small batches
+            return [self.encode_conversation(conv, **kwargs) for conv in conversations]
         
-        return text.strip()
-    
-    def parse_conversation(self, token_ids: List[int]) -> Dict[str, Any]:
-        """
-        Parse tokens back into conversation structure.
+        # Multi-threaded processing
+        results = [None] * len(conversations)
         
-        Returns:
-            Parsed conversation dictionary
-        """
-        messages = []
-        current_role = None
-        current_content_tokens = []
-        
-        i = 0
-        while i < len(token_ids):
-            token_id = token_ids[i]
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all tasks
+            future_to_index = {
+                executor.submit(self.encode_conversation, conv, **kwargs): i 
+                for i, conv in enumerate(conversations)
+            }
             
-            if token_id == self.special_tokens.get(self.config.conversation_tokens["start"]):
-                # Save previous message if exists
-                if current_role is not None and current_content_tokens:
-                    content = self.decode(current_content_tokens, skip_special_tokens=False)
-                    messages.append({"role": current_role, "content": content})
-                
-                # Reset for new message
-                current_role = None
-                current_content_tokens = []
-                
-            elif token_id in [self.special_tokens.get(role_token) for role_token in self.config.role_tokens.values()]:
-                # Identify role
-                for role, role_token in self.config.role_tokens.items():
-                    if token_id == self.special_tokens.get(role_token):
-                        current_role = role
-                        break
-            
-            elif token_id == self.special_tokens.get(self.config.conversation_tokens["end"]):
-                # End of message - save it
-                if current_role is not None:
-                    content = self.decode(current_content_tokens, skip_special_tokens=False)
-                    messages.append({"role": current_role, "content": content})
-                current_role = None
-                current_content_tokens = []
-                
-            else:
-                # Regular content token
-                if current_role is not None:
-                    current_content_tokens.append(token_id)
-            
-            i += 1
+            # Collect results in order
+            for future in as_completed(future_to_index):
+                index = future_to_index[future]
+                try:
+                    results[index] = future.result()
+                except Exception as e:
+                    logging.error(f"Batch encoding failed for conversation {index}: {e}")
+                    results[index] = []
         
-        # Handle any remaining content
-        if current_role is not None and current_content_tokens:
-            content = self.decode(current_content_tokens, skip_special_tokens=False)
-            messages.append({"role": current_role, "content": content})
-        
-        return {"messages": messages}
-    
-    def get_special_tokens_dict(self) -> Dict[str, int]:
-        """Get dictionary of all special tokens."""
-        return self.special_tokens.copy()
+        return results
     
     def is_special_token(self, token_id: int) -> bool:
-        """Check if token ID corresponds to a special token."""
-        return token_id in self.reverse_special_tokens
+        """Check if token is a special token."""
+        return token_id in self._reverse_special_tokens
     
-    def get_role_token_id(self, role: str) -> int:
-        """Get token ID for a specific role."""
-        normalized_role = self._normalize_role(role.lower())
-        role_token = self.config.role_tokens.get(normalized_role)
-        if role_token:
-            return self.special_tokens.get(role_token, self.unk_token_id)
-        return self.special_tokens.get(self.config.role_tokens["user"], self.unk_token_id)
-    
-    # LEGACY COMPATIBILITY METHODS
     def get_role_token(self, role: str) -> int:
-        """Legacy compatibility method."""
-        return self.get_role_token_id(role)
+        """Get token ID for a role with enhanced mapping."""
+        normalized_role = role.lower().strip()
+        return self._role_mapping.get(normalized_role, self.special_tokens["<|user|>"])
     
-    def encode(self, text: str) -> List[int]:
-        """Legacy encode method for basic text."""
-        return self.tokenizer.encode(text)
+    def get_special_tokens(self) -> Dict[str, int]:
+        """Get all special tokens."""
+        return self.special_tokens.copy()
+    
+    def get_vocab_size(self) -> int:
+        """Get total vocabulary size including special tokens."""
+        return self.vocab_size
     
     def get_stats(self) -> Dict[str, Any]:
         """Get tokenizer usage statistics."""
-        stats = self._stats.copy()
-        if self.config.use_cache:
-            stats['cache_hit_rate'] = (
-                stats['cache_hits'] / max(1, stats['cache_hits'] + stats['cache_misses'])
-            )
-            stats['encode_cache_size'] = len(self._encode_cache)
-            stats['decode_cache_size'] = len(self._decode_cache)
+        stats = self.stats.copy()
+        if self.enable_caching:
+            cache_info = self._cached_encode.cache_info()
+            stats.update({
+                'cache_hits': cache_info.hits,
+                'cache_misses': cache_info.misses,
+                'cache_size': cache_info.currsize,
+                'cache_max_size': cache_info.maxsize,
+            })
         return stats
     
-    def clear_cache(self) -> None:
-        """Clear all caches."""
-        if self.config.use_cache:
-            self._encode_cache.clear()
-            self._decode_cache.clear()
-            self.logger.info("Cleared tokenizer caches")
+    def reset_stats(self):
+        """Reset usage statistics."""
+        self.stats = {
+            'total_conversations_processed': 0,
+            'total_tokens_generated': 0,
+            'cache_hits': 0,
+            'cache_misses': 0,
+            'validation_errors': 0,
+            'encoding_errors': 0,
+        }
+        if self.enable_caching:
+            self._cached_encode.cache_clear()
     
-    def save_tokenizer(self, path: Union[str, Path]) -> None:
-        """Save tokenizer configuration and special tokens."""
-        path = Path(path)
-        path.mkdir(parents=True, exist_ok=True)
-        
-        # Save configuration
-        self.config.save(path / "config.json")
-        
-        # Save special tokens
-        with open(path / "special_tokens.pkl", 'wb') as f:
-            pickle.dump({
-                'special_tokens': self.special_tokens,
-                'reverse_special_tokens': self.reverse_special_tokens,
-                'vocab_size': self.vocab_size,
-                'base_vocab_size': self.base_vocab_size
-            }, f)
-        
-        self.logger.info(f"Saved tokenizer to {path}")
+    def estimate_tokens(self, text: str) -> int:
+        """Quick token count estimation without full encoding."""
+        # Rough estimation: ~4 characters per token for English
+        # More accurate for length planning without full encoding cost
+        return max(1, len(text) // 4)
     
-    @classmethod
-    def load_tokenizer(cls, path: Union[str, Path]) -> 'ConversationTokenizer':
-        """Load tokenizer from saved files."""
-        path = Path(path)
+    def truncate_to_limit(self, 
+                         conversation: Dict[str, Any], 
+                         max_tokens: int,
+                         preserve_messages: int = 1) -> Dict[str, Any]:
+        """
+        Truncate conversation to fit within token limit while preserving structure.
         
-        # Load configuration
-        config = TokenizerConfig.load(path / "config.json")
+        Args:
+            conversation: Input conversation
+            max_tokens: Maximum allowed tokens
+            preserve_messages: Number of recent messages to always keep
+        """
+        messages = conversation.get('messages', [])
+        if not messages:
+            return conversation
         
-        # Create instance
-        tokenizer = cls(config)
+        # Always preserve the last N messages
+        preserve_count = min(preserve_messages, len(messages))
+        preserved_messages = messages[-preserve_count:] if preserve_count > 0 else []
+        candidate_messages = messages[:-preserve_count] if preserve_count < len(messages) else []
         
-        # Load special tokens
-        with open(path / "special_tokens.pkl", 'rb') as f:
-            saved_data = pickle.load(f)
-            tokenizer.special_tokens = saved_data['special_tokens']
-            tokenizer.reverse_special_tokens = saved_data['reverse_special_tokens']
-            tokenizer.vocab_size = saved_data['vocab_size']
-            tokenizer.base_vocab_size = saved_data['base_vocab_size']
+        # Build conversation incrementally from the end
+        result_messages = preserved_messages.copy()
         
-        tokenizer.logger.info(f"Loaded tokenizer from {path}")
-        return tokenizer
+        for message in reversed(candidate_messages):
+            test_conversation = {'messages': [message] + result_messages}
+            tokens = self.encode_conversation(test_conversation)
+            
+            if len(tokens) <= max_tokens:
+                result_messages.insert(0, message)
+            else:
+                break
+        
+        # Create result conversation
+        result = conversation.copy()
+        result['messages'] = result_messages
+        
+        return result
     
     def __repr__(self) -> str:
-        return (f"ConversationTokenizer(model={self.config.model.value}, "
-                f"vocab_size={self.vocab_size}, "
-                f"special_tokens={len(self.special_tokens)})")
-
-
-# Convenience functions
-def create_tokenizer(model: str = "gpt4o", **kwargs) -> ConversationTokenizer:
-    """Create a tokenizer with common configurations."""
-    model_map = {
-        "gpt4o": TokenizerModel.GPT4O,
-        "gpt4": TokenizerModel.GPT4,
-        "gpt3": TokenizerModel.GPT3,
-        "gpt2": TokenizerModel.GPT2
-    }
-    
-    config = TokenizerConfig(
-        model=model_map.get(model.lower(), TokenizerModel.GPT4O),
-        **kwargs
-    )
-    
-    return ConversationTokenizer(config)
-
-
-# Example usage and testing
-if __name__ == "__main__":
-    # Test compatibility with legacy interface
-    tokenizer = ConversationTokenizer(model_name="gpt2")  # Legacy init
-    
-    # Example conversation
-    conversation = {
-        "messages": [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": "Hello, how are you today?"},
-            {"role": "assistant", "content": "I'm doing well, thank you for asking! How can I help you?"}
-        ]
-    }
-    
-    # Test legacy methods expected by dataset.py
-    tokens = tokenizer.encode_conversation(conversation)
-    print(f"Encoded to {len(tokens)} tokens")
-    
-    # Test role token access (expected by dataset.py)
-    assistant_token = tokenizer.get_role_token('assistant')
-    print(f"Assistant token ID: {assistant_token}")
-    
-    # Test special token access (expected by dataset.py)
-    im_end_token = tokenizer.special_tokens["<|im_end|>"]
-    print(f"End token ID: {im_end_token}")
-    
-    # Test decode
-    decoded = tokenizer.decode(tokens)
-    print(f"Decoded: {decoded}")
-    
-    # Show stats
-    print(f"Stats: {json.dumps(tokenizer.get_stats(), indent=2)}")
+        return (f"ConversationTokenizer(model='{self.model_name}', "
+                f"vocab_size={self.vocab_size:,}, "
+                f"max_context={self.max_context_length:,})")

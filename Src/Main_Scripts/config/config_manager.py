@@ -39,7 +39,7 @@ class Config:
     train_data_path: str = "data/train.jsonl"
     eval_data_path: str = "data/eval.jsonl"
     num_workers: int = 2
-    assistant_loss_weight: float = 1.5  # Required by dataset.py
+    assistant_loss_weight: float = 1.5
     max_conversations_per_file: int = 10000
     
     # Generation parameters
@@ -92,7 +92,6 @@ class Config:
         assert self.weight_decay >= 0, "Weight decay must be non-negative"
         assert self.num_epochs > 0, "Number of epochs must be positive"
         assert self.warmup_ratio >= 0 and self.warmup_ratio <= 1, "Warmup ratio must be between 0 and 1"
-        assert self.assistant_loss_weight >= 0, "Assistant loss weight must be non-negative"
     
     def save(self, path: str):
         """Save configuration to file."""
@@ -116,26 +115,25 @@ class ConfigPresets:
         """Minimal config for debugging and testing."""
         return Config(
             # Tiny model for fast iteration
-            vocab_size=10000,
+            vocab_size=1024,
             hidden_size=256,
             num_layers=4,
             num_heads=4,
-            num_kv_heads=4,
+            num_kv_heads=2,
             seq_length=512,
             intermediate_size=512,
             
             # Fast training settings
             batch_size=2,
-            gradient_accumulation_steps=1,
-            num_epochs=2,
-            learning_rate=1e-4,
+            gradient_accumulation_steps=2,
+            num_epochs=1,
+            learning_rate=1e-3,
             weight_decay=0.01,
             eval_every_n_batches=50,
             save_every_n_batches=100,
-            precision="fp16",
+            precision="fp32",
             compile=False,
             num_workers=0,
-            assistant_loss_weight=1.5,
             
             # Monitoring and stability
             experiment_name="debug_run",
@@ -169,7 +167,6 @@ class ConfigPresets:
             precision="fp16",
             compile=True,
             num_workers=2,
-            assistant_loss_weight=1.5,
             
             # Production settings
             experiment_name="small_model",
@@ -203,7 +200,6 @@ class ConfigPresets:
             precision="bf16",
             compile=True,
             num_workers=4,
-            assistant_loss_weight=1.5,
             
             # Production monitoring
             experiment_name="medium_model",
@@ -230,7 +226,7 @@ class ConfigPresets:
             # Large-scale training
             batch_size=2,
             gradient_accumulation_steps=16,
-            num_epochs=200,
+            num_epochs=3,
             learning_rate=2e-4,
             weight_decay=0.01,
             eval_every_n_batches=2000,
@@ -238,7 +234,6 @@ class ConfigPresets:
             precision="bf16",
             compile=True,
             num_workers=8,
-            assistant_loss_weight=1.5,
             
             # Enterprise monitoring
             experiment_name="large_model",

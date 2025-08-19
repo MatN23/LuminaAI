@@ -1,5 +1,7 @@
-# Copyright (c) 2025 Matias Nielsen. All rights reserved.
-# Licensed under the Custom License below.
+"""
+Data Processing Utilities
+Enhanced data processing and validation functions.
+"""
 
 import json
 import logging

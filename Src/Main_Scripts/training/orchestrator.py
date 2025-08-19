@@ -1,5 +1,7 @@
-# Copyright (c) 2025 Matias Nielsen. All rights reserved.
-# Licensed under the Custom License below.
+"""
+Training Orchestrator Module
+Orchestrates training with fault tolerance and monitoring.
+"""
 
 import json
 import logging

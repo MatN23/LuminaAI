@@ -1,5 +1,7 @@
-# Copyright (c) 2025 Matias Nielsen. All rights reserved.
-# Licensed under the Custom License below.
+"""
+Environment Utilities
+Environment validation and system resource estimation.
+"""
 
 import shutil
 import torch
