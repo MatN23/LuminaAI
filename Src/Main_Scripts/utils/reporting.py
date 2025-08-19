@@ -1,7 +1,5 @@
-"""
-Reporting Utilities
-Create comprehensive reports and summaries.
-"""
+# Copyright (c) 2025 Matias Nielsen. All rights reserved.
+# Licensed under the Custom License below.
 
 import os
 import logging
