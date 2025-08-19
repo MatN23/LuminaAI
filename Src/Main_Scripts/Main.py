@@ -1,5 +1,5 @@
 # Copyright (c) 2025 Matias Nielsen. All rights reserved.
-# Licensed under the Custom License below.th: python Main.py [arguments]
+# Licensed under the Custom License below.
 
 import os
 import sys
