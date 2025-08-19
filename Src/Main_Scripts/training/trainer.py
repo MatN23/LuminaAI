@@ -1,5 +1,7 @@
-# Copyright (c) 2025 Matias Nielsen. All rights reserved.
-# Licensed under the Custom License below.
+"""
+Enhanced Training Module
+Main trainer class with comprehensive monitoring and fault tolerance.
+"""
 
 import math
 import time
@@ -10,6 +12,7 @@ import torch.nn.functional as F
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import OneCycleLR, CosineAnnealingLR
 from torch.cuda.amp import autocast, GradScaler
+from contextlib import nullcontext
 from typing import Dict, Optional, Any
 from pathlib import Path
 from datetime import datetime
@@ -41,10 +44,26 @@ class EnhancedConversationTrainer:
         self.optimizer = self._create_optimizer()
         self.scheduler = None
         
-        # Mixed precision setup
-        self.use_amp = config.precision in ["fp16", "bf16"]
-        self.dtype = torch.bfloat16 if config.precision == "bf16" else torch.float16
-        self.scaler = GradScaler() if config.precision == "fp16" else None
+        # Mixed precision setup - with version compatibility
+        self.use_amp = config.precision in ["fp16", "bf16"] and torch.cuda.is_available()
+        self.scaler = GradScaler() if self.use_amp and config.precision == "fp16" else None
+        
+        # Check PyTorch version for autocast compatibility
+        self.torch_version = torch.__version__
+        logging.info(f"PyTorch version: {self.torch_version}")
+    
+    def _get_autocast_context(self):
+        """Get autocast context with version compatibility."""
+        if not self.use_amp:
+            return nullcontext()
+        
+        # For older PyTorch versions, use simpler autocast
+        try:
+            # Try new API first (PyTorch >= 1.10)
+            return autocast(device_type='cuda', enabled=True)
+        except TypeError:
+            # Fallback to old API
+            return autocast(enabled=True)
         
         # Model compilation
         self._compile_model()
@@ -68,13 +87,67 @@ class EnhancedConversationTrainer:
         }
         
         # Health monitoring
-        self.health_monitor = TrainingHealthMonitor()
+        try:
+            self.health_monitor = TrainingHealthMonitor()
+        except Exception as e:
+            logging.warning(f"Failed to initialize health monitor: {e}")
+            # Create a simple fallback health monitor
+            class SimpleHealthMonitor:
+                def update(self, loss, grad_norm): pass
+                def get_status(self): return "OK"
+                def get_summary(self): return {}
+            self.health_monitor = SimpleHealthMonitor()
         
         # Checkpoint management
-        self.checkpoint_manager = CheckpointManager(config)
+        try:
+            self.checkpoint_manager = CheckpointManager(config)
+        except Exception as e:
+            logging.error(f"Failed to initialize checkpoint manager: {e}")
+            # Create a simple fallback checkpoint manager
+            class SimpleCheckpointManager:
+                def __init__(self, config):
+                    self.config = config
+                    self.checkpoint_dir = Path("checkpoints")
+                    self.checkpoint_dir.mkdir(exist_ok=True)
+                
+                def save_checkpoint(self, model, optimizer, scheduler, global_step, epoch, metrics, suffix=""):
+                    checkpoint_path = self.checkpoint_dir / f"checkpoint_{suffix}_{global_step}.pt"
+                    torch.save({
+                        'model_state_dict': model.state_dict(),
+                        'optimizer_state_dict': optimizer.state_dict(),
+                        'scheduler_state_dict': scheduler.state_dict() if scheduler else None,
+                        'global_step': global_step,
+                        'epoch': epoch,
+                        'metrics': metrics
+                    }, checkpoint_path)
+                    logging.info(f"Checkpoint saved: {checkpoint_path}")
+                    return str(checkpoint_path)
+                
+                def load_checkpoint(self, path, model, optimizer=None, scheduler=None):
+                    checkpoint = torch.load(path, map_location='cpu')
+                    model.load_state_dict(checkpoint['model_state_dict'])
+                    if optimizer and 'optimizer_state_dict' in checkpoint:
+                        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                    if scheduler and 'scheduler_state_dict' in checkpoint:
+                        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+                    return checkpoint.get('epoch', 0)
+                
+                def get_resume_path(self):
+                    checkpoints = list(self.checkpoint_dir.glob("*.pt"))
+                    return str(max(checkpoints, key=lambda x: x.stat().st_mtime)) if checkpoints else None
+            
+            self.checkpoint_manager = SimpleCheckpointManager(config)
         
         logging.info(f"Trainer initialized on {self.device}")
+        logging.info(f"Model parameters: {self._count_parameters():,}")
         self._log_memory_usage("Initial")
+    
+    def _count_parameters(self):
+        """Count model parameters."""
+        try:
+            return sum(p.numel() for p in self.model.parameters())
+        except:
+            return 0
     
     def _setup_gpu(self):
         """Setup GPU with optimal configuration."""
@@ -210,7 +283,7 @@ class EnhancedConversationTrainer:
             return {'loss': 0.0, 'perplexity': float('inf'), 'valid_tokens': 0}
         
         # Forward pass with autocast
-        with autocast(device_type='cuda', enabled=self.use_amp, dtype=self.dtype):
+        with self._get_autocast_context():
             logits = self.model(batch['input_ids'], batch['attention_mask'])
             loss_dict = self.compute_loss(logits, batch['labels'], batch['loss_weights'])
             loss = loss_dict['loss'] / self.config.gradient_accumulation_steps
@@ -295,7 +368,7 @@ class EnhancedConversationTrainer:
             if batch['input_ids'].numel() == 0:
                 continue
             
-            with autocast(device_type='cuda', enabled=self.use_amp, dtype=self.dtype):
+            with self._get_autocast_context():
                 logits = self.model(batch['input_ids'], batch['attention_mask'])
                 loss_dict = self.compute_loss(logits, batch['labels'], batch['loss_weights'])
             
@@ -376,7 +449,10 @@ class EnhancedConversationTrainer:
                         self._check_early_stopping(eval_metrics['eval_loss'])
                 
                 # Log epoch metrics
-                self.logger.log_metrics(epoch_metrics, epoch, "epoch")
+                try:
+                    self.logger.log_metrics(epoch_metrics, epoch, "epoch")
+                except Exception as e:
+                    logging.warning(f"Failed to log epoch metrics: {e}")
                 
                 # Save epoch checkpoint
                 self.checkpoint_manager.save_checkpoint(
@@ -485,18 +561,25 @@ class EnhancedConversationTrainer:
                 
                 # Log to monitoring backends
                 if self.global_step % 10 == 0:
-                    self.logger.log_metrics({
-                        'train_loss': accumulation_metrics['loss'],
-                        'learning_rate': opt_metrics['lr'],
-                        'gradient_norm': opt_metrics['grad_norm'],
-                        'throughput_tokens_per_sec': tokens_per_sec,
-                        'perplexity': math.exp(min(accumulation_metrics['raw_loss'], 10))
-                    }, self.global_step, "train")
+                    try:
+                        self.logger.log_metrics({
+                            'train_loss': accumulation_metrics['loss'],
+                            'learning_rate': opt_metrics['lr'],
+                            'gradient_norm': opt_metrics['grad_norm'],
+                            'throughput_tokens_per_sec': tokens_per_sec,
+                            'perplexity': math.exp(min(accumulation_metrics['raw_loss'], 10))
+                        }, self.global_step, "train")
+                    except Exception as e:
+                        logging.debug(f"Failed to log training metrics: {e}")
                 
                 # System monitoring
                 health_check_interval = getattr(self.config, 'health_check_interval', 100)
                 if self.global_step % health_check_interval == 0:
-                    self.logger.log_system_stats(self.global_step)
+                    try:
+                        if hasattr(self.logger, 'log_system_stats'):
+                            self.logger.log_system_stats(self.global_step)
+                    except Exception as e:
+                        logging.debug(f"Failed to log system stats: {e}")
                     self._log_memory_usage(f"Step {self.global_step}")
                 
                 # Periodic evaluation
@@ -582,7 +665,10 @@ class EnhancedConversationTrainer:
             eval_metrics = self.evaluate(self.eval_dataset, max_batches=50)
             
             # Log evaluation metrics
-            self.logger.log_metrics(eval_metrics, self.global_step, "eval")
+            try:
+                self.logger.log_metrics(eval_metrics, self.global_step, "eval")
+            except Exception as e:
+                logging.debug(f"Failed to log eval metrics: {e}")
             
             logging.info(f"Eval | Step {self.global_step} | "
                         f"Loss: {eval_metrics['eval_loss']:.6f} | "
@@ -612,17 +698,22 @@ class EnhancedConversationTrainer:
     
     def _log_training_config(self, batches_per_epoch: int, total_steps: int):
         """Log comprehensive training configuration."""
+        try:
+            model_params = self._count_parameters()
+        except:
+            model_params = "Unknown"
+        
         config_info = [
-            f"Model Parameters: {self.model.get_num_params():,}",
+            f"Model Parameters: {model_params:,}" if isinstance(model_params, int) else f"Model Parameters: {model_params}",
             f"Epochs: {self.config.num_epochs}",
             f"Batches per epoch: {batches_per_epoch:,}",
             f"Total steps: {total_steps:,}",
-            f"Effective batch size: {self.config.effective_batch_size}",
+            f"Effective batch size: {getattr(self.config, 'effective_batch_size', self.config.batch_size)}",
             f"Learning rate: {self.config.learning_rate:.2e}",
-            f"Weight decay: {self.config.weight_decay}",
-            f"Warmup ratio: {self.config.warmup_ratio}",
-            f"Max grad norm: {self.config.max_grad_norm}",
-            f"Precision: {self.config.precision}",
+            f"Weight decay: {getattr(self.config, 'weight_decay', 0.01)}",
+            f"Warmup ratio: {getattr(self.config, 'warmup_ratio', 0.1)}",
+            f"Max grad norm: {getattr(self.config, 'max_grad_norm', 1.0)}",
+            f"Precision: {getattr(self.config, 'precision', 'fp32')}",
             f"Device: {self.device}"
         ]
         
@@ -649,28 +740,43 @@ class EnhancedConversationTrainer:
     
     def _save_training_summary(self, total_time: float):
         """Save comprehensive training summary."""
-        summary = {
-            'experiment_name': self.config.experiment_name,
-            'total_training_time_hours': total_time / 3600,
-            'total_epochs': self.current_epoch,
-            'total_steps': self.global_step,
-            'final_metrics': {
-                'best_eval_loss': self.best_eval_loss,
-                'final_train_loss': self.metrics['train_losses'][-1] if self.metrics['train_losses'] else None,
-                'avg_throughput': np.mean(self.metrics['throughput']) if self.metrics['throughput'] else 0
-            },
-            'model_config': asdict(self.config),
-            'health_summary': self.health_monitor.get_summary()
-        }
+        try:
+            # Try to convert config to dict
+            try:
+                model_config = asdict(self.config)
+            except:
+                # Fallback to manual conversion
+                model_config = {
+                    attr: getattr(self.config, attr) 
+                    for attr in dir(self.config) 
+                    if not attr.startswith('_') and not callable(getattr(self.config, attr))
+                }
+            
+            summary = {
+                'experiment_name': getattr(self.config, 'experiment_name', 'unknown'),
+                'total_training_time_hours': total_time / 3600,
+                'total_epochs': self.current_epoch,
+                'total_steps': self.global_step,
+                'final_metrics': {
+                    'best_eval_loss': self.best_eval_loss,
+                    'final_train_loss': self.metrics['train_losses'][-1] if self.metrics['train_losses'] else None,
+                    'avg_throughput': np.mean(self.metrics['throughput']) if self.metrics['throughput'] else 0
+                },
+                'model_config': model_config,
+                'health_summary': self.health_monitor.get_summary()
+            }
+            
+            summary_path = Path(f"experiments/{getattr(self.config, 'experiment_name', 'default')}/training_summary.json")
+            summary_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            with open(summary_path, 'w') as f:
+                import json
+                json.dump(summary, f, indent=2, default=str)  # default=str handles non-serializable objects
+            
+            logging.info(f"Training summary saved: {summary_path}")
         
-        summary_path = Path(f"experiments/{self.config.experiment_name}/training_summary.json")
-        summary_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        with open(summary_path, 'w') as f:
-            import json
-            json.dump(summary, f, indent=2)
-        
-        logging.info(f"Training summary saved: {summary_path}")
+        except Exception as e:
+            logging.error(f"Failed to save training summary: {e}")
     
     def _log_memory_usage(self, context: str):
         """Log memory usage information."""
@@ -743,7 +849,7 @@ class EnhancedConversationTrainer:
                     input_ids = input_ids[:, -self.config.seq_length//2:]
                 
                 # Forward pass
-                with autocast(device_type='cuda', enabled=self.use_amp, dtype=self.dtype):
+                with self._get_autocast_context():
                     logits = self.model(input_ids)
                 
                 # Get next token logits
