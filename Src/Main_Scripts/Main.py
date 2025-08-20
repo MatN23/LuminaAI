@@ -74,12 +74,13 @@ def main():
     resume = None
     seed = 42
     test_generation = True
-    validate_data = 'oasst1_data/oasst1_validation.jsonl'
+    validate_data = None  # Skip validation since no validation.jsonl file exists
     create_report = False
     process_oasst = None
     max_conversations = None
     check_environment = False
     estimate_time = False
+    dry_run = False  # Actually train the model
     dry_run = False
     
     # Environment validation
@@ -107,23 +108,82 @@ def main():
             logging.error(f"Data processing failed: {e}")
             return 1
     
+    # Initialize tokenizer and log its details
+    try:
+        tokenizer = ConversationTokenizer(model_name="gpt-4")
+        # Note: ConversationTokenizer already logs its initialization details
+    except Exception as e:
+        logging.error(f"Failed to initialize tokenizer: {e}")
+        return 1
+    
     # Data validation
     if validate_data:
         try:
-            tokenizer = ConversationTokenizer()
+            logging.info("Data Validation Results:")
             stats = validate_data_comprehensive(validate_data, tokenizer)
             
-            logging.info("Data Validation Results:")
-            logging.info(f"  Valid conversations: {stats['conversation_stats']['valid_conversations']:,}")
-            logging.info(f"  Success rate: {stats['quality_metrics']['success_rate']:.2%}")
-            logging.info(f"  Average tokens: {stats['token_stats']['avg_tokens']:.1f}")
+            if stats is None:
+                logging.error("Data validation failed - no stats returned")
+                return 1
+            
+            # Log validation results with safe access to keys
+            try:
+                # Handle conversation stats
+                if 'conversation_stats' in stats:
+                    conv_stats = stats['conversation_stats']
+                    valid_convs = conv_stats.get('valid_conversations', conv_stats.get('total_conversations', 0))
+                    logging.info(f"  Valid conversations: {valid_convs:,}")
+                elif 'total_conversations' in stats:
+                    logging.info(f"  Total conversations: {stats['total_conversations']:,}")
+                
+                # Handle quality metrics
+                if 'quality_metrics' in stats:
+                    qual_metrics = stats['quality_metrics']
+                    success_rate = qual_metrics.get('success_rate', qual_metrics.get('validation_success_rate', 0))
+                    logging.info(f"  Success rate: {success_rate:.2%}")
+                elif 'success_rate' in stats:
+                    logging.info(f"  Success rate: {stats['success_rate']:.2%}")
+                
+                # Handle token stats
+                if 'token_stats' in stats:
+                    token_stats = stats['token_stats']
+                    avg_tokens = token_stats.get('avg_tokens', token_stats.get('average_tokens', 0))
+                    logging.info(f"  Average tokens: {avg_tokens:.1f}")
+                elif 'avg_tokens' in stats:
+                    logging.info(f"  Average tokens: {stats['avg_tokens']:.1f}")
+                elif 'average_tokens' in stats:
+                    logging.info(f"  Average tokens: {stats['average_tokens']:.1f}")
+                
+                # Log any additional useful stats
+                for key, value in stats.items():
+                    if key not in ['conversation_stats', 'quality_metrics', 'token_stats']:
+                        if isinstance(value, (int, float)):
+                            if isinstance(value, float) and 0 <= value <= 1:
+                                logging.info(f"  {key.replace('_', ' ').title()}: {value:.2%}")
+                            else:
+                                logging.info(f"  {key.replace('_', ' ').title()}: {value:,}")
+                        elif isinstance(value, str):
+                            logging.info(f"  {key.replace('_', ' ').title()}: {value}")
+                            
+            except Exception as stat_error:
+                logging.warning(f"Error processing stats: {stat_error}")
+                logging.info(f"Raw stats keys: {list(stats.keys())}")
             
             if create_report:
                 create_data_summary_report([validate_data], tokenizer)
             
             return 0
+            
+        except FileNotFoundError:
+            logging.error(f"Data validation failed: File '{validate_data}' not found")
+            return 1
+        except KeyError as e:
+            logging.error(f"Data validation failed: Missing key {e}")
+            logging.debug(f"Available keys: {list(stats.keys()) if 'stats' in locals() else 'No stats available'}")
+            return 1
         except Exception as e:
             logging.error(f"Data validation failed: {e}")
+            logging.debug(traceback.format_exc())
             return 1
     
     # Load configuration

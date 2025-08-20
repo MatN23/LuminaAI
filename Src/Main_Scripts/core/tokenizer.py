@@ -45,8 +45,8 @@ class ConversationTokenizer:
     _ROLE_PATTERN = re.compile(r'^(user|prompter|assistant|system|human|ai|bot)$', re.IGNORECASE)
     
     def __init__(self, 
-                 model_name: str = "gpt2",
-                 max_context_length: int = 4096,
+                 model_name: str = "gpt-4",  # Changed default from gpt2 to gpt-4
+                 max_context_length: int = 8192,  # Updated for GPT-4 context length
                  enable_caching: bool = True,
                  thread_safe: bool = True,
                  validation_level: str = "strict"):
@@ -54,7 +54,7 @@ class ConversationTokenizer:
         Initialize enhanced tokenizer.
         
         Args:
-            model_name: Tokenizer model to use
+            model_name: Tokenizer model to use (gpt-4, gpt-4-turbo, gpt-3.5-turbo, etc.)
             max_context_length: Maximum context length for truncation
             enable_caching: Enable LRU caching for repeated tokenizations
             thread_safe: Enable thread-safe operations
@@ -133,11 +133,25 @@ class ConversationTokenizer:
         with cls._cache_lock:
             if model_name not in cls._tokenizer_cache:
                 try:
-                    cls._tokenizer_cache[model_name] = tiktoken.get_encoding(model_name)
+                    # Try to get encoding for the specific model
+                    if model_name in ["gpt-4", "gpt-4-turbo", "gpt-4-32k"]:
+                        # GPT-4 models use cl100k_base encoding
+                        cls._tokenizer_cache[model_name] = tiktoken.get_encoding("cl100k_base")
+                    elif model_name in ["gpt-3.5-turbo", "gpt-3.5-turbo-16k"]:
+                        # GPT-3.5-turbo also uses cl100k_base
+                        cls._tokenizer_cache[model_name] = tiktoken.get_encoding("cl100k_base")
+                    else:
+                        # Try to get encoding by model name, fallback to cl100k_base for newer models
+                        try:
+                            cls._tokenizer_cache[model_name] = tiktoken.encoding_for_model(model_name)
+                        except KeyError:
+                            logging.warning(f"Model {model_name} not found, using cl100k_base encoding")
+                            cls._tokenizer_cache[model_name] = tiktoken.get_encoding("cl100k_base")
+                    
                     logging.debug(f"Created new tokenizer for {model_name}")
                 except Exception as e:
                     logging.error(f"Failed to load tokenizer {model_name}: {e}")
-                    # Fallback to gpt2 if requested model fails
+                    # Fallback to gpt2 if everything fails
                     if model_name != "gpt2":
                         logging.warning(f"Falling back to gpt2 tokenizer")
                         cls._tokenizer_cache[model_name] = tiktoken.get_encoding("gpt2")
@@ -538,9 +552,9 @@ class ConversationTokenizer:
     
     def estimate_tokens(self, text: str) -> int:
         """Quick token count estimation without full encoding."""
-        # Rough estimation: ~4 characters per token for English
+        # For GPT-4 (cl100k_base), roughly ~3-4 characters per token for English
         # More accurate for length planning without full encoding cost
-        return max(1, len(text) // 4)
+        return max(1, len(text) // 3)
     
     def truncate_to_limit(self, 
                          conversation: Dict[str, Any], 
