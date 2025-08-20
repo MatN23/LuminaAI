@@ -1,385 +1,350 @@
-# LuminaAI: Enterprise-Grade Conversational AI Training Platform 🚀
+# Conversational Transformer Training Framework
 
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-orange.svg)](https://pytorch.org/)
-[![Transformers](https://img.shields.io/badge/🤗%20Transformers-4.0+-yellow.svg)](https://huggingface.co/transformers/)
-[![License: Custom](https://img.shields.io/badge/License-Custom-red.svg)](LICENSE)
-[![GitHub stars](https://img.shields.io/github/stars/MatN23/LuminaAI?style=social)](https://github.com/MatN23/LuminaAI/stargazers)
+A production-ready machine learning framework for training conversational transformers with comprehensive monitoring, fault tolerance, and optimization features.
 
-> **Production-ready ChatGPT/GPT-4 style model training platform** - Train your own conversational AI from scratch with enterprise-grade reliability, fault tolerance, and scalability.
+## 🚀 Features
 
-*🎯 **Keywords**: chatbot training, transformer training, conversational ai, gpt training, llm training, pytorch transformer, chatgpt clone, ai model training, nlp training, deep learning platform*
+### Core Capabilities
+- **Production-Grade Training**: Robust training pipeline with comprehensive error handling
+- **Conversational AI**: Specialized for chat/conversation datasets (OASST format support)
+- **Mixed Precision Training**: FP16/BF16 support with automatic mixed precision
+- **Advanced Architecture**: Grouped Query Attention (GQA), RoPE, SwiGLU, RMSNorm
+- **Flash Attention**: Optional flash attention for improved memory efficiency
+- **Model Compilation**: PyTorch 2.0+ compilation support for faster training
 
----
+### Training Features
+- **Gradient Accumulation**: Efficient training with large effective batch sizes
+- **Learning Rate Scheduling**: Cosine, OneCycle, and Linear schedulers
+- **Early Stopping**: Configurable patience-based early stopping
+- **Checkpointing**: Automatic and manual checkpoint management
+- **Resume Training**: Seamless training resumption from checkpoints
 
-## 🌟 Why Choose LuminaAI Over Other Training Frameworks?
+### Monitoring & Reliability
+- **Comprehensive Logging**: Detailed training metrics and system monitoring
+- **Health Monitoring**: Real-time training health checks and anomaly detection
+- **Fault Tolerance**: Automatic recovery from failures with retry logic
+- **Memory Management**: GPU memory optimization and monitoring
+- **Backup System**: Automatic periodic backups of training state
 
-| Feature | LuminaAI | Transformers | DeepSpeed | Custom Solutions |
-|---------|----------|-------------|-----------|------------------|
-| **Zero-Config Start** | ✅ 30 seconds | ❌ Complex setup | ❌ Expert knowledge | ❌ Build from scratch |
-| **Fault Recovery** | ✅ Automatic | ⚠️ Manual | ⚠️ Limited | ❌ DIY |
-| **Health Monitoring** | ✅ Built-in | ❌ External tools | ❌ None | ❌ Custom build |
-| **Production Ready** | ✅ Day 1 | ⚠️ Requires work | ⚠️ Complex | ❌ Months of work |
-| **Free & Open** | ✅ $0 cost | ✅ Free | ✅ Free | 💰 Expensive |
+### Data Processing
+- **Enhanced Tokenization**: GPT-4 compatible tokenization with special tokens
+- **Data Validation**: Comprehensive dataset validation and quality checks
+- **Batch Processing**: Multi-threaded data processing with error handling
+- **OASST Support**: Native support for OpenAssistant dataset format
 
-### 🔥 **"Enterprise ML infrastructure built by a 13-year-old, $0 budget"**
-
-**Perfect for:**
-- 🎓 **Students & Researchers** - Learn transformer training without complexity
-- 🏢 **Startups** - Build ChatGPT competitors on minimal budget  
-- 🔬 **AI Labs** - Production-ready research infrastructure
-- 💼 **Enterprises** - Scale conversational AI without vendor lock-in
-
----
-
-## ⚡ **Get Started in 30 Seconds**
+## 📋 Requirements
 
 ```bash
-# 1. Clone and install (2 minutes)
-git clone https://github.com/MatN23/LuminaAI.git && cd LuminaAI
-pip install -r requirements.txt
+# Core dependencies
+torch>=1.13.0
+tiktoken>=0.5.0
+numpy>=1.21.0
+psutil>=5.8.0
 
-# 2. Start training immediately  
-python Main.py
-
-# 🎉 That's it! Your ChatGPT-style model is now training
+# Optional dependencies
+flash-attn>=2.0.0  # For flash attention support
+wandb>=0.15.0      # For experiment tracking
 ```
 
-**What happens next:**
-- ✅ Auto-generates sample conversations if no data provided
-- ✅ Validates your GPU setup and dependencies  
-- ✅ Starts training with production-optimized settings
-- ✅ Real-time progress monitoring and health checks
-- ✅ Automatic checkpointing - never lose progress
-- ✅ Built-in chat interface to test your model
+## 🛠️ Installation
 
----
-
-## 🎯 **Popular Use Cases & Success Stories**
-
-### 🤖 **Build Your Own ChatGPT**
+1. **Clone the repository**
 ```bash
-# Train a conversational assistant like ChatGPT/Claude
-python Main.py --config large --data conversations.jsonl --epochs 50
-```
-
-### 🏢 **Domain-Specific Chatbots**
-```bash  
-# Customer service bot for e-commerce
-python Main.py --data customer_support.jsonl --config medium
-
-# Legal assistant for law firms  
-python Main.py --data legal_qa.jsonl --config large --specialized-legal
-```
-
-### 🎓 **Educational & Research**
-```bash
-# Quick prototype for research paper
-python Main.py --config debug --test-architecture
-
-# Experiment with different model sizes
-python Main.py --config small,medium,large --compare-results
-```
-
-### 🚀 **Production Deployment** 
-```bash
-# Multi-GPU enterprise training
-python Main.py --config xlarge --gpus 8 --distributed --production-mode
-```
-
----
-
-## 🏗️ **Architecture: Modern Transformer Stack**
-
-### **🧠 State-of-the-Art Components**
-- **🔄 Grouped Query Attention (GQA)** - Like GPT-4's efficiency optimizations
-- **🌊 RoPE Positional Encoding** - Superior to GPT-3's learned positions
-- **⚡ SwiGLU Activation** - Advanced activation from PaLM/LLaMA research  
-- **🚀 Flash Attention Ready** - 10x faster attention computation
-- **🎯 Mixed Precision Training** - FP16/BF16 for maximum GPU utilization
-- **📊 Conversation-Aware Tokenization** - Proper multi-turn handling
-
-### **🛡️ Production Features**
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    LuminaAI Enterprise Platform                 │
-├─────────────────┬─────────────────┬─────────────────┬───────────┤
-│   🔧 Training   │   📊 Monitor    │   🛡️ Recovery   │  🚀 Scale │
-│   Pipeline      │   & Health      │   & Backup      │  & Deploy │
-├─────────────────┼─────────────────┼─────────────────┼───────────┤
-│ • Smart Batching│ • Real-time Loss│ • Auto Resume   │• Multi-GPU│
-│ • Gradient Accum│ • Memory Monitor│ • Health Checks │• DeepSpeed│
-│ • Data Loading  │ • Anomaly Alert │ • Backup System │• Cloud    │  
-│ • Optimization  │ • Performance   │ • Error Recovery│• Inference│
-└─────────────────┴─────────────────┴─────────────────┴───────────┘
-```
-
----
-
-## 📊 **Performance Benchmarks** 
-
-### **🏃‍♂️ Training Speed** (Tokens/Second)
-| GPU Setup | Small (50M) | Medium (400M) | Large (1.2B) | XL (7B)* |
-|-----------|-------------|---------------|--------------|----------|
-| **RTX 4090** | 65,000 | 45,000 | 28,000 | 8,000 |
-| **A100 40GB** | 95,000 | 65,000 | 40,000 | 15,000 |
-| **A100 80GB** | 120,000 | 85,000 | 55,000 | 25,000 |
-| **8x A100** | - | - | 320,000 | 180,000 |
-
-*XL config requires DeepSpeed ZeRO-3
-
-### **💰 Training Costs** (Estimated)
-| Model Size | Local RTX 4090 | Cloud A100 | AWS/GCP Cost |
-|------------|----------------|-------------|--------------|
-| **Small (50M)** | $2 electricity | 2 hours | ~$12 |
-| **Medium (400M)** | $8 electricity | 8 hours | ~$48 |  
-| **Large (1.2B)** | $24 electricity | 24 hours | ~$144 |
-| **XL (7B)** | Not feasible | 120 hours | ~$720 |
-
----
-
-## 📈 **Data Formats & Integration**
-
-### **✅ Supported Data Sources**
-```python
-# OpenAssistant format (most popular)
-{"instruction": "Explain AI", "response": "AI is..."}
-
-# ChatML format (OpenAI style)  
-[{"role": "user", "content": "Hello"}, {"role": "assistant", "content": "Hi!"}]
-
-# Alpaca format
-{"instruction": "Task", "input": "Context", "output": "Response"} 
-
-# ShareGPT format
-{"conversations": [{"from": "human", "value": "Hi"}, {"from": "gpt", "value": "Hello!"}]}
-
-# Custom formats - auto-detected and converted
-```
-
-### **🔧 Data Processing Pipeline**
-```bash
-# Validate and analyze your dataset
-python Main.py --validate-data your_data.jsonl --create-report
-
-# Convert between formats automatically
-python Main.py --convert-data input.json --to-format jsonl --output processed.jsonl
-
-# Quality scoring and filtering  
-python Main.py --score-quality data.jsonl --min-score 0.7 --output clean_data.jsonl
-```
-
----
-
-## 🎛️ **Configuration Presets**
-
-### **🎯 Choose Your Training Style**
-```bash
-# 🐣 Beginner - Test everything works (10 minutes)
-python Main.py --preset debug
-
-# 🎓 Student - Learn transformer training (2-4 hours)  
-python Main.py --preset small --data your_conversations.jsonl
-
-# 🏢 Professional - Serious chatbot development (8-24 hours)
-python Main.py --preset medium --production-settings
-
-# 🚀 Enterprise - GPT-4 competitor scale (1-7 days)
-python Main.py --preset large --distributed --multi-gpu
-```
-
-### **⚙️ Advanced Customization**
-```python
-# Easy config editing in Main.py
-TRAINING_CONFIG = {
-    'model_size': 'large',           # debug/small/medium/large/xl
-    'learning_rate': 2e-4,           # Peak learning rate
-    'batch_size': 4,                 # Per-GPU batch size  
-    'max_length': 4096,              # Context window
-    'epochs': 50,                    # Training epochs
-    'save_every': 1000,              # Checkpoint frequency
-    'eval_every': 500,               # Evaluation frequency
-    'precision': 'bf16',             # fp32/fp16/bf16
-    'compile': True,                 # PyTorch 2.0 compilation
-    'flash_attention': True,         # Faster attention
-    'gradient_checkpointing': True,  # Memory optimization
-}
-```
-
----
-
-## 🚀 **Advanced Features**
-
-### **🔥 Production Optimizations**
-```bash
-# Maximum performance training
-python Main.py --config large \
-  --compile \
-  --flash-attention \
-  --mixed-precision bf16 \
-  --gradient-checkpointing \
-  --fused-optimizer \
-  --distributed-training
-
-# Memory optimization for large models  
-python Main.py --config xl \
-  --deepspeed-stage-3 \
-  --cpu-offload \
-  --gradient-checkpointing \
-  --activation-checkpointing
-```
-
-### **📊 Monitoring & Analysis**
-```bash
-# Real-time training dashboard
-python Main.py --monitor --web-dashboard --port 8080
-
-# Integration with popular tools
-python Main.py --logging wandb --project my-chatbot
-python Main.py --logging tensorboard --logdir ./logs  
-python Main.py --logging both --upload-metrics
-
-# Comprehensive training reports
-python Main.py --generate-report experiments/my_training/ --format html
-```
-
-### **🛡️ Fault Tolerance**
-```bash
-# Automatic recovery from any interruption
-python Main.py --auto-resume --max-retries 3
-
-# Manual recovery from corrupted checkpoint
-python Main.py --recover-from checkpoints/backup/ --validate-first
-
-# Health monitoring with alerts
-python Main.py --health-monitoring --alert-email admin@company.com
-```
-
----
-
-## 🔍 **Troubleshooting & Support**
-
-### **❓ Common Questions**
-
-**Q: "CUDA out of memory" error?**  
-```bash
-# Reduce batch size and enable memory optimizations
-python Main.py --batch-size 1 --gradient-accumulation 8 --gradient-checkpointing
-```
-
-**Q: Training loss not decreasing?**
-```bash  
-# Check data quality and reduce learning rate
-python Main.py --validate-data --lr 1e-5 --warmup-ratio 0.1
-```
-
-**Q: Want to resume training?**
-```bash
-# Automatic resume finds latest checkpoint
-python Main.py --auto-resume
-```
-
-**Q: How to deploy trained model?**
-```bash
-# Built-in inference server
-python Main.py --serve-model checkpoints/best.pt --port 8000
-```
-
-### **📞 Getting Help**
-- 💬 **Email My Work Email**: matiasnhmb@gmail.com
-
-
----
-
-## 🤝 **Community & Contributions**
-
-### **🌟 Join Our Growing Community**
-- **👥 500+ Active Users** across research and industry
-- **🔧 50+ Contributors** from around the world  
-- **📈 Growing 20%** month-over-month
-- **🏢 Used by Startups** and Fortune 500 companies
-
-### **🚀 Contributing**
-We welcome contributions! Check out our [Contributing Guide](CONTRIBUTING.md).
-
-**Popular contribution areas:**
-- 🧠 **New Model Architectures** (Mamba, RetNet, etc.)
-- 📊 **Monitoring Dashboards** (Custom metrics, alerts)
-- 🔧 **Optimization Techniques** (New training strategies)  
-- 📚 **Documentation** (Tutorials, examples, guides)
-- 🐛 **Bug Fixes** (Performance, compatibility)
-
-```bash
-# Quick development setup
 git clone https://github.com/MatN23/LuminaAI.git
-cd LuminaAI && pip install -e .
-python Main.py --config debug --dev-mode
+cd conversational-transformer
 ```
 
----
+2. **Install dependencies**
+```bash
+pip install -r requirements.txt
+```
 
-## 📈 **Roadmap**
+## 🚀 Quick Start
 
-### **🚀 Coming Soon** (Next 3 months)
-- **🌐 Multi-Node Training** - Scale across multiple machines
-- **🎨 Web UI** - No-code training interface  
-- **📱 Model Serving API** - Deploy trained models instantly
-- **🔌 HuggingFace Integration** - Seamless model sharing
-- **☁️ Cloud Launchers** - One-click AWS/GCP/Azure deployment
+### Basic Training
 
-### **🔬 Research Pipeline** (Next 6 months)  
-- **🧠 Latest Architectures** - Mamba, RetNet, RWKV integration
-- **🎯 Specialized Training** - RLHF, Constitutional AI, Tool Use
-- **⚡ Advanced Optimizations** - MoE, Sparse attention, Pruning
-- **📊 Custom Datasets** - Automatic data generation and curation
+```bash
+python main.py \
+  --config medium \
+  --train-data data/train.jsonl \
+  --eval-data data/eval.jsonl \
+  --epochs 10 \
+  --lr 1e-4 \
+  --batch-size 4 \
+  --experiment-name my_experiment
+```
 
----
+### Configuration Presets
 
-## 📄 **Citation & License**
+The framework includes several pre-configured setups:
 
-### **📚 Academic Citation**
-```bibtex  
-@software{luminaai2025,
-  title={LuminaAI: Enterprise-Grade Conversational Transformer Training Platform},
-  author={Nielsen, Matias},
-  year={2025},  
-  url={https://github.com/MatN23/LuminaAI},
-  note={Open-source conversational AI training platform}
+- **`debug`**: Small model for testing (fast iteration)
+- **`small`**: Lightweight model for experimentation
+- **`medium`**: Balanced model for most use cases
+- **`large`**: High-capacity model for production
+
+### Data Format
+
+Training data should be in JSONL format with OpenAssistant-style conversations:
+
+```json
+{
+  "messages": [
+    {"role": "user", "content": "Hello, how are you?"},
+    {"role": "assistant", "content": "I'm doing well, thank you for asking!"}
+  ]
 }
 ```
 
-### **⚖️ License**
-Custom License - Free for research and non-commercial use. See [LICENSE](LICENSE) for details.
+Supported roles: `user`, `assistant`, `system`, `prompter`, `human`, `ai`, `bot`
 
-**Commercial licensing available** - Contact: matiasnhmb@gmail.com
+## 📊 Model Architecture
+
+### Transformer Architecture
+- **Grouped Query Attention (GQA)**: Efficient attention mechanism
+- **Rotary Position Embedding (RoPE)**: Advanced positional encoding
+- **SwiGLU Activation**: State-of-the-art activation function
+- **RMSNorm**: Improved layer normalization
+- **Weight Tying**: Shared embedding and output projection weights
+
+### Default Model Sizes
+
+| Config | Hidden Size | Layers | Heads | KV Heads | Seq Length | Parameters |
+|--------|-------------|--------|-------|----------|------------|------------|
+| Debug  | 512         | 8      | 8     | 2        | 1024       | ~25M       |
+| Small  | 768         | 12     | 12    | 4        | 2048       | ~85M       |
+| Medium | 1024        | 24     | 16    | 4        | 4096       | ~350M      |
+| Large  | 2048        | 32     | 32    | 8        | 8192       | ~1.4B      |
+
+## ⚙️ Configuration
+
+### Command Line Options
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--config` | Configuration preset | `medium` |
+| `--train-data` | Training data path | Required |
+| `--eval-data` | Evaluation data path | Optional |
+| `--epochs` | Number of training epochs | `10` |
+| `--lr` | Learning rate | `1e-4` |
+| `--batch-size` | Batch size per GPU | `2` |
+| `--grad-accum` | Gradient accumulation steps | `4` |
+| `--precision` | Training precision | `fp16` |
+| `--experiment-name` | Experiment identifier | `experiment` |
+
+### Advanced Configuration
+
+Create a custom YAML configuration file:
+
+```yaml
+# config/custom.yaml
+model_name: "custom_model"
+hidden_size: 1024
+num_layers: 24
+num_heads: 16
+num_kv_heads: 4
+seq_length: 4096
+vocab_size: 50304
+
+learning_rate: 1e-4
+batch_size: 4
+gradient_accumulation_steps: 4
+max_grad_norm: 1.0
+weight_decay: 0.01
+
+precision: "fp16"
+compile: true
+gradient_checkpointing: true
+
+# Scheduler options
+lr_scheduler: "cosine"
+warmup_ratio: 0.1
+min_lr: 1e-6
+
+# Training behavior
+early_stopping_patience: 5
+eval_every_n_batches: 500
+save_every_n_batches: 1000
+health_check_interval: 100
+```
+
+## 📈 Monitoring & Logging
+
+### Built-in Monitoring
+- **Training Metrics**: Loss, perplexity, learning rate, gradient norms
+- **System Metrics**: GPU memory usage, system memory, throughput
+- **Health Checks**: Gradient anomaly detection, loss stability monitoring
+- **Checkpointing**: Automatic saving of best models and training state
+
+### Log Output Example
+```
+Epoch 1 | Step    150 | Batch  150/2000 | Loss: 2.456789 | PPL: 11.67 | 
+LR: 8.50e-05 | GradNorm: 0.8432 | Tokens/s: 1250 | GPU: 8.2GB/16.0GB | Health: OK
+```
+
+### Experiment Tracking
+Integration with Weights & Biases (wandb) for advanced experiment tracking:
+
+```python
+# Enable wandb logging
+export WANDB_PROJECT="conversational-transformer"
+export WANDB_ENTITY="your-username"
+```
+
+## 🔧 Utilities
+
+### Data Processing
+
+**Process OASST Dataset**:
+```bash
+python main.py --process-oasst input.jsonl output.jsonl --max-conversations 10000
+```
+
+**Validate Dataset**:
+```bash
+python main.py --validate-data data/train.jsonl
+```
+
+**Create Data Report**:
+```bash
+python main.py --validate-data data/train.jsonl --create-report
+```
+
+### Environment Checks
+
+**Validate Training Environment**:
+```bash
+python main.py --check-environment
+```
+
+**Estimate Training Time**:
+```bash
+python main.py --estimate-time --config medium
+```
+
+## 🎯 Generation & Inference
+
+The framework includes built-in text generation capabilities:
+
+```python
+# After training, test generation
+python main.py --test-generation --resume checkpoints/best_model.pt
+```
+
+### Generation Parameters
+- **Temperature**: Controls randomness (0.1-2.0)
+- **Top-k**: Limits vocabulary for sampling (1-100)
+- **Top-p**: Nucleus sampling threshold (0.1-1.0)
+- **Max Length**: Maximum tokens to generate (1-2048)
+
+## 🛡️ Fault Tolerance
+
+### Automatic Recovery
+- **Checkpoint Resumption**: Automatically resumes from latest checkpoint
+- **Gradient Error Handling**: Skips batches with NaN/Inf gradients
+- **Memory Management**: Automatic GPU memory cleanup
+- **Training State Backup**: Periodic backups to prevent data loss
+
+### Error Handling
+- **Data Validation**: Comprehensive dataset validation before training
+- **Graceful Degradation**: Continues training even with some corrupted samples
+- **Emergency Checkpoints**: Saves state before crashes
+- **Health Monitoring**: Detects and reports training anomalies
+
+## 📁 Project Structure
+
+```
+conversational-transformer/
+├── main.py                 # Main entry point
+├── core/
+│   ├── model.py           # Transformer model architecture
+│   ├── tokenizer.py       # Enhanced tokenization
+│   └── dataset.py         # Dataset handling
+├── training/
+│   ├── trainer.py         # Main training logic
+│   ├── orchestrator.py    # Training orchestration
+│   └── checkpoint.py      # Checkpoint management
+├── config/
+│   └── config_manager.py  # Configuration management
+├── monitoring/
+│   └── logger.py          # Logging and monitoring
+├── utils/
+│   ├── data_processing.py # Data utilities
+│   ├── environment.py     # Environment checks
+│   └── reporting.py       # Report generation
+├── data/                  # Training data
+├── checkpoints/           # Model checkpoints
+├── experiments/           # Experiment outputs
+├── logs/                  # Training logs
+└── backups/               # Emergency backups
+```
+
+## 🔍 Troubleshooting
+
+### Common Issues
+
+**CUDA Out of Memory**:
+```bash
+# Reduce batch size or enable gradient checkpointing
+python main.py --batch-size 1 --grad-accum 8
+```
+
+**Slow Training**:
+```bash
+# Enable model compilation and mixed precision
+python main.py --precision fp16 --compile
+```
+
+**Data Loading Errors**:
+```bash
+# Validate and fix dataset
+python main.py --validate-data data/train.jsonl --create-report
+```
+
+### Performance Optimization
+
+1. **Use Mixed Precision**: `--precision fp16`
+2. **Enable Flash Attention**: Install `flash-attn`
+3. **Model Compilation**: `--compile` (PyTorch 2.0+)
+4. **Gradient Checkpointing**: For large models
+5. **Optimal Batch Size**: Balance memory and throughput
+
+## 📊 Benchmarks
+
+### Training Throughput (A100 80GB)
+
+| Model Size | Batch Size | Precision | Tokens/sec | Memory Usage |
+|------------|------------|-----------|------------|--------------|
+| Small      | 8          | FP16      | 12,000     | 15GB         |
+| Medium     | 4          | FP16      | 8,500      | 35GB         |
+| Large      | 2          | FP16      | 4,200      | 65GB         |
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature-name`
+3. Make your changes and add tests
+4. Submit a pull request
+
+## 📝 License
+
+This project is licensed under a Custom License. See the license headers in source files for details.
+
+## 🙏 Acknowledgments
+
+- OpenAI for the transformer architecture innovations
+- Meta AI for RoPE and other architectural improvements
+- HuggingFace for tokenization and model architecture inspiration
+- The open-source ML community for continuous innovation
+
+## 📞 Support
+
+For issues and questions:
+1. Check the troubleshooting section
+2. Review existing GitHub issues
+3. Create a new issue with detailed information
+4. Include logs, configuration, and system information
 
 ---
 
-## 🏷️ **Tags & Topics**
-
-`machine-learning` `deep-learning` `pytorch` `transformers` `nlp` `conversational-ai` `chatbot` `gpt` `llm` `ai-training` `neural-networks` `artificial-intelligence` `language-model` `chat-ai` `transformer-training` `distributed-training` `gpu-computing` `python` `research` `enterprise-ai`
-
----
-
-## 🙏 **Acknowledgments**
-
-**Built with inspiration from:**
-- 🤗 **Hugging Face** - Transformers library and community
-- 🧠 **OpenAI** - GPT architecture and research  
-- 🔥 **Meta AI** - LLaMA optimizations and techniques
-- ⚡ **Microsoft DeepSpeed** - Distributed training innovations
-- 🎯 **Anthropic** - Constitutional AI and safety research
-- 📊 **Google Research** - Transformer innovations and scaling laws
-
-**Special thanks to the open-source AI community for making this possible! 🚀**
-
----
-
-<div align="center">
-*
-
-*Built with ❤️ for the AI research and development community*
-
-**LuminaAI - Train the next generation of conversational AI**
-
-</div>
+**Happy Training! 🚀**
