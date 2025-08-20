@@ -40,7 +40,7 @@ def setup_output_directory(project_root: Optional[str] = None) -> Path:
     
     return output_dir
 
-def build_conversation_tree(messages: List[Dict]) -> Dict[str, Dict]:
+def build_conversation_tree(messages: List[Dict]) -> Tuple[Dict[str, Dict], List[str]]:
     """Build a tree structure from messages using parent-child relationships."""
     message_map = {}
     
@@ -74,10 +74,13 @@ def extract_conversation_paths(message_map: Dict, root_id: str) -> List[List[Dic
         node = message_map[node_id]
         new_path = current_path + [node['data']]
         
-        # If this is a leaf node or has no valid children, save the conversation
+        # Save conversation at multiple points to generate more data
+        if len(new_path) >= 2:  # At least one exchange
+            conversations.append(new_path.copy())
+        
+        # If this is a leaf node or has no valid children, we're done with this path
         if not node['children']:
-            if len(new_path) >= 2:  # At least one exchange (user + assistant)
-                conversations.append(new_path)
+            return
         else:
             # Continue down each child path
             for child_id in node['children']:
@@ -103,7 +106,7 @@ def format_conversation(messages: List[Dict]) -> Dict:
             'role': msg.get('role', '').lower(),
             'content': msg.get('text', '').strip(),
             'message_id': msg.get('message_id', ''),
-            'review_result': msg.get('review_result', False),
+            'review_result': msg.get('review_result', None),
             'rank': msg.get('rank', 0),
             'synthetic': msg.get('synthetic', False),
             'model_name': msg.get('model_name', '')
@@ -112,7 +115,7 @@ def format_conversation(messages: List[Dict]) -> Dict:
     
     return conversation
 
-def filter_quality_conversations(conversations: List[Dict]) -> List[Dict]:
+def filter_quality_conversations(conversations: List[Dict], strict_filtering: bool = False) -> List[Dict]:
     """Filter conversations based on quality criteria."""
     quality_conversations = []
     
@@ -138,19 +141,16 @@ def filter_quality_conversations(conversations: List[Dict]) -> List[Dict]:
         
         if not valid:
             continue
-            
-        # Filter out very short or low-quality messages
-        has_substantial_content = True
+        
+        # Very relaxed filtering to maximize dataset size
+        has_content = True
         for msg in conv['messages']:
-            if len(msg['content']) < 10:  # Very short messages
-                has_substantial_content = False
+            # Only filter out completely empty messages
+            if not msg['content'] or len(msg['content'].strip()) == 0:
+                has_content = False
                 break
                 
-        if not has_substantial_content:
-            continue
-            
-        # Filter out conversations with poor review results
-        if any(msg.get('review_result') == False for msg in conv['messages']):
+        if not has_content:
             continue
             
         quality_conversations.append(conv)
@@ -175,13 +175,13 @@ def analyze_conversations(conversations: List[Dict], split_name: str):
         for msg in conv['messages']:
             role_counts[msg['role']] += 1
     
-    logger.info(f"Conversation Analysis for {split_name}:")
+    logger.info(f"📊 Conversation Analysis for {split_name}:")
     logger.info(f"  Total conversations: {total_conversations:,}")
     logger.info(f"  Total turns: {total_turns:,}")
     logger.info(f"  Average turns per conversation: {avg_turns:.1f}")
-    logger.info(f"  Turn distribution (top 5):")
+    logger.info(f"  Turn distribution (top 10):")
     
-    for turns, count in sorted(turn_distribution.items())[:5]:
+    for turns, count in sorted(turn_distribution.items())[:10]:
         logger.info(f"    {turns} turns: {count:,} conversations ({count/total_conversations*100:.1f}%)")
     
     logger.info(f"  Role distribution:")
@@ -199,44 +199,70 @@ def download_and_process_conversations(output_dir: Path) -> bool:
             ds = load_dataset("OpenAssistant/oasst1", trust_remote_code=True)
         except Exception as e:
             logger.error(f"Failed to load dataset: {e}")
-            logger.info("Try running: huggingface-cli login")
+            logger.info("💡 Possible solutions:")
+            logger.info("  1. Try running: huggingface-cli login")
+            logger.info("  2. Install git-lfs if not installed: sudo apt-get install git-lfs")
+            logger.info("  3. Check your internet connection")
             return False
         
         logger.info("✅ Dataset loaded successfully!")
+        logger.info(f"📊 Available splits: {list(ds.keys())}")
         
-        # Process each split
-        for split_name in ['train', 'validation']:
+        # Process train, validation, and evaluation splits
+        splits_to_process = ['train', 'validation']
+        
+        # Check if evaluation split exists and add it
+        if 'test' in ds:
+            splits_to_process.append('test')
+        elif 'eval' in ds:
+            splits_to_process.append('eval')
+        elif 'evaluation' in ds:
+            splits_to_process.append('evaluation')
+        
+        for split_name in splits_to_process:
             if split_name not in ds:
                 logger.warning(f"Split '{split_name}' not found in dataset")
                 continue
                 
-            logger.info(f"🔍 Processing {split_name} split...")
+            logger.info(f"📄 Processing {split_name} split...")
             
-            # Filter for English and non-deleted messages
+            # Get split data
             split_data = ds[split_name]
-            english_messages = []
+            logger.info(f"📊 Total messages in {split_name}: {len(split_data):,}")
             
-            for msg in split_data:
-                if (msg.get('lang') == 'en' and 
-                    not msg.get('deleted', False) and 
-                    msg.get('text', '').strip()):
-                    english_messages.append(msg)
+            # Filter for messages - very relaxed filtering to maximize data
+            valid_messages = []
             
-            logger.info(f"📊 English messages in {split_name}: {len(english_messages):,}")
+            for i, msg in enumerate(split_data):
+                # Show progress for large datasets
+                if i > 0 and i % 10000 == 0:
+                    logger.info(f"  Processed {i:,}/{len(split_data):,} messages...")
+                
+                # Very basic validation - keep as much data as possible
+                if (msg.get('text', '').strip() and  # Has some content
+                    msg.get('message_tree_id')):  # Has tree ID
+                    valid_messages.append(msg)
+            
+            logger.info(f"📊 Valid messages in {split_name}: {len(valid_messages):,}")
             
             # Group messages by conversation tree
             tree_messages = defaultdict(list)
-            for msg in english_messages:
+            for msg in valid_messages:
                 tree_id = msg.get('message_tree_id', '')
                 if tree_id:
                     tree_messages[tree_id].append(msg)
             
             logger.info(f"📊 Conversation trees in {split_name}: {len(tree_messages):,}")
             
-            # Build conversations
+            # Build conversations - extract more paths per tree
             all_conversations = []
+            processed_trees = 0
             
             for tree_id, messages in tree_messages.items():
+                processed_trees += 1
+                if processed_trees % 1000 == 0:
+                    logger.info(f"  Processing tree {processed_trees:,}/{len(tree_messages):,}...")
+                
                 # Build conversation tree
                 message_map, root_messages = build_conversation_tree(messages)
                 
@@ -246,48 +272,55 @@ def download_and_process_conversations(output_dir: Path) -> bool:
                     for path in paths:
                         conv = format_conversation(path)
                         all_conversations.append(conv)
+                        
+                        # Also create sub-conversations from longer paths to maximize data
+                        if len(path) > 4:  # If conversation is long enough
+                            # Create sub-conversations starting from different points
+                            for start_idx in range(0, len(path) - 3, 2):  # Every 2 messages
+                                if start_idx > 0:
+                                    sub_path = path[start_idx:]
+                                    if len(sub_path) >= 2:  # Ensure minimum length
+                                        sub_conv = format_conversation(sub_path)
+                                        # Add suffix to make unique ID
+                                        sub_conv['conversation_id'] = f"{sub_conv['conversation_id']}_sub_{start_idx}"
+                                        all_conversations.append(sub_conv)
             
             logger.info(f"📊 Raw conversations extracted from {split_name}: {len(all_conversations):,}")
             
-            # Filter for quality
-            quality_conversations = filter_quality_conversations(all_conversations)
-            logger.info(f"📊 Quality conversations in {split_name}: {len(quality_conversations):,}")
+            # Apply filtering
+            filtered_conversations = filter_quality_conversations(all_conversations, strict_filtering=False)
+            logger.info(f"📊 Filtered conversations: {len(filtered_conversations):,}")
             
-            # Analyze conversations
-            analyze_conversations(quality_conversations, split_name)
+            # Analyze dataset
+            logger.info(f"\n--- Analysis for {split_name} ---")
+            analyze_conversations(filtered_conversations, split_name)
             
-            # Save conversations
+            # Save main conversation file
+            if not filtered_conversations:
+                logger.warning(f"No conversations to save for {split_name}")
+                continue
+                
             output_file = output_dir / f"oasst1_{split_name}_conversations.jsonl"
-            logger.info(f"💾 Saving {split_name} conversations to: {output_file}")
+            logger.info(f"💾 Saving {len(filtered_conversations):,} {split_name} conversations to: {output_file}")
             
             # Ensure parent directory exists before writing
             output_file.parent.mkdir(parents=True, exist_ok=True)
             
             saved_count = 0
             with open(output_file, 'w', encoding='utf-8') as f:
-                for conv in quality_conversations:
+                for conv in filtered_conversations:
                     try:
                         f.write(json.dumps(conv, ensure_ascii=False) + '\n')
                         saved_count += 1
                         
-                        if saved_count % 1000 == 0:
-                            logger.info(f"Saved {saved_count:,} conversations...")
+                        if saved_count % 5000 == 0:
+                            logger.info(f"  Saved {saved_count:,}/{len(filtered_conversations):,} conversations...")
                             
                     except Exception as e:
                         logger.warning(f"Error saving conversation: {e}")
                         continue
             
             logger.info(f"✅ Saved {saved_count:,} {split_name} conversations")
-            
-            # Save a sample for inspection
-            sample_file = output_dir / f"oasst1_{split_name}_sample.json"
-            if quality_conversations:
-                # Ensure directory exists
-                sample_file.parent.mkdir(parents=True, exist_ok=True)
-                with open(sample_file, 'w', encoding='utf-8') as f:
-                    sample = quality_conversations[:5]  # First 5 conversations
-                    json.dump(sample, f, ensure_ascii=False, indent=2)
-                logger.info(f"📝 Sample conversations saved to: {sample_file}")
         
         return True
         
@@ -299,9 +332,14 @@ def download_and_process_conversations(output_dir: Path) -> bool:
 
 def validate_conversation_files(output_dir: Path) -> bool:
     """Validate that conversation files exist and are readable."""
-    for split in ['train', 'validation']:
-        file_path = output_dir / f"oasst1_{split}_conversations.jsonl"
-        
+    # Get all conversation files in the directory
+    conversation_files = list(output_dir.glob("oasst1_*_conversations.jsonl"))
+    
+    if not conversation_files:
+        logger.error("❌ No conversation files found")
+        return False
+    
+    for file_path in conversation_files:
         if not file_path.exists():
             logger.error(f"❌ Missing file: {file_path}")
             return False
@@ -312,69 +350,81 @@ def validate_conversation_files(output_dir: Path) -> bool:
         
         # Test reading and parsing
         try:
+            line_count = 0
             with open(file_path, 'r', encoding='utf-8') as f:
                 for i, line in enumerate(f):
-                    if i >= 3:  # Test first 3 lines
-                        break
+                    line_count += 1
                     
-                    line = line.strip()
-                    if not line:
-                        continue
-                    
-                    try:
-                        data = json.loads(line)
-                        # Check conversation structure
-                        required_fields = ['conversation_id', 'messages', 'total_turns']
-                        for field in required_fields:
-                            if field not in data:
-                                logger.error(f"❌ Missing field '{field}' in {file_path}")
-                                return False
+                    # Test parsing of first few lines
+                    if i < 3:
+                        line = line.strip()
+                        if not line:
+                            continue
                         
-                        # Check message structure
-                        if data['messages']:
-                            msg = data['messages'][0]
-                            msg_fields = ['role', 'content', 'turn']
-                            for field in msg_fields:
-                                if field not in msg:
-                                    logger.error(f"❌ Missing message field '{field}' in {file_path}")
+                        try:
+                            data = json.loads(line)
+                            # Check conversation structure
+                            required_fields = ['conversation_id', 'messages', 'total_turns']
+                            for field in required_fields:
+                                if field not in data:
+                                    logger.error(f"❌ Missing field '{field}' in {file_path}")
                                     return False
-                                    
-                    except json.JSONDecodeError as e:
-                        logger.error(f"❌ Invalid JSON in {file_path}: {e}")
-                        return False
+                            
+                            # Check message structure
+                            if data['messages']:
+                                msg = data['messages'][0]
+                                msg_fields = ['role', 'content', 'turn']
+                                for field in msg_fields:
+                                    if field not in msg:
+                                        logger.error(f"❌ Missing message field '{field}' in {file_path}")
+                                        return False
+                                        
+                        except json.JSONDecodeError as e:
+                            logger.error(f"❌ Invalid JSON in {file_path} line {i+1}: {e}")
+                            return False
+            
+            logger.info(f"✅ {file_path.name}: {line_count:,} conversations validated")
                         
         except Exception as e:
             logger.error(f"❌ Cannot read file {file_path}: {e}")
             return False
     
-    logger.info("✅ Conversation files validated successfully!")
+    logger.info("✅ All conversation files validated successfully!")
     return True
+
+def check_existing_files(output_dir: Path) -> bool:
+    """Check if dataset files already exist and are valid."""
+    # Look for any existing conversation files
+    existing_files = list(output_dir.glob("oasst1_*_conversations.jsonl"))
+    
+    if existing_files:
+        logger.info("🔍 Found existing conversation files!")
+        for file_path in existing_files:
+            size_mb = file_path.stat().st_size / (1024 * 1024)
+            logger.info(f"  - {file_path.name}: {size_mb:.1f} MB")
+        
+        logger.info("🔄 Validating existing files...")
+        return validate_conversation_files(output_dir)
+    
+    return False
 
 def main():
     """Main function to download and prepare OASST1 conversational dataset."""
     logger.info("🚀 Starting OASST1 Conversational Dataset Download...")
-    logger.info("=" * 60)
+    logger.info("=" * 70)
     
     try:
         # Setup directories
         output_dir = setup_output_directory()
         
-        # Check if files already exist
-        train_file = output_dir / "oasst1_train.jsonl"
-        val_file = output_dir / "oasst1_validation_conversations.jsonl"
-        
-        if train_file.exists() and val_file.exists():
-            logger.info("📁 Conversation files already exist!")
-            logger.info("Delete them if you want to re-download:")
-            logger.info(f"  - {train_file}")
-            logger.info(f"  - {val_file}")
-            
-            # Validate existing files
-            if validate_conversation_files(output_dir):
-                logger.info("✅ Existing files are valid!")
-                return 0
-            else:
-                logger.info("⚠️  Existing files are invalid, re-downloading...")
+        # Check if files already exist and are valid
+        if check_existing_files(output_dir):
+            logger.info("✅ Valid dataset files already exist!")
+            logger.info("💡 Delete files in the output directory if you want to re-download")
+            logger.info("=" * 70)
+            return 0
+        else:
+            logger.info("🔄 Downloading/reprocessing dataset...")
         
         # Download and process conversations
         success = download_and_process_conversations(output_dir)
@@ -389,13 +439,18 @@ def main():
             return 1
         
         # Success summary
-        logger.info("=" * 60)
+        logger.info("=" * 70)
         logger.info("🎉 Conversational dataset preparation completed!")
         logger.info(f"📁 Files saved in: {output_dir}")
-        logger.info("   ✅ oasst1_train_conversations.jsonl")
-        logger.info("   ✅ oasst1_validation_conversations.jsonl")
-        logger.info("   ✅ oasst1_train_sample.json (for inspection)")
-        logger.info("   ✅ oasst1_validation_sample.json (for inspection)")
+        logger.info("")
+        logger.info("📋 Generated Files:")
+        
+        # List all generated files with sizes
+        for file_path in sorted(output_dir.glob("*.jsonl")):
+            size_mb = file_path.stat().st_size / (1024 * 1024)
+            line_count = sum(1 for _ in open(file_path, 'r', encoding='utf-8'))
+            logger.info(f"   ✅ {file_path.name}: {size_mb:.1f} MB, {line_count:,} conversations")
+        
         logger.info("")
         logger.info("📋 Dataset Format:")
         logger.info("   Each line contains a complete conversation with:")
@@ -405,12 +460,12 @@ def main():
         logger.info("   - Each message has: role, content, turn number")
         logger.info("")
         logger.info("🚀 Ready for conversational training!")
-        logger.info("=" * 60)
+        logger.info("=" * 70)
         
         return 0
         
     except KeyboardInterrupt:
-        logger.info("❌ Processing interrupted by user")
+        logger.info("ℹ️ Processing interrupted by user")
         return 1
     except Exception as e:
         logger.error(f"❌ Unexpected error: {e}")
