@@ -313,11 +313,13 @@ python main.py --validate-data data/train.jsonl --create-report
 
 ### Training Throughput (A100 80GB)
 
-| Model Size | Batch Size | Precision | Tokens/sec | Memory Usage |
-|------------|------------|-----------|------------|--------------|
-| Small      | 8          | FP16      | 12,000     | 15GB         |
-| Medium     | 4          | FP16      | 8,500      | 35GB         |
-| Large      | 2          | FP16      | 4,200      | 65GB         |
+| Model Size | Params   | Training Precision | Inference Precision | Approx VRAM (weights only, single GPU) |
+| ---------- | -------- | ------------------ | ------------------- | -------------------------------------- |
+| Small      | 100M–1B  | FP16 / BF16        | FP16 / INT8         | 0.2–2 GB                               |
+| Medium     | 1B–7B    | FP16 / BF16        | FP16 / INT8         | 2–14 GB                                |
+| Large      | 7B–20B   | BF16               | FP16 / INT8         | 14–40 GB                               |
+| Huge       | 20B–70B  | BF16               | FP16 / INT8         | 40–140 GB                              |
+| Massive    | 70B–175B | BF16               | FP16 / INT8         | 140–350+ GB                            |
 
 ## 🤝 Contributing
 
