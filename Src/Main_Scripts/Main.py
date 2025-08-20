@@ -65,7 +65,7 @@ def main():
     config_file = None
     train_data = 'oasst1_data/oasst1_train.jsonl'
     eval_data = 'data/eval.jsonl'
-    epochs = 1000
+    epochs = 100
     lr = 1e-5
     batch_size = 2
     grad_accum = 4

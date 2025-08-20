@@ -1,5 +1,7 @@
-# Copyright (c) 2025 Matias Nielsen. All rights reserved.
-# Licensed under the Custom License below.
+"""
+Enhanced Training Module - FIXED VERSION
+Main trainer class with comprehensive monitoring and fault tolerance.
+"""
 
 import math
 import time
@@ -43,25 +45,12 @@ class EnhancedConversationTrainer:
         self.scheduler = None
         
         # Mixed precision setup - with version compatibility
-        self.use_amp = config.precision in ["fp16", "bf16"] and torch.cuda.is_available()
-        self.scaler = GradScaler() if self.use_amp and config.precision == "fp16" else None
+        self.use_amp = getattr(config, 'precision', 'fp32') in ["fp16", "bf16"] and torch.cuda.is_available()
+        self.scaler = GradScaler() if self.use_amp and getattr(config, 'precision', 'fp32') == "fp16" else None
         
         # Check PyTorch version for autocast compatibility
         self.torch_version = torch.__version__
         logging.info(f"PyTorch version: {self.torch_version}")
-    
-    def _get_autocast_context(self):
-        """Get autocast context with version compatibility."""
-        if not self.use_amp:
-            return nullcontext()
-        
-        # For older PyTorch versions, use simpler autocast
-        try:
-            # Try new API first (PyTorch >= 1.10)
-            return autocast(device_type='cuda', enabled=True)
-        except TypeError:
-            # Fallback to old API
-            return autocast(enabled=True)
         
         # Model compilation
         self._compile_model()
@@ -96,7 +85,7 @@ class EnhancedConversationTrainer:
                 def get_summary(self): return {}
             self.health_monitor = SimpleHealthMonitor()
         
-        # Checkpoint management
+        # Checkpoint management - FIXED
         try:
             self.checkpoint_manager = CheckpointManager(config)
         except Exception as e:
@@ -140,6 +129,19 @@ class EnhancedConversationTrainer:
         logging.info(f"Model parameters: {self._count_parameters():,}")
         self._log_memory_usage("Initial")
     
+    def _get_autocast_context(self):
+        """Get autocast context with version compatibility."""
+        if not self.use_amp:
+            return nullcontext()
+        
+        # For older PyTorch versions, use simpler autocast
+        try:
+            # Try new API first (PyTorch >= 1.10)
+            return autocast(device_type='cuda', enabled=True)
+        except TypeError:
+            # Fallback to old API
+            return autocast(enabled=True)
+    
     def _count_parameters(self):
         """Count model parameters."""
         try:
@@ -177,7 +179,7 @@ class EnhancedConversationTrainer:
                     decay_params.append(param)
         
         param_groups = [
-            {'params': decay_params, 'weight_decay': self.config.weight_decay},
+            {'params': decay_params, 'weight_decay': getattr(self.config, 'weight_decay', 0.01)},
             {'params': no_decay_params, 'weight_decay': 0.0}
         ]
         
@@ -201,7 +203,7 @@ class EnhancedConversationTrainer:
     
     def _compile_model(self):
         """Compile model with error handling."""
-        if self.config.compile and hasattr(torch, 'compile'):
+        if getattr(self.config, 'compile', False) and hasattr(torch, 'compile'):
             try:
                 logging.info("Compiling model...")
                 self.model = torch.compile(self.model, mode='default')
@@ -211,22 +213,30 @@ class EnhancedConversationTrainer:
     
     def _setup_scheduler(self, total_steps: int):
         """Setup learning rate scheduler."""
-        warmup_steps = int(total_steps * self.config.warmup_ratio)
+        warmup_ratio = getattr(self.config, 'warmup_ratio', 0.1)
+        warmup_steps = int(total_steps * warmup_ratio)
         
-        if self.config.lr_scheduler == "cosine":
+        lr_scheduler = getattr(self.config, 'lr_scheduler', 'cosine')
+        
+        if lr_scheduler == "cosine":
             self.scheduler = CosineAnnealingLR(
-                self.optimizer, T_max=total_steps, eta_min=self.config.min_lr
+                self.optimizer, T_max=total_steps, eta_min=getattr(self.config, 'min_lr', 1e-6)
             )
-        elif self.config.lr_scheduler == "onecycle":
+        elif lr_scheduler == "onecycle":
             self.scheduler = OneCycleLR(
                 self.optimizer, max_lr=self.config.learning_rate,
-                total_steps=total_steps, pct_start=self.config.warmup_ratio
+                total_steps=total_steps, pct_start=warmup_ratio
             )
         else:  # linear
-            from torch.optim.lr_scheduler import LinearLR
-            self.scheduler = LinearLR(
-                self.optimizer, start_factor=0.1, total_iters=warmup_steps
-            )
+            try:
+                from torch.optim.lr_scheduler import LinearLR
+                self.scheduler = LinearLR(
+                    self.optimizer, start_factor=0.1, total_iters=warmup_steps
+                )
+            except ImportError:
+                # Fallback for older PyTorch versions
+                from torch.optim.lr_scheduler import StepLR
+                self.scheduler = StepLR(self.optimizer, step_size=warmup_steps, gamma=0.1)
     
     def compute_loss(self, logits: torch.Tensor, labels: torch.Tensor, 
                     loss_weights: torch.Tensor) -> Dict[str, torch.Tensor]:
@@ -284,7 +294,7 @@ class EnhancedConversationTrainer:
         with self._get_autocast_context():
             logits = self.model(batch['input_ids'], batch['attention_mask'])
             loss_dict = self.compute_loss(logits, batch['labels'], batch['loss_weights'])
-            loss = loss_dict['loss'] / self.config.gradient_accumulation_steps
+            loss = loss_dict['loss'] / getattr(self.config, 'gradient_accumulation_steps', 1)
         
         # Check for valid loss
         if torch.isnan(loss).any() or torch.isinf(loss).any():
@@ -299,7 +309,7 @@ class EnhancedConversationTrainer:
         
         # Return metrics
         return {
-            'loss': loss.item() * self.config.gradient_accumulation_steps,
+            'loss': loss.item() * getattr(self.config, 'gradient_accumulation_steps', 1),
             'raw_loss': loss_dict['raw_loss'].item(),
             'perplexity': loss_dict['perplexity'].item(),
             'valid_tokens': loss_dict['valid_tokens'].item()
@@ -312,8 +322,9 @@ class EnhancedConversationTrainer:
             self.scaler.unscale_(self.optimizer)
         
         # Compute gradient norm before clipping
+        max_grad_norm = getattr(self.config, 'max_grad_norm', 1.0)
         grad_norm = torch.nn.utils.clip_grad_norm_(
-            self.model.parameters(), self.config.max_grad_norm
+            self.model.parameters(), max_grad_norm
         )
         
         # Check for NaN gradients
@@ -411,7 +422,8 @@ class EnhancedConversationTrainer:
         train_dataloader = create_dataloader(train_dataset, self.config, shuffle=True)
         
         # Calculate total steps and setup scheduler
-        total_steps = len(train_dataloader) * self.config.num_epochs // self.config.gradient_accumulation_steps
+        gradient_accumulation_steps = getattr(self.config, 'gradient_accumulation_steps', 1)
+        total_steps = len(train_dataloader) * self.config.num_epochs // gradient_accumulation_steps
         self._setup_scheduler(total_steps)
         
         # Log training configuration
@@ -443,7 +455,7 @@ class EnhancedConversationTrainer:
                     logging.info(f"  Eval Perplexity: {eval_metrics['eval_perplexity']:.2f}")
                     
                     # Early stopping check
-                    if hasattr(self.config, 'early_stopping_patience') and self.config.early_stopping_patience:
+                    if getattr(self.config, 'early_stopping_patience', None):
                         self._check_early_stopping(eval_metrics['eval_loss'])
                 
                 # Log epoch metrics
@@ -505,6 +517,7 @@ class EnhancedConversationTrainer:
             'tokens': 0
         }
         
+        gradient_accumulation_steps = getattr(self.config, 'gradient_accumulation_steps', 1)
         epoch_start_time = time.time()
         last_log_time = time.time()
         
@@ -524,7 +537,7 @@ class EnhancedConversationTrainer:
             accumulation_metrics['tokens'] += step_metrics['valid_tokens']
             
             # Optimizer step after accumulation
-            if (batch_idx + 1) % self.config.gradient_accumulation_steps == 0:
+            if (batch_idx + 1) % gradient_accumulation_steps == 0:
                 opt_metrics = self.optimizer_step()
                 self.global_step += 1
                 
@@ -600,7 +613,7 @@ class EnhancedConversationTrainer:
                 accumulation_metrics = {'loss': 0.0, 'raw_loss': 0.0, 'tokens': 0}
         
         # Handle remaining gradients
-        if (batch_idx + 1) % self.config.gradient_accumulation_steps != 0:
+        if (batch_idx + 1) % gradient_accumulation_steps != 0:
             opt_metrics = self.optimizer_step()
             self.global_step += 1
         
@@ -673,7 +686,7 @@ class EnhancedConversationTrainer:
                         f"PPL: {eval_metrics['eval_perplexity']:.2f}")
             
             # Early stopping check
-            if hasattr(self.config, 'early_stopping_patience') and self.config.early_stopping_patience:
+            if getattr(self.config, 'early_stopping_patience', None):
                 self._check_early_stopping(eval_metrics['eval_loss'])
     
     def _check_early_stopping(self, eval_loss: float):
@@ -721,7 +734,7 @@ class EnhancedConversationTrainer:
     
     def _create_backup(self):
         """Create backup of current training state."""
-        backup_dir = Path("backups") / self.config.experiment_name
+        backup_dir = Path("backups") / getattr(self.config, 'experiment_name', 'default')
         backup_dir.mkdir(parents=True, exist_ok=True)
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
