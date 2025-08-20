@@ -81,8 +81,7 @@ def main():
     check_environment = False
     estimate_time = False
     dry_run = False  # Actually train the model
-    dry_run = False
-    
+
     # Environment validation
     if check_environment:
         logging.info("Checking training environment...")

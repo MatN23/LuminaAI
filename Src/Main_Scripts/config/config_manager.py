@@ -197,7 +197,7 @@ class ConfigPresets:
             weight_decay=0.01,
             eval_every_n_batches=1000,
             save_every_n_batches=2000,
-            precision="bf16",
+            precision="fp16",
             compile=True,
             num_workers=4,
             
