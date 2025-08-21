@@ -1,5 +1,5 @@
 """
-Enhanced Training Module - FIXED VERSION
+Enhanced Training Module - FIXED VERSION WITH INFERENCE PRECISION
 Main trainer class with comprehensive monitoring and fault tolerance.
 """
 
@@ -13,7 +13,7 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import OneCycleLR, CosineAnnealingLR
 from torch.cuda.amp import autocast, GradScaler
 from contextlib import nullcontext
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, Union
 from pathlib import Path
 from datetime import datetime
 from dataclasses import asdict
@@ -51,6 +51,10 @@ class EnhancedConversationTrainer:
         # Check PyTorch version for autocast compatibility
         self.torch_version = torch.__version__
         logging.info(f"PyTorch version: {self.torch_version}")
+        
+        # INFERENCE PRECISION SETUP
+        self.inference_precision = getattr(config, 'inference_precision', 'auto')
+        self._setup_inference_precision()
         
         # Model compilation
         self._compile_model()
@@ -127,10 +131,53 @@ class EnhancedConversationTrainer:
         
         logging.info(f"Trainer initialized on {self.device}")
         logging.info(f"Model parameters: {self._count_parameters():,}")
+        logging.info(f"Training precision: {getattr(config, 'precision', 'fp32')}")
+        logging.info(f"Inference precision: {self.inference_precision}")
         self._log_memory_usage("Initial")
     
+    def _setup_inference_precision(self):
+        """Setup inference precision based on config or auto-detect."""
+        if self.inference_precision == "auto":
+            if torch.cuda.is_available():
+                # Check if GPU supports bfloat16
+                try:
+                    # Test if bfloat16 is supported
+                    test_tensor = torch.tensor([1.0], dtype=torch.bfloat16, device=self.device)
+                    self.inference_precision = "bf16"
+                    logging.info("Auto-selected bf16 for inference")
+                except:
+                    # Fallback to fp16
+                    try:
+                        test_tensor = torch.tensor([1.0], dtype=torch.float16, device=self.device)
+                        self.inference_precision = "fp16" 
+                        logging.info("Auto-selected fp16 for inference")
+                    except:
+                        self.inference_precision = "fp32"
+                        logging.info("Auto-selected fp32 for inference (GPU precision issues)")
+            else:
+                self.inference_precision = "fp32"
+                logging.info("Auto-selected fp32 for inference (CPU)")
+        
+        # Validate precision setting
+        valid_precisions = ["fp16", "bf16", "fp32"]
+        if self.inference_precision not in valid_precisions:
+            logging.warning(f"Invalid inference precision {self.inference_precision}, defaulting to fp32")
+            self.inference_precision = "fp32"
+    
+    def set_inference_precision(self, precision: str):
+        """
+        Dynamically change inference precision.
+        
+        Args:
+            precision: "fp16", "bf16", "fp32", or "auto"
+        """
+        old_precision = getattr(self, 'inference_precision', 'fp32')
+        self.inference_precision = precision
+        self._setup_inference_precision()
+        logging.info(f"Inference precision changed from {old_precision} to {self.inference_precision}")
+    
     def _get_autocast_context(self):
-        """Get autocast context with version compatibility."""
+        """Get autocast context with version compatibility for TRAINING."""
         if not self.use_amp:
             return nullcontext()
         
@@ -141,6 +188,29 @@ class EnhancedConversationTrainer:
         except TypeError:
             # Fallback to old API
             return autocast(enabled=True)
+    
+    def _get_inference_autocast_context(self):
+        """Get autocast context specifically for INFERENCE with specified precision."""
+        if not torch.cuda.is_available() or self.inference_precision == "fp32":
+            return nullcontext()
+        
+        # Determine dtype for inference
+        dtype_map = {
+            "fp16": torch.float16,
+            "bf16": torch.bfloat16
+        }
+        dtype = dtype_map.get(self.inference_precision, torch.float16)
+        
+        try:
+            # Try new API first (PyTorch >= 1.10)
+            return torch.autocast(device_type='cuda', dtype=dtype)
+        except TypeError:
+            try:
+                # Fallback for older PyTorch versions with dtype support
+                return autocast(enabled=True)
+            except:
+                # Ultimate fallback
+                return nullcontext()
     
     def _count_parameters(self):
         """Count model parameters."""
@@ -290,7 +360,7 @@ class EnhancedConversationTrainer:
         if batch['input_ids'].numel() == 0:
             return {'loss': 0.0, 'perplexity': float('inf'), 'valid_tokens': 0}
         
-        # Forward pass with autocast
+        # Forward pass with autocast (TRAINING precision)
         with self._get_autocast_context():
             logits = self.model(batch['input_ids'], batch['attention_mask'])
             loss_dict = self.compute_loss(logits, batch['labels'], batch['loss_weights'])
@@ -355,8 +425,9 @@ class EnhancedConversationTrainer:
         return {'grad_norm': grad_norm.item(), 'lr': current_lr}
     
     @torch.no_grad()
-    def evaluate(self, eval_dataset, max_batches: int = 100) -> Dict[str, float]:
-        """Comprehensive evaluation with multiple metrics."""
+    def evaluate(self, eval_dataset, max_batches: int = 100, 
+                 use_inference_precision: bool = True) -> Dict[str, float]:
+        """Comprehensive evaluation with multiple metrics and optional inference precision."""
         self.model.eval()
         
         eval_dataloader = create_dataloader(eval_dataset, self.config, shuffle=False)
@@ -368,6 +439,9 @@ class EnhancedConversationTrainer:
         
         eval_start_time = time.time()
         
+        # Choose autocast context based on parameter
+        autocast_context = self._get_inference_autocast_context() if use_inference_precision else self._get_autocast_context()
+        
         for batch_idx, batch in enumerate(eval_dataloader):
             if batch_idx >= max_batches:
                 break
@@ -377,7 +451,7 @@ class EnhancedConversationTrainer:
             if batch['input_ids'].numel() == 0:
                 continue
             
-            with self._get_autocast_context():
+            with autocast_context:
                 logits = self.model(batch['input_ids'], batch['attention_mask'])
                 loss_dict = self.compute_loss(logits, batch['labels'], batch['loss_weights'])
             
@@ -394,7 +468,8 @@ class EnhancedConversationTrainer:
                 'eval_loss': float('inf'),
                 'eval_perplexity': float('inf'),
                 'eval_time': eval_time,
-                'eval_throughput': 0.0
+                'eval_throughput': 0.0,
+                'inference_precision': self.inference_precision if use_inference_precision else "training_precision"
             }
         
         avg_loss = total_loss / num_batches
@@ -406,7 +481,8 @@ class EnhancedConversationTrainer:
             'eval_loss': avg_loss,
             'eval_perplexity': perplexity,
             'eval_time': eval_time,
-            'eval_throughput': throughput
+            'eval_throughput': throughput,
+            'inference_precision': self.inference_precision if use_inference_precision else "training_precision"
         }
     
     def train(self, train_dataset, eval_dataset=None):
@@ -445,7 +521,7 @@ class EnhancedConversationTrainer:
                 
                 # Full evaluation at epoch end
                 if eval_dataset is not None:
-                    eval_metrics = self.evaluate(eval_dataset)
+                    eval_metrics = self.evaluate(eval_dataset, use_inference_precision=True)
                     epoch_metrics.update(eval_metrics)
                     
                     # Log epoch summary
@@ -453,6 +529,7 @@ class EnhancedConversationTrainer:
                     logging.info(f"  Train Loss: {epoch_metrics['avg_loss']:.6f}")
                     logging.info(f"  Eval Loss: {eval_metrics['eval_loss']:.6f}")
                     logging.info(f"  Eval Perplexity: {eval_metrics['eval_perplexity']:.2f}")
+                    logging.info(f"  Inference Precision: {eval_metrics['inference_precision']}")
                     
                     # Early stopping check
                     if getattr(self.config, 'early_stopping_patience', None):
@@ -673,7 +750,7 @@ class EnhancedConversationTrainer:
     def _periodic_evaluation(self):
         """Perform periodic evaluation during training."""
         if hasattr(self, 'eval_dataset') and self.eval_dataset is not None:
-            eval_metrics = self.evaluate(self.eval_dataset, max_batches=50)
+            eval_metrics = self.evaluate(self.eval_dataset, max_batches=50, use_inference_precision=True)
             
             # Log evaluation metrics
             try:
@@ -683,7 +760,8 @@ class EnhancedConversationTrainer:
             
             logging.info(f"Eval | Step {self.global_step} | "
                         f"Loss: {eval_metrics['eval_loss']:.6f} | "
-                        f"PPL: {eval_metrics['eval_perplexity']:.2f}")
+                        f"PPL: {eval_metrics['eval_perplexity']:.2f} | "
+                        f"Precision: {eval_metrics['inference_precision']}")
             
             # Early stopping check
             if getattr(self.config, 'early_stopping_patience', None):
@@ -724,7 +802,8 @@ class EnhancedConversationTrainer:
             f"Weight decay: {getattr(self.config, 'weight_decay', 0.01)}",
             f"Warmup ratio: {getattr(self.config, 'warmup_ratio', 0.1)}",
             f"Max grad norm: {getattr(self.config, 'max_grad_norm', 1.0)}",
-            f"Precision: {getattr(self.config, 'precision', 'fp32')}",
+            f"Training precision: {getattr(self.config, 'precision', 'fp32')}",
+            f"Inference precision: {self.inference_precision}",
             f"Device: {self.device}"
         ]
         
@@ -772,6 +851,10 @@ class EnhancedConversationTrainer:
                     'best_eval_loss': self.best_eval_loss,
                     'final_train_loss': self.metrics['train_losses'][-1] if self.metrics['train_losses'] else None,
                     'avg_throughput': np.mean(self.metrics['throughput']) if self.metrics['throughput'] else 0
+                },
+                'precision_settings': {
+                    'training_precision': getattr(self.config, 'precision', 'fp32'),
+                    'inference_precision': self.inference_precision
                 },
                 'model_config': model_config,
                 'health_summary': self.health_monitor.get_summary()
@@ -823,12 +906,42 @@ class EnhancedConversationTrainer:
         )
     
     @torch.no_grad()
-    def generate(self, prompt: str, max_new_tokens: Optional[int] = None) -> str:
-        """Generate response with enhanced error handling."""
+    def generate(self, prompt: str, max_new_tokens: Optional[int] = None, 
+                 inference_precision: Optional[str] = None,
+                 temperature: Optional[float] = None,
+                 top_k: Optional[int] = None,
+                 top_p: Optional[float] = None,
+                 **kwargs) -> str:
+        """
+        Generate response with enhanced error handling and inference precision control.
+        
+        Args:
+            prompt: Input prompt
+            max_new_tokens: Maximum tokens to generate
+            inference_precision: Override inference precision for this generation ("fp16", "bf16", "fp32")
+            temperature: Sampling temperature
+            top_k: Top-k filtering
+            top_p: Top-p (nucleus) filtering
+            **kwargs: Additional generation parameters
+        """
         self.model.eval()
+        
+        # Override inference precision if specified
+        original_precision = self.inference_precision
+        if inference_precision is not None:
+            temp_precision = self.inference_precision
+            self.inference_precision = inference_precision
+            self._setup_inference_precision()
+        else:
+            temp_precision = None
         
         if max_new_tokens is None:
             max_new_tokens = getattr(self.config, 'max_new_tokens', 512)
+        
+        # Use provided or default generation parameters
+        temperature = temperature if temperature is not None else getattr(self.config, 'temperature', 0.7)
+        top_k = top_k if top_k is not None else getattr(self.config, 'top_k', 50)
+        top_p = top_p if top_p is not None else getattr(self.config, 'top_p', 0.9)
         
         try:
             # Create conversation format
@@ -851,31 +964,30 @@ class EnhancedConversationTrainer:
             
             input_ids = torch.tensor([input_tokens], device=self.device, dtype=torch.long)
             
-            # Generation loop with safety checks
+            # Generation loop with safety checks and INFERENCE precision
             generated_tokens = []
+            
+            logging.debug(f"Starting generation with precision: {self.inference_precision}")
             
             for step in range(max_new_tokens):
                 # Check sequence length
                 if input_ids.size(1) >= self.config.seq_length:
                     input_ids = input_ids[:, -self.config.seq_length//2:]
                 
-                # Forward pass
-                with self._get_autocast_context():
+                # Forward pass with INFERENCE precision
+                with self._get_inference_autocast_context():
                     logits = self.model(input_ids)
                 
                 # Get next token logits
-                temperature = getattr(self.config, 'temperature', 0.7)
                 next_token_logits = logits[0, -1, :] / temperature
                 
                 # Apply top-k filtering
-                top_k = getattr(self.config, 'top_k', 50)
                 if top_k > 0:
                     top_k_logits, top_k_indices = torch.topk(next_token_logits, top_k)
                     next_token_logits = torch.full_like(next_token_logits, float('-inf'))
                     next_token_logits.scatter_(0, top_k_indices, top_k_logits)
                 
                 # Apply top-p filtering
-                top_p = getattr(self.config, 'top_p', 0.9)
                 if top_p < 1.0:
                     sorted_logits, sorted_indices = torch.sort(next_token_logits, descending=True)
                     cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
@@ -904,8 +1016,167 @@ class EnhancedConversationTrainer:
             
             # Decode response
             response = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+            
+            logging.debug(f"Generation completed with {len(generated_tokens)} tokens using {self.inference_precision} precision")
+            
             return response.strip()
             
         except Exception as e:
             logging.error(f"Generation failed: {e}")
             return "I apologize, but I encountered an error while generating a response."
+        
+        finally:
+            # Restore original inference precision if it was temporarily changed
+            if temp_precision is not None:
+                self.inference_precision = original_precision
+    
+    def benchmark_inference_precision(self, test_prompts: Optional[List[str]] = None, 
+                                    max_new_tokens: int = 100) -> Dict[str, Dict[str, Any]]:
+        """
+        Benchmark different inference precisions with timing and memory usage.
+        
+        Args:
+            test_prompts: List of test prompts (uses default if None)
+            max_new_tokens: Maximum tokens to generate per prompt
+            
+        Returns:
+            Dictionary with benchmark results for each precision
+        """
+        if test_prompts is None:
+            test_prompts = [
+                "What is machine learning?",
+                "Explain quantum computing in simple terms.",
+                "Write a short story about a robot.",
+            ]
+        
+        precisions_to_test = ["fp32", "fp16"]
+        if torch.cuda.is_available():
+            try:
+                # Test if bf16 is supported
+                test_tensor = torch.tensor([1.0], dtype=torch.bfloat16, device=self.device)
+                precisions_to_test.append("bf16")
+            except:
+                pass
+        
+        results = {}
+        original_precision = self.inference_precision
+        
+        for precision in precisions_to_test:
+            logging.info(f"Benchmarking {precision} precision...")
+            
+            # Set precision
+            self.set_inference_precision(precision)
+            
+            # Warm up
+            try:
+                _ = self.generate("Hello", max_new_tokens=5, temperature=0.1)
+            except:
+                logging.warning(f"Warmup failed for {precision}, skipping...")
+                continue
+            
+            # Clear cache
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+            
+            # Benchmark
+            total_time = 0
+            total_tokens = 0
+            memory_peak = 0
+            generations = []
+            
+            for prompt in test_prompts:
+                if torch.cuda.is_available():
+                    torch.cuda.reset_peak_memory_stats()
+                
+                start_time = time.time()
+                
+                try:
+                    response = self.generate(
+                        prompt, 
+                        max_new_tokens=max_new_tokens,
+                        temperature=0.7,
+                        top_k=50,
+                        top_p=0.9
+                    )
+                    generations.append(response)
+                    
+                    # Count tokens (approximate)
+                    token_count = len(self.tokenizer.tokenizer.encode(response))
+                    total_tokens += token_count
+                    
+                except Exception as e:
+                    logging.error(f"Generation failed for {precision}: {e}")
+                    generations.append(f"ERROR: {str(e)}")
+                
+                end_time = time.time()
+                total_time += (end_time - start_time)
+                
+                if torch.cuda.is_available():
+                    memory_peak = max(memory_peak, torch.cuda.max_memory_allocated())
+            
+            # Calculate metrics
+            avg_time_per_prompt = total_time / len(test_prompts) if test_prompts else 0
+            tokens_per_second = total_tokens / total_time if total_time > 0 else 0
+            
+            results[precision] = {
+                'total_time_seconds': total_time,
+                'avg_time_per_prompt': avg_time_per_prompt,
+                'total_tokens_generated': total_tokens,
+                'tokens_per_second': tokens_per_second,
+                'peak_memory_mb': memory_peak / 1024 / 1024 if memory_peak > 0 else 0,
+                'generations': generations,
+                'success': len([g for g in generations if not g.startswith("ERROR:")]) == len(test_prompts)
+            }
+            
+            logging.info(f"{precision} results: {tokens_per_second:.1f} tokens/s, "
+                        f"{avg_time_per_prompt:.2f}s/prompt, "
+                        f"{memory_peak / 1024 / 1024:.1f}MB peak memory")
+        
+        # Restore original precision
+        self.set_inference_precision(original_precision)
+        
+        return results
+    
+    def generate_with_multiple_precisions(self, prompt: str, 
+                                        precisions: List[str] = None) -> Dict[str, str]:
+        """
+        Generate the same response with different precisions for comparison.
+        
+        Args:
+            prompt: Input prompt
+            precisions: List of precisions to test (default: ["fp32", "fp16"])
+            
+        Returns:
+            Dictionary mapping precision to generated response
+        """
+        if precisions is None:
+            precisions = ["fp32", "fp16"]
+            if torch.cuda.is_available():
+                try:
+                    test_tensor = torch.tensor([1.0], dtype=torch.bfloat16, device=self.device)
+                    precisions.append("bf16")
+                except:
+                    pass
+        
+        results = {}
+        original_precision = self.inference_precision
+        
+        for precision in precisions:
+            try:
+                results[precision] = self.generate(
+                    prompt,
+                    inference_precision=precision,
+                    temperature=0.7,  # Fixed temperature for consistency
+                    top_k=50,
+                    top_p=0.9
+                )
+                logging.debug(f"Generated with {precision}: {len(results[precision])} chars")
+            except Exception as e:
+                results[precision] = f"ERROR with {precision}: {str(e)}"
+                logging.error(f"Generation failed with {precision}: {e}")
+        
+        # Restore original precision
+        self.inference_precision = original_precision
+        
+        return results

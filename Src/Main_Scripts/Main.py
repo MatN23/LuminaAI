@@ -52,6 +52,58 @@ def create_directory_structure():
         Path(directory).mkdir(exist_ok=True)
 
 
+def test_inference_precision(orchestrator):
+    """Test different inference precision settings."""
+    if not orchestrator.trainer:
+        logging.warning("No trainer available for precision testing")
+        return
+    
+    logging.info("\n" + "="*70)
+    logging.info("TESTING INFERENCE PRECISION")
+    logging.info("="*70)
+    
+    test_prompts = [
+        "What is artificial intelligence?",
+        "Explain machine learning in simple terms.",
+        "Write a short Python function to add two numbers."
+    ]
+    
+    try:
+        # Test generation with multiple precisions
+        for i, prompt in enumerate(test_prompts, 1):
+            logging.info(f"\nTest Prompt {i}: {prompt}")
+            logging.info("-" * 50)
+            
+            # Generate with different precisions
+            responses = orchestrator.trainer.generate_with_multiple_precisions(prompt)
+            
+            for precision, response in responses.items():
+                logging.info(f"{precision.upper()}: {response[:100]}{'...' if len(response) > 100 else ''}")
+        
+        # Benchmark different precisions
+        logging.info("\n" + "="*50)
+        logging.info("PRECISION BENCHMARK")
+        logging.info("="*50)
+        
+        benchmark_results = orchestrator.trainer.benchmark_inference_precision(
+            test_prompts=test_prompts[:2],  # Use fewer prompts for benchmark
+            max_new_tokens=50
+        )
+        
+        # Display benchmark results
+        for precision, results in benchmark_results.items():
+            if results['success']:
+                logging.info(f"{precision.upper()} Performance:")
+                logging.info(f"  Tokens/second: {results['tokens_per_second']:.1f}")
+                logging.info(f"  Avg time/prompt: {results['avg_time_per_prompt']:.3f}s")
+                logging.info(f"  Peak memory: {results['peak_memory_mb']:.1f}MB")
+            else:
+                logging.warning(f"{precision.upper()}: Failed to complete benchmark")
+                
+    except Exception as e:
+        logging.error(f"Precision testing failed: {e}")
+
+
 def main():
     """Enhanced main function with comprehensive CLI and error handling."""
     # Setup basic logging first
@@ -60,7 +112,7 @@ def main():
     # Create directory structure
     create_directory_structure()
     
-    # Hardcoded arguments instead of argparse
+    # Hardcoded arguments instead of argparse with NEW inference precision options
     config_choice = 'medium'
     config_file = None
     train_data = 'oasst1_data/oasst1_train.jsonl'
@@ -70,10 +122,12 @@ def main():
     batch_size = 2
     grad_accum = 4
     precision = 'fp16'
-    experiment_name = 'hardcoded_experiment'
+    inference_precision = 'auto'  # NEW: Inference precision setting
+    experiment_name = 'hardcoded_experiment_with_inference_precision'
     resume = None
     seed = 42
     test_generation = True
+    test_precision = True  # NEW: Test different inference precisions
     validate_data = None  # Skip validation since no validation.jsonl file exists
     create_report = False
     process_oasst = None
@@ -195,6 +249,8 @@ def main():
                 'small': ConfigPresets.small,
                 'medium': ConfigPresets.medium,
                 'large': ConfigPresets.large,
+                'inference_optimized': ConfigPresets.inference_optimized,  # NEW preset
+                'quality_focused': ConfigPresets.quality_focused,  # NEW preset
             }
             config = config_map[config_choice]()
         
@@ -209,6 +265,8 @@ def main():
             config.gradient_accumulation_steps = grad_accum
         if precision is not None:
             config.precision = precision
+        if inference_precision is not None:  # NEW: Set inference precision
+            config.inference_precision = inference_precision
         if experiment_name is not None:
             config.experiment_name = experiment_name
         
@@ -241,6 +299,8 @@ def main():
             logging.info(f"  Total tokens: {estimates['total_tokens']:,}")
             logging.info(f"  Throughput: {estimates['tokens_per_second']:,} tokens/sec")
             logging.info(f"  Memory utilization: {estimates['memory_utilization']:.1%}")
+            logging.info(f"  Training precision: {config.precision}")
+            logging.info(f"  Inference precision: {config.inference_precision}")
             
             if estimates['memory_warning']:
                 logging.warning("  ⚠️  High memory utilization expected - consider reducing batch size")
@@ -254,11 +314,13 @@ def main():
     # Dry run
     if dry_run:
         logging.info("Dry run completed successfully!")
+        logging.info(f"Would use training precision: {config.precision}")
+        logging.info(f"Would use inference precision: {config.inference_precision}")
         return 0
     
     # Main training
     logging.info("="*80)
-    logging.info("PRODUCTION CONVERSATIONAL TRANSFORMER TRAINING")
+    logging.info("PRODUCTION CONVERSATIONAL TRANSFORMER TRAINING WITH INFERENCE PRECISION")
     logging.info("="*80)
     
     try:
@@ -269,14 +331,20 @@ def main():
         logging.info(f"Configuration: {config_choice}")
         logging.info(f"Model parameters: ~{estimate_parameters(config):,}")
         logging.info(f"Experiment: {config.experiment_name}")
+        logging.info(f"Training precision: {config.precision}")
+        logging.info(f"Inference precision: {config.inference_precision}")
         
         # Run training
         orchestrator.run_training()
         
+        # Test precision if requested
+        if test_precision and orchestrator.trainer:
+            test_inference_precision(orchestrator)
+        
         # Test generation if requested
         if test_generation and orchestrator.trainer:
             logging.info("\n" + "="*60)
-            logging.info("TESTING GENERATION")
+            logging.info("TESTING GENERATION WITH INFERENCE PRECISION")
             logging.info("="*60)
             
             test_prompts = [
@@ -287,17 +355,40 @@ def main():
                 "What are the benefits of using transformers in NLP?"
             ]
             
-            for i, prompt in enumerate(test_prompts, 1):
-                logging.info(f"\nTest {i}/5:")
-                logging.info(f"User: {prompt}")
+            # Test with different inference precisions
+            for precision_test in ["fp32", "fp16", "bf16"]:
+                logging.info(f"\n--- Testing with {precision_test.upper()} inference precision ---")
+                
+                # Set inference precision
                 try:
-                    response = orchestrator.trainer.generate(prompt)
-                    logging.info(f"Assistant: {response}")
+                    orchestrator.trainer.set_inference_precision(precision_test)
                 except Exception as e:
-                    logging.error(f"Generation failed: {e}")
-                logging.info("-" * 50)
+                    logging.warning(f"Failed to set {precision_test} precision: {e}")
+                    continue
+                
+                for i, prompt in enumerate(test_prompts[:3], 1):  # Test first 3 prompts
+                    logging.info(f"\nTest {i}/3 ({precision_test.upper()}):")
+                    logging.info(f"User: {prompt}")
+                    try:
+                        response = orchestrator.trainer.generate(
+                            prompt,
+                            max_new_tokens=100,
+                            temperature=0.7
+                        )
+                        logging.info(f"Assistant: {response}")
+                    except Exception as e:
+                        logging.error(f"Generation failed with {precision_test}: {e}")
+                    logging.info("-" * 50)
+            
+            # Reset to original inference precision
+            try:
+                orchestrator.trainer.set_inference_precision(config.inference_precision)
+                logging.info(f"\nReset inference precision to: {config.inference_precision}")
+            except Exception as e:
+                logging.warning(f"Failed to reset inference precision: {e}")
         
-        logging.info("\n🎉 Training completed successfully!")
+        logging.info("\n🎉 Training and testing completed successfully!")
+        logging.info(f"Final inference precision: {orchestrator.trainer.inference_precision}")
         return 0
         
     except KeyboardInterrupt:

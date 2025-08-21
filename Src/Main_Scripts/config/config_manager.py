@@ -32,7 +32,8 @@ class Config:
     eval_every_n_batches: int = 500
     save_every_n_batches: int = 1000
     max_grad_norm: float = 1.0
-    precision: str = "fp16"
+    precision: str = "fp16"  # Training precision
+    inference_precision: str = "auto"  # NEW: Inference precision
     compile: bool = False
     
     # Data parameters
@@ -86,7 +87,8 @@ class Config:
         """Validate configuration parameters."""
         assert self.hidden_size % self.num_heads == 0, "hidden_size must be divisible by num_heads"
         assert self.num_heads % self.num_kv_heads == 0, "num_heads must be divisible by num_kv_heads"
-        assert self.precision in ["fp16", "bf16", "fp32"], f"Invalid precision: {self.precision}"
+        assert self.precision in ["fp16", "bf16", "fp32"], f"Invalid training precision: {self.precision}"
+        assert self.inference_precision in ["fp16", "bf16", "fp32", "auto"], f"Invalid inference precision: {self.inference_precision}"
         assert self.lr_scheduler in ["cosine", "linear", "onecycle"], f"Invalid scheduler: {self.lr_scheduler}"
         assert self.learning_rate > 0, "Learning rate must be positive"
         assert self.weight_decay >= 0, "Weight decay must be non-negative"
@@ -132,6 +134,7 @@ class ConfigPresets:
             eval_every_n_batches=50,
             save_every_n_batches=100,
             precision="fp32",
+            inference_precision="fp32",  # Use fp32 for debugging
             compile=False,
             num_workers=0,
             
@@ -165,6 +168,7 @@ class ConfigPresets:
             eval_every_n_batches=500,
             save_every_n_batches=1000,
             precision="fp16",
+            inference_precision="auto",  # Auto-select best inference precision
             compile=True,
             num_workers=2,
             
@@ -198,6 +202,7 @@ class ConfigPresets:
             eval_every_n_batches=1000,
             save_every_n_batches=2000,
             precision="fp16",
+            inference_precision="bf16",  # Use bf16 for better numerical stability in inference
             compile=True,
             num_workers=4,
             
@@ -232,6 +237,7 @@ class ConfigPresets:
             eval_every_n_batches=2000,
             save_every_n_batches=5000,
             precision="bf16",
+            inference_precision="bf16",  # Use bf16 for large models
             compile=True,
             num_workers=8,
             
@@ -245,4 +251,79 @@ class ConfigPresets:
             gradient_checkpointing=True,
             lr_scheduler="cosine",
             warmup_ratio=0.05
+        )
+    
+    @staticmethod
+    def inference_optimized() -> Config:
+        """Configuration optimized specifically for inference performance."""
+        return Config(
+            # Medium model optimized for inference
+            hidden_size=1024,
+            num_layers=12,
+            num_heads=16,
+            num_kv_heads=8,
+            seq_length=2048,
+            intermediate_size=2816,
+            
+            # Training settings (if fine-tuning)
+            batch_size=1,
+            gradient_accumulation_steps=32,
+            num_epochs=1,
+            learning_rate=1e-5,
+            weight_decay=0.01,
+            precision="fp16",
+            inference_precision="fp16",  # Optimized for speed
+            compile=True,
+            num_workers=4,
+            
+            # Generation parameters optimized for quality and speed
+            max_new_tokens=256,
+            temperature=0.7,
+            top_p=0.9,
+            top_k=40,
+            
+            # Fast inference settings
+            experiment_name="inference_optimized",
+            log_level="INFO",
+            gradient_checkpointing=False,  # Disable for faster inference
+            use_stable_embedding=True
+        )
+    
+    @staticmethod
+    def quality_focused() -> Config:
+        """Configuration focused on generation quality over speed."""
+        return Config(
+            # Quality-focused model
+            hidden_size=1536,
+            num_layers=20,
+            num_heads=24,
+            num_kv_heads=8,
+            seq_length=4096,
+            intermediate_size=4096,
+            
+            # Training for quality
+            batch_size=2,
+            gradient_accumulation_steps=16,
+            num_epochs=5,
+            learning_rate=2e-4,
+            weight_decay=0.01,
+            precision="bf16",
+            inference_precision="bf16",  # Best numerical precision
+            compile=True,
+            num_workers=6,
+            
+            # Generation parameters for quality
+            max_new_tokens=1024,
+            temperature=0.8,
+            top_p=0.95,
+            top_k=100,
+            
+            # Quality settings
+            experiment_name="quality_focused",
+            log_level="INFO",
+            gradient_checkpointing=True,
+            use_stable_embedding=True,
+            init_std=0.015,  # More conservative initialization
+            dropout=0.1,  # Add some regularization
+            early_stopping_patience=20
         )
