@@ -515,7 +515,7 @@ class EnhancedConversationTrainer:
         warmup_ratio = getattr(self.config, 'warmup_ratio', 0.1)
         warmup_steps = int(total_steps * warmup_ratio)
         
-        lr_scheduler = getattr(self.config, 'lr_scheduler', 'cosine')
+        lr_scheduler = getattr(self.config, 'lr_scheduler', None)
         
         if lr_scheduler == "cosine":
             self.scheduler = CosineAnnealingLR(

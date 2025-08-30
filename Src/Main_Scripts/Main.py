@@ -113,6 +113,8 @@ def main():
     create_directory_structure()
     
     # Hardcoded arguments instead of argparse with NEW inference precision options
+    # Add this after your other config overrides
+    config.lr_scheduler = None
     config_choice = 'medium'
     config_file = None
     train_data = 'oasst1_data/oasst1_train.jsonl'
@@ -121,9 +123,9 @@ def main():
     lr = 1e-5
     batch_size = 2
     grad_accum = 4
-    precision = 'fp16'
+    precision = 'auto'
     inference_precision = 'auto'  # NEW: Inference precision setting
-    experiment_name = 'hardcoded_experiment_with_inference_precision'
+    experiment_name = 'LuminaAI_Experiment_' + datetime.now().strftime("%Y%m%d_%H%M%S")
     resume = None
     seed = 42
     test_generation = True
