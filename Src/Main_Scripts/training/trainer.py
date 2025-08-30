@@ -177,20 +177,12 @@ class PrecisionManager:
 class EnhancedConversationTrainer:
     """Production trainer with comprehensive monitoring, fault tolerance, and multiple precision support."""
     
-    def __init__(self, model, tokenizer, config, logger, initial_lr=None):
+    def __init__(self, model, tokenizer, config, logger):
         self.model = model
         self.tokenizer = tokenizer
         self.config = config
         self.logger = logger
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        
-        # Use provided initial_lr or fall back to config learning rate
-        if initial_lr is not None:
-            self.initial_lr = initial_lr
-            # Override config learning rate to maintain consistency
-            self.config.learning_rate = initial_lr
-        else:
-            self.initial_lr = self.config.learning_rate
         
         # Initialize precision manager
         self.precision_manager = PrecisionManager()
@@ -307,7 +299,6 @@ class EnhancedConversationTrainer:
         # Log initialization
         logging.info(f"Trainer initialized on {self.device}")
         logging.info(f"Model parameters: {self._count_parameters():,}")
-        logging.info(f"Initial learning rate: {self.initial_lr:.2e}")
         logging.info(f"Training precision: {self.training_precision}")
         logging.info(f"Inference precision: {self.inference_precision}")
         logging.info(f"Supported precisions: {', '.join(self.precision_stats['supported_precisions'])}")
@@ -492,10 +483,10 @@ class EnhancedConversationTrainer:
         ]
         
         try:
-            # Use fused optimizer if available - use the consistent learning rate
+            # Use fused optimizer if available
             return AdamW(
                 param_groups,
-                lr=self.initial_lr,  # Use consistent learning rate
+                lr=self.config.learning_rate,
                 betas=(0.9, 0.95),
                 eps=1e-8,
                 fused=torch.cuda.is_available()
@@ -504,7 +495,7 @@ class EnhancedConversationTrainer:
             # Fallback to standard AdamW
             return AdamW(
                 param_groups,
-                lr=self.initial_lr,  # Use consistent learning rate
+                lr=self.config.learning_rate,
                 betas=(0.9, 0.95),
                 eps=1e-8
             )
@@ -532,7 +523,7 @@ class EnhancedConversationTrainer:
             )
         elif lr_scheduler == "onecycle":
             self.scheduler = OneCycleLR(
-                self.optimizer, max_lr=self.initial_lr,  # Use consistent learning rate
+                self.optimizer, max_lr=self.config.learning_rate,
                 total_steps=total_steps, pct_start=warmup_ratio
             )
         else:  # linear
@@ -658,7 +649,7 @@ class EnhancedConversationTrainer:
             self.scheduler.step()
         
         # Get current learning rate
-        current_lr = self.scheduler.get_last_lr()[0] if self.scheduler else self.initial_lr
+        current_lr = self.scheduler.get_last_lr()[0] if self.scheduler else self.config.learning_rate
         
         return {'grad_norm': grad_norm.item(), 'lr': current_lr}
     
@@ -1058,7 +1049,7 @@ class EnhancedConversationTrainer:
             f"Batches per epoch: {batches_per_epoch:,}",
             f"Total steps: {total_steps:,}",
             f"Effective batch size: {getattr(self.config, 'effective_batch_size', self.config.batch_size)}",
-            f"Learning rate: {self.initial_lr:.2e}",  # Use consistent learning rate
+            f"Learning rate: {self.config.learning_rate:.2e}",
             f"Weight decay: {getattr(self.config, 'weight_decay', 0.01)}",
             f"Warmup ratio: {getattr(self.config, 'warmup_ratio', 0.1)}",
             f"Max grad norm: {getattr(self.config, 'max_grad_norm', 1.0)}",
