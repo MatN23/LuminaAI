@@ -1,4 +1,4 @@
-# Conversational Transformer Training Framework
+# LuminaAI
 
 A production-ready machine learning framework for training conversational transformers with comprehensive monitoring, fault tolerance, and optimization features.
 
@@ -51,7 +51,7 @@ wandb>=0.15.0      # For experiment tracking
 1. **Clone the repository**
 ```bash
 git clone https://github.com/MatN23/LuminaAI.git
-cd conversational-transformer
+cd LuminaAI
 ```
 
 2. **Install dependencies**
@@ -109,12 +109,25 @@ Supported roles: `user`, `assistant`, `system`, `prompter`, `human`, `ai`, `bot`
 
 ### Default Model Sizes
 
-| Config | Hidden Size | Layers | Heads | KV Heads | Seq Length | Parameters |
-|--------|-------------|--------|-------|----------|------------|------------|
-| Debug  | 512         | 8      | 8     | 2        | 1024       | ~25M       |
-| Small  | 768         | 12     | 12    | 4        | 2048       | ~85M       |
-| Medium | 1024        | 24     | 16    | 4        | 4096       | ~350M      |
-| Large  | 2048        | 32     | 32    | 8        | 8192       | ~1.4B      |
+| Config | Hidden Size | Layers | Heads | KV Heads | Seq Length | Parameters | Memory (FP16) | Precision |
+|--------|-------------|--------|-------|----------|------------|------------|---------------|-----------|
+| Debug  | 128         | 2      | 2     | 1        | 256        | ~0.5M      | ~0.01GB       | FP32      |
+| Small  | 768         | 6      | 12    | 4        | 2048       | ~125M      | ~0.25GB       | FP16      |
+| Medium | 2048        | 22     | 16    | 8        | 4096       | ~1B        | ~2GB          | Mixed BF16|
+| Large  | 4096        | 32     | 32    | 8        | 4096       | ~7B        | ~14GB         | Mixed BF16|
+
+### Additional Specialized Presets
+
+| Config | Hidden Size | Layers | Heads | KV Heads | Seq Length | Parameters | Use Case |
+|--------|-------------|--------|-------|----------|------------|------------|----------|
+| Speed Optimized | 512 | 12 | 8 | 4 | 1024 | ~60M | Real-time applications |
+| Memory Optimized | 512 | 8 | 8 | 4 | 1024 | ~35M | Memory-constrained environments |
+| Inference Optimized | 1280 | 16 | 20 | 5 | 2048 | ~350M | Production inference |
+| Quality Focused | 3200 | 26 | 25 | 5 | 4096 | ~3B | High-quality generation |
+| Production | 1536 | 18 | 24 | 8 | 2048 | ~500M | Production deployments |
+| Experimental | 2560 | 24 | 20 | 10 | 3072 | ~1.5B | Research and experimentation |
+
+**Note**: Parameter counts include embedding layers, attention weights, MLP weights, and layer norm parameters. Memory estimates are for model weights only (FP16 precision) and don't include activations, optimizer states, or gradients which can increase memory usage by 3-4x during training.
 
 ## ⚙️ Configuration
 
@@ -254,7 +267,7 @@ python main.py --test-generation --resume checkpoints/best_model.pt
 ## 📁 Project Structure
 
 ```
-conversational-transformer/
+LuminaAI/
 ├── main.py                 # Main entry point
 ├── core/
 │   ├── model.py           # Transformer model architecture
@@ -328,7 +341,7 @@ python main.py --validate-data data/train.jsonl --create-report
 3. Make your changes and add tests
 4. Submit a pull request
 
-## 📝 License
+## 📄 License
 
 This project is licensed under a Custom License. See the license headers in source files for details.
 
