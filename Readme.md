@@ -64,7 +64,7 @@ pip install -r requirements.txt
 ### Basic Training
 
 ```bash
-python main.py \
+python Src/Main_Scripts/main.py \
   --config medium \
   --train-data data/train.jsonl \
   --eval-data data/eval.jsonl \
@@ -210,29 +210,29 @@ export WANDB_ENTITY="your-username"
 
 **Process OASST Dataset**:
 ```bash
-python main.py --process-oasst input.jsonl output.jsonl --max-conversations 10000
+python Src/Main_Scripts/main.py --process-oasst input.jsonl output.jsonl --max-conversations 10000
 ```
 
 **Validate Dataset**:
 ```bash
-python main.py --validate-data data/train.jsonl
+python Src/Main_Scripts/main.py --validate-data data/train.jsonl
 ```
 
 **Create Data Report**:
 ```bash
-python main.py --validate-data data/train.jsonl --create-report
+python Src/Main_Scripts/main.py --validate-data data/train.jsonl --create-report
 ```
 
 ### Environment Checks
 
 **Validate Training Environment**:
 ```bash
-python main.py --check-environment
+python Src/Main_Scripts/main.py --check-environment
 ```
 
 **Estimate Training Time**:
 ```bash
-python main.py --estimate-time --config medium
+python Src/Main_Scripts/main.py --estimate-time --config medium
 ```
 
 ## 🎯 Generation & Inference
@@ -241,7 +241,7 @@ The framework includes built-in text generation capabilities:
 
 ```python
 # After training, test generation
-python main.py --test-generation --resume checkpoints/best_model.pt
+python Src/Main_Scripts/main.py --test-generation --resume checkpoints/best_model.pt
 ```
 
 ### Generation Parameters
@@ -268,23 +268,25 @@ python main.py --test-generation --resume checkpoints/best_model.pt
 
 ```
 LuminaAI/
-├── main.py                 # Main entry point
-├── core/
-│   ├── model.py           # Transformer model architecture
-│   ├── tokenizer.py       # Enhanced tokenization
-│   └── dataset.py         # Dataset handling
-├── training/
-│   ├── trainer.py         # Main training logic
-│   ├── orchestrator.py    # Training orchestration
-│   └── checkpoint.py      # Checkpoint management
-├── config/
-│   └── config_manager.py  # Configuration management
-├── monitoring/
-│   └── logger.py          # Logging and monitoring
-├── utils/
-│   ├── data_processing.py # Data utilities
-│   ├── environment.py     # Environment checks
-│   └── reporting.py       # Report generation
+├── Src/
+│   └── Main_Scripts/
+│       ├── main.py        # Main entry point
+│       ├── core/
+│       │   ├── model.py           # Transformer model architecture
+│       │   ├── tokenizer.py       # Enhanced tokenization
+│       │   └── dataset.py         # Dataset handling
+│       ├── training/
+│       │   ├── trainer.py         # Main training logic
+│       │   ├── orchestrator.py    # Training orchestration
+│       │   └── checkpoint.py      # Checkpoint management
+│       ├── config/
+│       │   └── config_manager.py  # Configuration management
+│       ├── monitoring/
+│       │   └── logger.py          # Logging and monitoring
+│       └── utils/
+│           ├── data_processing.py # Data utilities
+│           ├── environment.py     # Environment checks
+│           └── reporting.py       # Report generation
 ├── data/                  # Training data
 ├── checkpoints/           # Model checkpoints
 ├── experiments/           # Experiment outputs
@@ -299,19 +301,19 @@ LuminaAI/
 **CUDA Out of Memory**:
 ```bash
 # Reduce batch size or enable gradient checkpointing
-python main.py --batch-size 1 --grad-accum 8
+python Src/Main_Scripts/main.py --batch-size 1 --grad-accum 8
 ```
 
 **Slow Training**:
 ```bash
 # Enable model compilation and mixed precision
-python main.py --precision fp16 --compile
+python Src/Main_Scripts/main.py --precision fp16 --compile
 ```
 
 **Data Loading Errors**:
 ```bash
 # Validate and fix dataset
-python main.py --validate-data data/train.jsonl --create-report
+python Src/Main_Scripts/main.py --validate-data data/train.jsonl --create-report
 ```
 
 ### Performance Optimization
