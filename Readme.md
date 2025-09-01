@@ -2,6 +2,20 @@
 
 A production-ready machine learning framework for training conversational transformers with comprehensive monitoring, fault tolerance, and optimization features.
 
+[![License](https://img.shields.io/badge/license-Custom-blue.svg)](./LICENSE)
+[![Python](https://img.shields.io/badge/python-3.10+-brightgreen.svg)]()
+[![PyTorch](https://img.shields.io/badge/pytorch-1.13+-ee4c2c.svg)](https://pytorch.org/)
+[![WandB](https://img.shields.io/badge/weights_&_biases-integrated-orange.svg)](https://wandb.ai)
+
+<p align="center">
+  <img src="assets/logo.png" alt="LuminaAI Logo" width="200"/>
+</p>
+
+<h1 align="center">LuminaAI</h1>
+<p align="center">
+  A production-ready machine learning framework for training conversational transformers.
+</p>
+
 ## 🚀 Features
 
 ### Core Capabilities
@@ -31,6 +45,14 @@ A production-ready machine learning framework for training conversational transf
 - **Data Validation**: Comprehensive dataset validation and quality checks
 - **Batch Processing**: Multi-threaded data processing with error handling
 - **OASST Support**: Native support for OpenAssistant dataset format
+
+## 🤔 Why LuminaAI?
+
+Unlike HuggingFace Trainer or PyTorch Lightning, LuminaAI is:
+- 🎯 **Specialized for conversational datasets** (OASST-ready)
+- 🛡️ **Fault tolerant** — built-in anomaly detection & auto-recovery
+- 📈 **Production-focused** — experiment tracking, backups, memory monitoring
+- 🧪 **Research-friendly** — flexible configs, gradient checkpointing, flash attention
 
 ## 📋 Requirements
 
@@ -336,12 +358,11 @@ python Src/Main_Scripts/main.py --validate-data data/train.jsonl --create-report
 | Huge       | 20B–70B  | BF16               | FP16 / INT8         | 40–140 GB                              |
 | Massive    | 70B–175B | BF16               | FP16 / INT8         | 140–350+ GB                            |
 
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature-name`
-3. Make your changes and add tests
-4. Submit a pull request
+## 🗺️ Roadmap
+- [ ] Add LoRA/QLoRA fine-tuning
+- [ ] Add distributed training (DeepSpeed)
+- [ ] Add pretrained LuminaAI models
+- [ ] Release Docker image
 
 ## 📄 License
 
@@ -361,6 +382,17 @@ For issues and questions:
 2. Review existing GitHub issues
 3. Create a new issue with detailed information
 4. Include logs, configuration, and system information
+
+## 🤝 Contributing
+
+Contributions are welcome!  
+New to open source? Here’s how you can help:
+- 📖 Improve documentation
+- 🐛 Report issues
+- 💡 Suggest new features
+- 🧪 Add training benchmarks
+
+Just fork the repo and open a PR 🚀
 
 ---
 
