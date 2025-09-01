@@ -11,10 +11,6 @@ A production-ready machine learning framework for training conversational transf
   <img src="assets/logo.png" alt="LuminaAI Logo" width="200"/>
 </p>
 
-<h1 align="center">LuminaAI</h1>
-<p align="center">
-  A production-ready machine learning framework for training conversational transformers.
-</p>
 
 ## 🚀 Features
 
