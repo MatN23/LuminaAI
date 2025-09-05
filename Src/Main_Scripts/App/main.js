@@ -27,11 +27,11 @@ class LuminaAIApp {
             frame: process.platform !== 'darwin',
             show: false,
             backgroundColor: '#0c0c0f',
-            icon: path.join(__dirname, 'assets', 'icon.png') // You can add an icon file
+            icon: path.join(__dirname, 'assets', 'assets/icon.png') // You can add an icon file
         });
 
         // Load the HTML file
-        await this.mainWindow.loadFile('index.html');
+        await this.mainWindow.loadFile('renderer/index.html');
 
         // Show window when ready to prevent visual flash
         this.mainWindow.once('ready-to-show', () => {
