@@ -1,41 +1,70 @@
 {
-  "name": "lumina-ai-desktop",
+  "name": "luminaai-desktop",
   "version": "1.0.0",
-  "description": "LuminaAI Neural Desktop Interface",
+  "description": "LuminaAI Neural Desktop Interface - Advanced transformer chat application",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "dev": "electron . --dev",
-    "install-deps": "npm install electron",
+    "dev": "NODE_ENV=development electron .",
     "build": "electron-builder",
-    "build:mac": "electron-builder --mac",
-    "build:win": "electron-builder --win",
-    "build:linux": "electron-builder --linux",
-    "build:all": "electron-builder --mac --win --linux",
-    "dist": "npm run build:all"
+    "build-win": "electron-builder --win",
+    "build-mac": "electron-builder --mac", 
+    "build-linux": "electron-builder --linux",
+    "dist": "npm run build",
+    "pack": "electron-builder --dir",
+    "postinstall": "electron-builder install-app-deps"
   },
   "keywords": [
     "ai",
     "neural",
-    "desktop",
-    "electron"
+    "transformer",
+    "chat",
+    "pytorch",
+    "electron",
+    "desktop"
   ],
-  "author": "Matias Nielsen",
-  "license": "Custom",
+  "author": {
+    "name": "Your Name",
+    "email": "your.email@example.com"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/your-username/luminaai-desktop",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-username/luminaai-desktop.git"
+  },
+  "bugs": {
+    "url": "https://github.com/your-username/luminaai-desktop/issues"
+  },
+  "main": "main.js",
   "devDependencies": {
-    "electron": "^28.0.0",
-    "electron-builder": "^26.0.12"
+    "electron": "^27.0.0",
+    "electron-builder": "^24.6.4"
+  },
+  "dependencies": {
+    "electron-updater": "^6.1.4"
   },
   "build": {
-    "appId": "com.matias.lumina-ai-desktop",
-    "productName": "LuminaAI",
+    "appId": "com.yourcompany.luminaai",
+    "productName": "LuminaAI Desktop",
     "directories": {
       "output": "dist"
     },
     "files": [
-      "**/*",
-      "!node_modules/**/*",
-      "node_modules/**/*"
+      "main.js",
+      "index.html",
+      "Chat.py",
+      "config/**/*",
+      "core/**/*",
+      "checkpoint.py",
+      "preload.js",
+      "assets/**/*"
+    ],
+    "extraFiles": [
+      {
+        "from": "python_requirements.txt",
+        "to": "python_requirements.txt"
+      }
     ],
     "mac": {
       "category": "public.app-category.productivity",
@@ -49,48 +78,69 @@
           "target": "zip",
           "arch": ["x64", "arm64"]
         }
-      ]
+      ],
+      "darkModeSupport": true,
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
     },
     "win": {
       "icon": "assets/icon.ico",
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64", "ia32", "arm64"]
+          "arch": ["x64"]
         },
         {
           "target": "portable",
-          "arch": ["x64", "ia32", "arm64"]
+          "arch": ["x64"]
         }
-      ]
+      ],
+      "publisherName": "Your Company Name"
     },
     "linux": {
       "icon": "assets/icon.png",
       "target": [
         {
           "target": "AppImage",
-          "arch": ["x64", "arm64"]
+          "arch": ["x64"]
         },
         {
           "target": "deb",
-          "arch": ["x64", "arm64"]
-        },
-        {
-          "target": "rpm",
-          "arch": ["x64", "arm64"]
+          "arch": ["x64"]
         }
       ],
-      "category": "Development",
-      "maintainer": "Matias Nielsen"
-    },
-    "dmg": {
-      "title": "LuminaAI Installer"
+      "category": "Office"
     },
     "nsis": {
       "oneClick": false,
+      "allowElevation": true,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "createStartMenuShortcut": true
+      "createStartMenuShortcut": true,
+      "shortcutName": "LuminaAI Desktop"
+    },
+    "dmg": {
+      "title": "LuminaAI Desktop",
+      "icon": "assets/icon.icns",
+      "background": "assets/dmg-background.png",
+      "contents": [
+        {
+          "x": 410,
+          "y": 150,
+          "type": "link",
+          "path": "/Applications"
+        },
+        {
+          "x": 130,
+          "y": 150,
+          "type": "file"
+        }
+      ]
     }
+  },
+  "engines": {
+    "node": ">=16.0.0"
   }
 }
