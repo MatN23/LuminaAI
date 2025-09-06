@@ -95,10 +95,10 @@ class Config:
         assert self.num_heads % self.num_kv_heads == 0, "num_heads must be divisible by num_kv_heads"
         
         # EXPANDED precision validation
-        valid_training_precisions = ["fp32", "fp16", "bf16", "mixed_fp16", "mixed_bf16", "tf32"]
+        valid_training_precisions = ["fp32", "fp16", "bf16", "mixed_fp16", "auto","mixed_bf16", "tf32"]
         assert self.precision in valid_training_precisions, f"Invalid training precision: {self.precision}. Valid options: {valid_training_precisions}"
         
-        valid_inference_precisions = ["fp32", "fp16", "bf16", "mixed_fp16", "mixed_bf16", "tf32", "dynamic"]
+        valid_inference_precisions = ["fp32", "fp16", "bf16", "mixed_fp16", "mixed_bf16", "auto","tf32", "dynamic"]
         assert self.inference_precision in valid_inference_precisions, f"Invalid inference precision: {self.inference_precision}. Valid options: {valid_inference_precisions}"
         
         # Modified validation to allow None for lr_scheduler

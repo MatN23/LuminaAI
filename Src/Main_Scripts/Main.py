@@ -22,12 +22,37 @@ try:
     from utils.environment import validate_environment, estimate_training_time
     from utils.reporting import create_data_summary_report
     from core.tokenizer import ConversationTokenizer
-    from core.model import estimate_parameters, DeepSeekTransformer  # Fixed: Correct class name
+    from core.model import estimate_parameters, DeepSeekTransformer, DeepSeekConfig  # Added DeepSeekConfig
     from core.dataset import ConversationDataset, StreamingConversationDataset, create_memory_efficient_dataloader
 except ImportError as e:
     print(f"Import error: {e}")
     print("Make sure all required modules are present in the correct directory structure.")
     sys.exit(1)
+
+
+def config_to_deepseek_config(config):
+    """Convert training Config to DeepSeekConfig."""
+    return DeepSeekConfig(
+        vocab_size=getattr(config, 'vocab_size', 50257),
+        hidden_size=getattr(config, 'hidden_size', 768),
+        num_layers=getattr(config, 'num_layers', 12),
+        num_heads=getattr(config, 'num_heads', 12),
+        num_kv_heads=getattr(config, 'num_kv_heads', None),
+        intermediate_size=getattr(config, 'intermediate_size', None),
+        seq_length=getattr(config, 'seq_length', 2048),
+        dropout=getattr(config, 'dropout', 0.0),
+        rms_norm_eps=getattr(config, 'rms_norm_eps', 1e-6),
+        rope_theta=getattr(config, 'rope_theta', 10000.0),
+        init_std=getattr(config, 'init_std', 0.02),
+        use_stable_embedding=getattr(config, 'use_stable_embedding', True),
+        tie_word_embeddings=getattr(config, 'tie_word_embeddings', True),
+        gradient_checkpointing=getattr(config, 'gradient_checkpointing', False),
+        use_moe=getattr(config, 'use_moe', False),
+        num_experts=getattr(config, 'num_experts', 8),
+        moe_top_k=getattr(config, 'moe_top_k', 2),
+        capacity_factor=getattr(config, 'capacity_factor', 1.25),
+        load_balancing_weight=getattr(config, 'load_balancing_weight', 0.01),
+    )
 
 
 def setup_logging_basic():
@@ -224,7 +249,7 @@ def main():
     system_resources = check_system_resources()
     
     # Hardcoded arguments with enhanced sharding support
-    config_choice = 'medium'
+    config_choice = 'debug'
     config_file = None
     train_data = 'oasst1_data/oasst1_train.jsonl'
     eval_data = 'data/eval.jsonl'
@@ -449,7 +474,9 @@ def main():
                 else:
                     dataset_size = 10000  # Default estimate
             
-            estimates = estimate_training_time(config, dataset_size)
+            # Create DeepSeek config for parameter estimation
+            deepseek_config = config_to_deepseek_config(config)
+            estimates = estimate_training_time(deepseek_config, dataset_size)
             
             logging.info("Training Time Estimates:")
             logging.info(f"  Dataset size: {dataset_size:,} conversations")
@@ -496,9 +523,12 @@ def main():
         # Initialize training orchestrator
         orchestrator = TrainingOrchestrator(config)
         
+        # Create DeepSeek config for parameter estimation  
+        deepseek_config = config_to_deepseek_config(config)
+        
         # Log configuration with sharding info
         logging.info(f"Configuration: {config_choice}")
-        logging.info(f"Model parameters: ~{estimate_parameters(config):,}")
+        logging.info(f"Model parameters: ~{estimate_parameters(deepseek_config):,}")
         logging.info(f"Experiment: {config.experiment_name}")
         logging.info(f"Training precision: {config.precision}")
         logging.info(f"Inference precision: {config.inference_precision}")
