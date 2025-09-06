@@ -25,8 +25,8 @@ from torch.cuda import get_device_properties
 sys.path.insert(0, str(Path(__file__).parent))
 
 try:
-    from model import DeepSeekTransformer, DeepSeekConfig, create_deepseek_model
-    from tokenizer import ConversationTokenizer, TokenizationMode
+    from core.model import DeepSeekTransformer, DeepSeekConfig, create_deepseek_model
+    from core.tokenizer import ConversationTokenizer, TokenizationMode
 except ImportError as e:
     print(f"Import error: {e}")
     print("Make sure model.py and tokenizer.py are in the same directory as this script.")

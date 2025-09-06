@@ -22,7 +22,7 @@ try:
     from utils.environment import validate_environment, estimate_training_time
     from utils.reporting import create_data_summary_report
     from core.tokenizer import ConversationTokenizer
-    from core.model import estimate_parameters
+    from core.model import estimate_parameters, DeepSeekTransformer  # Fixed import
     from dataset import ConversationDataset, StreamingConversationDataset, create_memory_efficient_dataloader
 except ImportError as e:
     print(f"Import error: {e}")
