@@ -32,7 +32,7 @@ try:
     from config.config_manager import Config, ConfigPresets
     from core.tokenizer import ConversationTokenizer, TokenizationMode
     from core.model import TransformerModel, estimate_parameters
-    from checkpoint import CheckpointManager
+    from training.checkpoint import CheckpointManager
 except ImportError as e:
     print(f"Import error: {e}")
     print("Make sure all required modules are present in the correct directory structure.")
@@ -241,14 +241,14 @@ def find_best_checkpoint() -> Optional[str]:
         print(f"Selected checkpoint: {best_checkpoint}")
         return best_checkpoint
     else:
-        print("No checkpoints found - will use randomly initialized model")
+        print("ERROR: No checkpoints found!")
         return None
 
 
 class AdvancedChat:
     """Advanced chat interface with comprehensive features."""
     
-    def __init__(self, config: Config, checkpoint_path: Optional[str] = None):
+    def __init__(self, config: Config, checkpoint_path: str):
         self.config = config
         self.checkpoint_path = checkpoint_path
         self.conversation_history = []
@@ -343,87 +343,14 @@ class AdvancedChat:
             # Initialize analyzer
             self.analyzer = ModelAnalyzer(self.model, self.tokenizer)
             
-            # Load checkpoint if provided or auto-find best one
-            if self.checkpoint_path:
-                self._load_checkpoint()
-            else:
-                # Try to auto-find best checkpoint
-                auto_checkpoint = self._find_best_checkpoint_auto()
-                if auto_checkpoint:
-                    self.checkpoint_path = auto_checkpoint
-                    self._load_checkpoint()
-                else:
-                    print("WARNING: No checkpoint found - using randomly initialized model")
+            # Load checkpoint - this is now required
+            self._load_checkpoint()
             
             print("Chat system ready!")
             
         except Exception as e:
             print(f"Failed to initialize chat system: {e}")
             raise
-    
-    def _find_best_checkpoint_auto(self) -> Optional[str]:
-        """Automatically find the best checkpoint using CheckpointManager."""
-        try:
-            # First try to get resume path from current experiment
-            resume_path = self.checkpoint_manager.get_resume_path()
-            if resume_path:
-                print(f"Found checkpoint for current experiment: {resume_path}")
-                return resume_path
-            
-            # Look for any experiment directories with checkpoints
-            checkpoint_base = Path("checkpoints")
-            if not checkpoint_base.exists():
-                return None
-            
-            best_checkpoint = None
-            best_metric = float('inf')
-            
-            for exp_dir in checkpoint_base.iterdir():
-                if not exp_dir.is_dir():
-                    continue
-                
-                try:
-                    # Create temporary checkpoint manager for this experiment
-                    temp_config = Config()  # Default config
-                    temp_config.experiment_name = exp_dir.name
-                    temp_manager = CheckpointManager(temp_config, str(checkpoint_base))
-                    
-                    # Get best checkpoint from this experiment
-                    exp_best = temp_manager.get_best_checkpoint()
-                    if exp_best and exp_best.exists():
-                        # Try to read the metric value
-                        history_file = exp_dir / "checkpoint_history.json"
-                        if history_file.exists():
-                            with open(history_file, 'r') as f:
-                                data = json.load(f)
-                            metric_value = data.get('best_metric_value', float('inf'))
-                        else:
-                            # Use file modification time as fallback
-                            metric_value = -exp_best.stat().st_mtime
-                        
-                        if metric_value < best_metric:
-                            best_checkpoint = str(exp_best)
-                            best_metric = metric_value
-                            print(f"Found better checkpoint in {exp_dir.name}: {metric_value}")
-                
-                except Exception as e:
-                    print(f"Error checking experiment {exp_dir.name}: {e}")
-                    continue
-            
-            if best_checkpoint:
-                print(f"Auto-selected best checkpoint: {best_checkpoint}")
-                # Update config to match the experiment
-                exp_name = Path(best_checkpoint).parent.name
-                self.config.experiment_name = exp_name
-                return best_checkpoint
-            
-            # Fallback: look for any checkpoint files in the base directory or subdirectories
-            print("No managed checkpoints found, searching for standalone files...")
-            return find_best_checkpoint()
-            
-        except Exception as e:
-            print(f"Error in auto-checkpoint detection: {e}")
-            return None
     
     def _load_checkpoint(self):
         """Load model checkpoint with enhanced error handling."""
@@ -442,7 +369,7 @@ class AdvancedChat:
                     if fallback:
                         checkpoint_path = Path(fallback)
                     else:
-                        return
+                        raise FileNotFoundError("No checkpoint available")
                     
             elif self.checkpoint_path == "latest":
                 latest_path = self.checkpoint_manager.get_latest_checkpoint()
@@ -450,11 +377,10 @@ class AdvancedChat:
                     checkpoint_path = latest_path
                 else:
                     print("No latest checkpoint found in checkpoint manager")
-                    return
+                    raise FileNotFoundError("No checkpoint available")
             
             if not checkpoint_path.exists():
-                print(f"Checkpoint not found: {checkpoint_path}")
-                return
+                raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
             
             print(f"Loading checkpoint: {checkpoint_path}")
             
@@ -488,7 +414,7 @@ class AdvancedChat:
             
         except Exception as e:
             print(f"Failed to load checkpoint: {e}")
-            print("Continuing with randomly initialized model")
+            raise
     
     def _validate_checkpoint_config(self, checkpoint_config: Dict[str, Any]):
         """Validate that checkpoint config matches current config."""
@@ -1327,8 +1253,7 @@ class AdvancedChat:
         gen_config = self.generation_configs[self.conversation_mode]
         print(f"Generation settings - Temp: {gen_config['temperature']}, Top-p: {gen_config['top_p']}, Top-k: {gen_config['top_k']}")
         
-        if self.checkpoint_path:
-            print(f"Checkpoint: {self.checkpoint_path}")
+        print(f"Checkpoint: {self.checkpoint_path}")
         if self.system_prompt:
             print(f"System prompt: {self.system_prompt[:50]}...")
         
@@ -1492,10 +1417,19 @@ Examples:
         print(f"Configuration error: {e}")
         return 1
     
-    # Auto-detect checkpoint if none specified
+    # Determine checkpoint path - now required
     checkpoint_path = args.checkpoint
     if not checkpoint_path:
+        # Auto-detect checkpoint
         checkpoint_path = find_best_checkpoint()
+        if not checkpoint_path:
+            print("ERROR: No checkpoint found!")
+            print("The chat interface requires a trained model checkpoint to function.")
+            print("Please:")
+            print("1. Train a model first using train.py")
+            print("2. Or specify a checkpoint path with --checkpoint")
+            print("3. Or place a checkpoint file in the checkpoints/ directory")
+            return 1
     
     # Initialize chat
     try:
