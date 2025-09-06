@@ -1,8 +1,5 @@
-#!/usr/bin/env python3
-"""
-Enhanced interactive chat interface for conversational transformer models.
-Includes advanced features like conversation branching, export options, and model analysis.
-"""
+# Copyright (c) 2025 Matias Nielsen. All rights reserved.
+# Licensed under the Custom License below.
 
 import os
 import sys
@@ -24,18 +21,15 @@ import torch
 import torch.nn.functional as F
 from torch.cuda import get_device_properties
 
-# Add the current directory to Python path for imports
+# Import the actual modules from the provided files
 sys.path.insert(0, str(Path(__file__).parent))
 
-# Import our modules
 try:
-    from config.config_manager import Config, ConfigPresets
-    from core.tokenizer import ConversationTokenizer, TokenizationMode
-    from core.model import TransformerModel, estimate_parameters
-    from training.checkpoint import CheckpointManager
+    from model import DeepSeekTransformer, DeepSeekConfig, create_deepseek_model
+    from tokenizer import ConversationTokenizer, TokenizationMode
 except ImportError as e:
     print(f"Import error: {e}")
-    print("Make sure all required modules are present in the correct directory structure.")
+    print("Make sure model.py and tokenizer.py are in the same directory as this script.")
     sys.exit(1)
 
 
@@ -52,7 +46,7 @@ class ConversationBranch:
 class ModelAnalyzer:
     """Analyzes model behavior and provides insights."""
     
-    def __init__(self, model: TransformerModel, tokenizer: ConversationTokenizer):
+    def __init__(self, model: DeepSeekTransformer, tokenizer: ConversationTokenizer):
         self.model = model
         self.tokenizer = tokenizer
         self.attention_patterns = []
@@ -62,17 +56,28 @@ class ModelAnalyzer:
         """Analyze attention patterns in the model."""
         self.model.eval()
         with torch.no_grad():
-            # Get hidden states and attention weights
-            logits, hidden_states = self.model(input_ids, return_hidden_states=True)
+            # Get logits and try to extract hidden states if model supports it
+            outputs = self.model(input_ids, return_hidden_states=True)
+            if isinstance(outputs, tuple):
+                logits, hidden_states = outputs[0], outputs[1]
+            else:
+                logits = outputs
+                hidden_states = None
             
             # Basic analysis
             analysis = {
-                'num_layers': len(hidden_states),
                 'sequence_length': input_ids.shape[1],
-                'hidden_size': hidden_states[0].shape[-1],
-                'layer_activations': [h.abs().mean().item() for h in hidden_states],
-                'layer_variances': [h.var().item() for h in hidden_states]
+                'vocab_size': logits.shape[-1],
+                'batch_size': input_ids.shape[0],
             }
+            
+            if hidden_states:
+                analysis.update({
+                    'num_layers': len(hidden_states),
+                    'hidden_size': hidden_states[0].shape[-1],
+                    'layer_activations': [h.abs().mean().item() for h in hidden_states],
+                    'layer_variances': [h.var().item() for h in hidden_states]
+                })
             
             return analysis
     
@@ -168,14 +173,11 @@ def find_best_checkpoint() -> Optional[str]:
     
     # List of checkpoint locations to search (in order of preference)
     search_locations = [
-        # First try the CheckpointManager structure
         Path("checkpoints"),
-        # Also check current directory for loose checkpoint files
         Path("."),
     ]
     
     best_checkpoint = None
-    best_info = None
     
     for location in search_locations:
         if not location.exists():
@@ -183,45 +185,13 @@ def find_best_checkpoint() -> Optional[str]:
             
         print(f"Checking {location}...")
         
-        # Look for experiment directories with checkpoint history
-        for exp_dir in location.iterdir():
-            if not exp_dir.is_dir():
-                continue
-                
-            history_file = exp_dir / "checkpoint_history.json"
-            if history_file.exists():
-                try:
-                    with open(history_file, 'r') as f:
-                        data = json.load(f)
-                    
-                    best_path = data.get('best_checkpoint_path')
-                    if best_path and Path(best_path).exists():
-                        best_metric = data.get('best_metric_value', float('inf'))
-                        if best_checkpoint is None or best_metric < best_info['metric']:
-                            best_checkpoint = best_path
-                            best_info = {
-                                'metric': best_metric,
-                                'experiment': exp_dir.name,
-                                'type': 'managed_best'
-                            }
-                            print(f"Found managed best checkpoint: {exp_dir.name} (loss: {best_metric:.6f})")
-                except Exception as e:
-                    print(f"Error reading checkpoint history in {exp_dir}: {e}")
-            
-            # Also check for direct best_checkpoint.pt symlink
-            best_link = exp_dir / "best_checkpoint.pt"
-            if best_link.exists():
-                if best_checkpoint is None:
-                    best_checkpoint = str(best_link)
-                    best_info = {'experiment': exp_dir.name, 'type': 'symlink_best'}
-                    print(f"Found best checkpoint symlink: {exp_dir.name}")
-        
-        # Look for standalone checkpoint files
+        # Look for checkpoint files
         checkpoint_patterns = [
             "best_*.pt",
             "*_best.pt", 
             "checkpoint_*.pt",
-            "model_*.pt"
+            "model_*.pt",
+            "*.pt"
         ]
         
         for pattern in checkpoint_patterns:
@@ -229,30 +199,22 @@ def find_best_checkpoint() -> Optional[str]:
             if checkpoints:
                 # Sort by modification time, newest first
                 checkpoints.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-                latest = checkpoints[0]
-                
-                if best_checkpoint is None:
-                    best_checkpoint = str(latest)
-                    best_info = {'type': 'standalone', 'pattern': pattern}
-                    print(f"Found standalone checkpoint: {latest.name}")
-                    break
+                best_checkpoint = str(checkpoints[0])
+                print(f"Found checkpoint: {best_checkpoint}")
+                return best_checkpoint
     
-    if best_checkpoint:
-        print(f"Selected checkpoint: {best_checkpoint}")
-        return best_checkpoint
-    else:
-        print("ERROR: No checkpoints found!")
-        return None
+    print("ERROR: No checkpoints found!")
+    return None
 
 
 class AdvancedChat:
     """Advanced chat interface with comprehensive features."""
     
-    def __init__(self, config: Config, checkpoint_path: str):
+    def __init__(self, config: DeepSeekConfig, checkpoint_path: str):
         self.config = config
         self.checkpoint_path = checkpoint_path
         self.conversation_history = []
-        self.conversation_branches = {}  # For conversation branching
+        self.conversation_branches = {}
         self.current_branch_id = "main"
         self.session_stats = {
             'messages_sent': 0,
@@ -276,7 +238,7 @@ class AdvancedChat:
         self.show_analysis = False
         self.auto_save = False
         self.system_prompt = None
-        self.conversation_mode = "standard"  # standard, creative, analytical
+        self.conversation_mode = "standard"
         
         # Generation settings
         self.generation_configs = {
@@ -290,7 +252,6 @@ class AdvancedChat:
         self.tokenizer = None
         self.model = None
         self.analyzer = None
-        self.checkpoint_manager = None
         
         # Setup logging
         logging.basicConfig(
@@ -322,28 +283,24 @@ class AdvancedChat:
         print("Initializing chat system...")
         
         try:
-            # Initialize tokenizer with enhanced settings
+            # Initialize tokenizer
             self.tokenizer = ConversationTokenizer(
                 model_name="gpt-4",
                 max_context_length=self.config.seq_length,
                 enable_caching=True,
                 thread_safe=False
             )
-            self.config.vocab_size = self.tokenizer.vocab_size
             print(f"Tokenizer loaded (vocab size: {self.tokenizer.vocab_size:,})")
             
             # Initialize model
-            self.model = TransformerModel(self.config).to(self.device)
-            param_count = estimate_parameters(self.config)
-            print(f"Model initialized (~{param_count:,} parameters)")
-            
-            # Initialize checkpoint manager
-            self.checkpoint_manager = CheckpointManager(self.config)
+            self.model = DeepSeekTransformer(self.config).to(self.device)
+            param_count = sum(p.numel() for p in self.model.parameters())
+            print(f"Model initialized ({param_count:,} parameters)")
             
             # Initialize analyzer
             self.analyzer = ModelAnalyzer(self.model, self.tokenizer)
             
-            # Load checkpoint - this is now required
+            # Load checkpoint
             self._load_checkpoint()
             
             print("Chat system ready!")
@@ -353,31 +310,9 @@ class AdvancedChat:
             raise
     
     def _load_checkpoint(self):
-        """Load model checkpoint with enhanced error handling."""
+        """Load model checkpoint."""
         try:
             checkpoint_path = Path(self.checkpoint_path)
-            
-            # Handle special keywords using CheckpointManager
-            if self.checkpoint_path == "best":
-                best_path = self.checkpoint_manager.get_best_checkpoint()
-                if best_path:
-                    checkpoint_path = best_path
-                else:
-                    print("No best checkpoint found in checkpoint manager")
-                    # Fallback to global search
-                    fallback = find_best_checkpoint()
-                    if fallback:
-                        checkpoint_path = Path(fallback)
-                    else:
-                        raise FileNotFoundError("No checkpoint available")
-                    
-            elif self.checkpoint_path == "latest":
-                latest_path = self.checkpoint_manager.get_latest_checkpoint()
-                if latest_path:
-                    checkpoint_path = latest_path
-                else:
-                    print("No latest checkpoint found in checkpoint manager")
-                    raise FileNotFoundError("No checkpoint available")
             
             if not checkpoint_path.exists():
                 raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
@@ -389,23 +324,9 @@ class AdvancedChat:
             
             # Handle different checkpoint formats
             if 'model_state_dict' in checkpoint:
-                # Enhanced checkpoint format
                 self.model.load_state_dict(checkpoint['model_state_dict'])
-                
-                # Display checkpoint info
-                if 'current_epoch' in checkpoint:
-                    print(f"Loaded from epoch {checkpoint['current_epoch']}")
-                if 'global_step' in checkpoint:
-                    print(f"Global step: {checkpoint['global_step']}")
-                if 'metrics' in checkpoint:
-                    metrics = checkpoint['metrics']
-                    if 'eval_losses' in metrics and metrics['eval_losses']:
-                        print(f"Best eval loss: {min(metrics['eval_losses']):.6f}")
-                
-                # Validate model compatibility
-                if 'model_config' in checkpoint:
-                    self._validate_checkpoint_config(checkpoint['model_config'])
-                    
+                if 'epoch' in checkpoint:
+                    print(f"Loaded from epoch {checkpoint['epoch']}")
             else:
                 # Assume the checkpoint is just the state dict
                 self.model.load_state_dict(checkpoint)
@@ -415,33 +336,6 @@ class AdvancedChat:
         except Exception as e:
             print(f"Failed to load checkpoint: {e}")
             raise
-    
-    def _validate_checkpoint_config(self, checkpoint_config: Dict[str, Any]):
-        """Validate that checkpoint config matches current config."""
-        current_config = {
-            'hidden_size': self.config.hidden_size,
-            'num_layers': self.config.num_layers,
-            'num_heads': self.config.num_heads,
-            'vocab_size': self.config.vocab_size,
-        }
-        
-        mismatches = []
-        for key, current_value in current_config.items():
-            checkpoint_value = checkpoint_config.get(key)
-            if checkpoint_value is not None and checkpoint_value != current_value:
-                mismatches.append(f"{key}: checkpoint={checkpoint_value}, current={current_value}")
-        
-        if mismatches:
-            print("WARNING: Config mismatches detected:")
-            for mismatch in mismatches:
-                print(f"  {mismatch}")
-            
-            # Auto-update config to match checkpoint if reasonable
-            if len(mismatches) <= 2:  # Only auto-update for minor mismatches
-                for key in current_config:
-                    if key in checkpoint_config:
-                        setattr(self.config, key, checkpoint_config[key])
-                print("Config auto-updated to match checkpoint")
     
     def _generate_response(self, user_input: str) -> Tuple[str, Dict[str, Any]]:
         """Generate response with advanced sampling options."""
@@ -464,9 +358,10 @@ class AdvancedChat:
             # Convert to tensor
             input_ids = torch.tensor([input_tokens], dtype=torch.long, device=self.device)
             
-            # Truncate if too long
-            if input_ids.shape[1] > self.config.seq_length - self.config.max_new_tokens:
-                input_ids = input_ids[:, -(self.config.seq_length - self.config.max_new_tokens):]
+            # Truncate if too long - use config.seq_length instead of max_new_tokens
+            max_new_tokens = getattr(self.config, 'max_new_tokens', 512)  # Default to 512 if not set
+            if input_ids.shape[1] > self.config.seq_length - max_new_tokens:
+                input_ids = input_ids[:, -(self.config.seq_length - max_new_tokens):]
             
             # Get current generation config
             gen_config = self.generation_configs[self.conversation_mode]
@@ -474,7 +369,7 @@ class AdvancedChat:
             # Generate response
             generated_tokens = self._generate_tokens(
                 input_ids,
-                max_new_tokens=self.config.max_new_tokens,
+                max_new_tokens=max_new_tokens,
                 temperature=gen_config['temperature'],
                 top_p=gen_config['top_p'],
                 top_k=gen_config['top_k']
@@ -529,6 +424,9 @@ class AdvancedChat:
             for _ in range(max_new_tokens):
                 # Forward pass
                 logits = self.model(current_ids)
+                if isinstance(logits, tuple):
+                    logits = logits[0]  # If model returns tuple, take first element
+                
                 next_token_logits = logits[0, -1, :]  # Last token predictions
                 
                 # Apply temperature
@@ -555,7 +453,7 @@ class AdvancedChat:
                     next_token_logits[indices_to_remove] = -float('Inf')
                 
                 # Sample next token
-                probs = F.softmax(next_token_logits, dim=-1)
+                probs = F.softmax(next_token_logits, dim=-1, dtype=torch.float32).to(next_token_logits.dtype)
                 next_token = torch.multinomial(probs, num_samples=1).item()
                 
                 # Check for special tokens that indicate end of response
@@ -628,7 +526,7 @@ class AdvancedChat:
         self.session_stats['avg_response_time'] = ((current_avg * (msg_count - 1)) + new_time) / msg_count
     
     def _handle_command(self, command: str) -> bool:
-        """Handle special commands with enhanced functionality."""
+        """Handle special commands."""
         parts = command.strip().split(None, 1)
         cmd = parts[0].lower()
         args = parts[1] if len(parts) > 1 else ""
@@ -666,9 +564,6 @@ class AdvancedChat:
         elif cmd == '/system':
             self._set_system_prompt(args)
         
-        elif cmd == '/branch':
-            self._handle_branching(args)
-        
         elif cmd == '/regenerate':
             self._regenerate_last_response()
         
@@ -684,40 +579,11 @@ class AdvancedChat:
         elif cmd == '/token':
             self._analyze_tokenization(args)
         
-        elif cmd == '/checkpoints':
-            self._list_checkpoints()
-        
         else:
             print(f"Unknown command: {cmd}")
             print("Type /help for available commands")
         
         return True
-    
-    def _list_checkpoints(self):
-        """List available checkpoints."""
-        print("\nAVAILABLE CHECKPOINTS")
-        print("=" * 50)
-        
-        if self.checkpoint_manager:
-            checkpoints = self.checkpoint_manager.list_checkpoints()
-            if checkpoints:
-                print(f"Current experiment ({self.config.experiment_name}):")
-                for cp in sorted(checkpoints, key=lambda x: x['step'], reverse=True)[:10]:
-                    status = " (BEST)" if cp.get('is_best', False) else ""
-                    eval_loss = cp.get('eval_loss', 'N/A')
-                    print(f"  Epoch {cp['epoch']:3d}, Step {cp['step']:6d}: {eval_loss}{status}")
-            else:
-                print("No checkpoints found in current experiment")
-        
-        # Also show global checkpoint search results
-        print(f"\nGlobal search results:")
-        found_checkpoint = find_best_checkpoint()
-        if found_checkpoint:
-            print(f"Best available: {found_checkpoint}")
-        else:
-            print("No checkpoints found globally")
-        
-        print("=" * 50)
     
     def _show_help(self):
         """Show comprehensive help."""
@@ -728,12 +594,10 @@ class AdvancedChat:
         print("  /quit, /exit      - Exit chat")
         print("  /clear            - Clear conversation history")
         print("  /stats            - Show detailed session statistics")
-        print("  /checkpoints      - List available checkpoints")
         print("\nCONVERSATION MANAGEMENT:")
         print("  /save [name]      - Save conversation (auto-named if no name)")
         print("  /load [name]      - Load saved conversation")
         print("  /export [format]  - Export conversation (json/txt/md)")
-        print("  /branch <name>    - Create conversation branch")
         print("  /regenerate       - Regenerate last response")
         print("\nSETTINGS:")
         print("  /settings         - Show/modify chat settings")
@@ -800,7 +664,7 @@ class AdvancedChat:
             print("Conversation history cleared")
     
     def _save_conversation(self, name: str = ""):
-        """Save conversation with enhanced metadata."""
+        """Save conversation."""
         if not self.conversation_history:
             print("No conversation to save")
             return
@@ -813,12 +677,6 @@ class AdvancedChat:
             conversation_data = {
                 'name': name,
                 'timestamp': timestamp,
-                'model_config': {
-                    'experiment_name': self.config.experiment_name,
-                    'hidden_size': self.config.hidden_size,
-                    'num_layers': self.config.num_layers,
-                    'parameters': estimate_parameters(self.config)
-                },
                 'system_prompt': self.system_prompt,
                 'conversation_mode': self.conversation_mode,
                 'conversation': self.conversation_history,
@@ -826,7 +684,6 @@ class AdvancedChat:
                 'system_info': self.system_info
             }
             
-            # Create conversations directory
             Path("conversations").mkdir(exist_ok=True)
             filepath = Path("conversations") / f"{name}.json"
             
@@ -839,21 +696,19 @@ class AdvancedChat:
             print(f"Failed to save conversation: {e}")
     
     def _load_conversation(self, name: str = ""):
-        """Load conversation with search functionality."""
+        """Load conversation."""
         conversations_dir = Path("conversations")
         if not conversations_dir.exists():
             print("No conversations directory found")
             return
         
         if name:
-            # Load specific conversation
             filepath = conversations_dir / f"{name}.json"
             if not filepath.exists():
                 print(f"Conversation '{name}' not found")
                 return
             conversation_files = [filepath]
         else:
-            # List all conversations
             conversation_files = list(conversations_dir.glob("*.json"))
             
             if not conversation_files:
@@ -887,7 +742,6 @@ class AdvancedChat:
                 print("Invalid input")
                 return
         
-        # Load the conversation
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 data = json.load(f)
@@ -940,7 +794,6 @@ class AdvancedChat:
                 with open(filepath, 'w', encoding='utf-8') as f:
                     f.write("# Chat Conversation\n\n")
                     f.write(f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                    f.write(f"**Model:** {self.config.experiment_name}\n")
                     f.write(f"**Mode:** {self.conversation_mode}\n\n")
                     
                     for i, exchange in enumerate(self.conversation_history, 1):
@@ -974,7 +827,6 @@ class AdvancedChat:
         print(f"Temperature: {gen_config['temperature']}")
         print(f"Top-p: {gen_config['top_p']}")
         print(f"Top-k: {gen_config['top_k']}")
-        print(f"Max new tokens: {self.config.max_new_tokens}")
         
         if self.system_prompt:
             print(f"\nSystem prompt: {self.system_prompt}")
@@ -1008,11 +860,6 @@ class AdvancedChat:
                 elif new_value in ['n', 'no', 'false']:
                     setattr(self, setting, False)
             
-            # Max new tokens
-            new_max_tokens = input(f"Max new tokens ({self.config.max_new_tokens}): ").strip()
-            if new_max_tokens and new_max_tokens.isdigit():
-                self.config.max_new_tokens = int(new_max_tokens)
-            
             print("Settings updated")
             
         except KeyboardInterrupt:
@@ -1039,11 +886,6 @@ class AdvancedChat:
         else:
             self.system_prompt = None
             print("System prompt cleared")
-    
-    def _handle_branching(self, args: str):
-        """Handle conversation branching."""
-        print("Conversation branching not fully implemented in this simplified version")
-        print("Use /save and /load for conversation management")
     
     def _regenerate_last_response(self):
         """Regenerate the last assistant response."""
@@ -1244,11 +1086,10 @@ class AdvancedChat:
         print("\n" + "="*80)
         print("CONVERSATIONAL TRANSFORMER CHAT - ENHANCED")
         print("="*80)
-        print(f"Model: {self.config.experiment_name}")
-        print(f"Parameters: ~{estimate_parameters(self.config):,}")
+        print(f"Model: DeepSeek Transformer")
+        print(f"Parameters: ~{sum(p.numel() for p in self.model.parameters()):,}")
         print(f"Device: {self.device}")
         print(f"Mode: {self.conversation_mode}")
-        print(f"Max tokens per response: {self.config.max_new_tokens}")
         
         gen_config = self.generation_configs[self.conversation_mode]
         print(f"Generation settings - Temp: {gen_config['temperature']}, Top-p: {gen_config['top_p']}, Top-k: {gen_config['top_k']}")
@@ -1332,7 +1173,7 @@ class AdvancedChat:
 def main():
     """Enhanced main function with comprehensive options."""
     parser = argparse.ArgumentParser(
-        description='Enhanced Interactive Chat Interface for Conversational Transformer',
+        description='Enhanced Interactive Chat Interface for DeepSeek Transformer',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -1346,21 +1187,19 @@ Examples:
   python chat.py --config medium --mode creative --show-analysis
   
   # Chat with auto-save and custom settings
-  python chat.py --checkpoint latest --auto-save --max-tokens 512
+  python chat.py --checkpoint latest --auto-save
   
   # Benchmark mode for testing
-  python chat.py --config debug --benchmark
+  python chat.py --config small --benchmark
         """
     )
     
     # Configuration options
-    parser.add_argument('--config', choices=['debug', 'small', 'medium', 'large'],
+    parser.add_argument('--config', choices=['small', 'medium', 'large'],
                        default='medium', help='Configuration preset')
-    parser.add_argument('--config-file', type=str, help='Load config from YAML file')
     
     # Model options
-    parser.add_argument('--checkpoint', type=str, help='Checkpoint to load (best/latest/path)')
-    parser.add_argument('--experiment-name', type=str, help='Experiment name override')
+    parser.add_argument('--checkpoint', type=str, help='Checkpoint to load')
     
     # Generation settings
     parser.add_argument('--temperature', type=float, help='Sampling temperature')
@@ -1388,30 +1227,21 @@ Examples:
     
     # Load configuration
     try:
-        if args.config_file:
-            config = Config.load(args.config_file)
-        else:
-            config_map = {
-                'debug': ConfigPresets.debug,
-                'small': ConfigPresets.small,
-                'medium': ConfigPresets.medium,
-                'large': ConfigPresets.large,
-            }
-            config = config_map[args.config]()
+        config_map = {
+            'small': DeepSeekConfig.small,
+            'medium': DeepSeekConfig.medium,
+            'large': DeepSeekConfig.large,
+        }
+        config = config_map[args.config]()
+        
+        # Add missing attributes that the chat system expects
+        config.max_new_tokens = args.max_tokens or 512
+        config.experiment_name = f"deepseek_{args.config}"
         
         # Apply CLI overrides
-        if args.experiment_name:
-            config.experiment_name = args.experiment_name
         if args.temperature is not None:
-            config.temperature = args.temperature
-        if args.top_p is not None:
-            config.top_p = args.top_p
-        if args.top_k is not None:
-            config.top_k = args.top_k
-        if args.max_tokens is not None:
-            config.max_new_tokens = args.max_tokens
-        
-        config.validate()
+            # Store for later use in generation configs
+            pass
         
     except Exception as e:
         print(f"Configuration error: {e}")
@@ -1426,7 +1256,7 @@ Examples:
             print("ERROR: No checkpoint found!")
             print("The chat interface requires a trained model checkpoint to function.")
             print("Please:")
-            print("1. Train a model first using train.py")
+            print("1. Train a model first")
             print("2. Or specify a checkpoint path with --checkpoint")
             print("3. Or place a checkpoint file in the checkpoints/ directory")
             return 1
@@ -1444,6 +1274,17 @@ Examples:
         chat.show_analysis = args.show_analysis
         chat.auto_save = args.auto_save
         chat.max_history_length = args.max_history
+        
+        # Override generation configs if specified
+        if args.temperature is not None:
+            for mode_config in chat.generation_configs.values():
+                mode_config['temperature'] = args.temperature
+        if args.top_p is not None:
+            for mode_config in chat.generation_configs.values():
+                mode_config['top_p'] = args.top_p
+        if args.top_k is not None:
+            for mode_config in chat.generation_configs.values():
+                mode_config['top_k'] = args.top_k
         
         # Handle special modes
         if args.benchmark:
