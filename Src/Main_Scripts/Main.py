@@ -22,8 +22,8 @@ try:
     from utils.environment import validate_environment, estimate_training_time
     from utils.reporting import create_data_summary_report
     from core.tokenizer import ConversationTokenizer
-    from core.model import estimate_parameters, DeepSeekTransformer  # Fixed import
-    from dataset import ConversationDataset, StreamingConversationDataset, create_memory_efficient_dataloader
+    from core.model import estimate_parameters, DeepSeekTransformer  # Fixed: Changed TransformerModel to DeepSeekTransformer
+    from core.dataset import ConversationDataset, StreamingConversationDataset, create_memory_efficient_dataloader
 except ImportError as e:
     print(f"Import error: {e}")
     print("Make sure all required modules are present in the correct directory structure.")
@@ -64,8 +64,12 @@ def check_system_resources():
     
     # Check GPU memory if available
     gpu_memory_gb = 0
-    if torch.cuda.is_available():
-        gpu_memory_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+    try:
+        import torch
+        if torch.cuda.is_available():
+            gpu_memory_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+    except ImportError:
+        pass
     
     logging.info(f"System Resources:")
     logging.info(f"  RAM: {memory_gb:.1f} GB")
@@ -565,7 +569,12 @@ def main():
                         # Force garbage collection to manage memory
                         if mem_after > 85:  # If memory usage is high
                             gc.collect()
-                            torch.cuda.empty_cache() if torch.cuda.is_available() else None
+                            try:
+                                import torch
+                                if torch.cuda.is_available():
+                                    torch.cuda.empty_cache()
+                            except ImportError:
+                                pass
                             
                     except Exception as e:
                         logging.error(f"Generation failed with {precision_test}: {e}")
@@ -588,8 +597,12 @@ def main():
         if final_memory > 90:
             logging.warning("High memory usage detected - running cleanup...")
             gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except ImportError:
+                pass
         
         logging.info("\nTraining and testing completed successfully!")
         logging.info(f"Dataset strategy used: {dataset_strategy}")
@@ -609,16 +622,24 @@ def main():
         logging.info("Training interrupted by user")
         # Cleanup on interrupt
         gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except ImportError:
+            pass
         return 1
     except Exception as e:
         logging.error(f"Training failed: {e}")
         logging.error(traceback.format_exc())
         # Cleanup on error
         gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except ImportError:
+            pass
         return 1
 
 
@@ -632,8 +653,8 @@ def test_sharding_system():
         # Test with different file sizes
         test_cases = [
             ("small", 10000),    # 100 conversations
-            ("medium", 100000), # 10k conversations 
-            ("large", 1000000)  # 100k conversations
+            ("medium", 1000000), # 10k conversations 
+            ("large", 100000000)  # 100k conversations
         ]
         
         for test_name, conv_count in test_cases:
