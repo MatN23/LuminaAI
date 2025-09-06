@@ -33,7 +33,7 @@ class Config:
     save_every_n_batches: int = 1000
     max_grad_norm: float = 1.0
     precision: str = "fp16"  # Training precision - EXPANDED OPTIONS
-    inference_precision: str = "auto"  # Inference precision - EXPANDED OPTIONS
+    inference_precision: str = "fp16"  # Inference precision - EXPANDED OPTIONS
     compile: bool = False
     
     # Data parameters
@@ -98,7 +98,7 @@ class Config:
         valid_training_precisions = ["fp32", "fp16", "bf16", "mixed_fp16", "mixed_bf16", "tf32"]
         assert self.precision in valid_training_precisions, f"Invalid training precision: {self.precision}. Valid options: {valid_training_precisions}"
         
-        valid_inference_precisions = ["fp32", "fp16", "bf16", "mixed_fp16", "mixed_bf16", "tf32", "auto", "dynamic"]
+        valid_inference_precisions = ["fp32", "fp16", "bf16", "mixed_fp16", "mixed_bf16", "tf32", "dynamic"]
         assert self.inference_precision in valid_inference_precisions, f"Invalid inference precision: {self.inference_precision}. Valid options: {valid_inference_precisions}"
         
         # Modified validation to allow None for lr_scheduler
@@ -192,7 +192,7 @@ class ConfigPresets:
             eval_every_n_batches=500,
             save_every_n_batches=1000,
             precision="fp16",
-            inference_precision="auto",  # Auto-select best inference precision
+            inference_precision="fp16",  # Auto-select best inference precision
             compile=True,
             num_workers=2,
             

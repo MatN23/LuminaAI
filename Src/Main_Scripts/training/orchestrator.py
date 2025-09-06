@@ -17,7 +17,7 @@ import torch
 
 from config.config_manager import Config
 from core.tokenizer import ConversationTokenizer
-from core.model import TransformerModel
+from core.model import DeepSeekTransformer
 from core.dataset import ConversationDataset, create_dataloader
 from monitoring.logger import ProductionLogger
 from training.trainer import EnhancedConversationTrainer
