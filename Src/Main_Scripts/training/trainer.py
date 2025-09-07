@@ -888,15 +888,17 @@ class EnhancedConversationTrainer:
                 
                 # Periodic logging
                 current_time = time.time()
-                if self.global_step % 50 == 0 or current_time - last_log_time > 30:
+                # Periodic logging - every 500 steps or every 5 minutes
+                current_time = time.time()
+                if self.global_step % 500 == 0 or current_time - last_log_time > 300:  # 300 seconds = 5 minutes
                     self._log_training_step(
-                        epoch, batch_idx, len(train_dataloader),
-                        accumulation_metrics, opt_metrics, tokens_per_sec
-                    )
-                    last_log_time = current_time
+                    epoch, batch_idx, len(train_dataloader),
+                    accumulation_metrics, opt_metrics, tokens_per_sec
+                )
+                last_log_time = current_time
                 
                 # Log to monitoring backends
-                if self.global_step % 10 == 0:
+                if self.global_step % 100 == 0:
                     try:
                         self.logger.log_metrics({
                             'train_loss': accumulation_metrics['loss'],
