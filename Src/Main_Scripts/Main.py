@@ -253,8 +253,8 @@ def main():
     config_file = None
     train_data = 'oasst1_data/oasst1_train.jsonl'
     eval_data = 'data/eval.jsonl'
-    epochs = 100
-    lr = 1e-5
+    epochs = 10
+    lr = 3e-4
     batch_size = 2
     grad_accum = 4
     precision = 'auto'
@@ -269,7 +269,7 @@ def main():
     process_oasst = None
     max_conversations = None
     check_environment = False
-    estimate_time = False
+    estimate_time = True
     dry_run = False
     
     # New sharding-specific options
