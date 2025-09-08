@@ -607,6 +607,8 @@ class EnhancedConversationTrainer:
                 logits = output
                 loss_dict = self.compute_loss(logits, batch['labels'], batch['loss_weights'])
         
+        loss = loss_dict['loss']
+        
         # Check for valid loss
         if torch.isnan(loss).any() or torch.isinf(loss).any():
             logging.warning("Invalid loss detected, skipping batch")
@@ -906,7 +908,7 @@ class EnhancedConversationTrainer:
                 current_time = time.time()
                 # Periodic logging - every 500 steps or every 5 minutes
                 current_time = time.time()
-                if self.global_step % 500 == 0 or current_time - last_log_time > 300:  # 300 seconds = 5 minutes
+                if self.global_step % 100 == 0 or current_time - last_log_time > 300:  # 300 seconds = 5 minutes
                     self._log_training_step(
                     epoch, batch_idx, len(train_dataloader),
                     accumulation_metrics, opt_metrics, tokens_per_sec
