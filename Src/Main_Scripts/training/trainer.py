@@ -591,9 +591,21 @@ class EnhancedConversationTrainer:
         
         # Forward pass with training precision
         with self._get_autocast_context(for_inference=False):
-            logits = self.model(batch['input_ids'], batch['attention_mask'])
-            loss_dict = self.compute_loss(logits, batch['labels'], batch['loss_weights'])
-            loss = loss_dict['loss'] / getattr(self.config, 'gradient_accumulation_steps', 1)
+            # Get the output from the model forward pass
+            output = self.model(batch['input_ids'], batch['attention_mask'])
+            
+            # Handle both return types: (logits, aux_loss) or just logits
+            if isinstance(output, tuple):
+                # Unpack the tuple: (logits, total_aux_loss, aux_losses)
+                logits, total_aux_loss, aux_losses = output
+                # Compute the standard language modeling loss
+                loss_dict = self.compute_loss(logits, batch['labels'], batch['loss_weights'])
+                # Add the MoE auxiliary loss to the main loss
+                loss_dict['loss'] = loss_dict['loss'] + total_aux_loss
+            else:
+                # Standard model, just get logits
+                logits = output
+                loss_dict = self.compute_loss(logits, batch['labels'], batch['loss_weights'])
         
         # Check for valid loss
         if torch.isnan(loss).any() or torch.isinf(loss).any():
@@ -685,7 +697,11 @@ class EnhancedConversationTrainer:
                 continue
             
             with self._get_autocast_context(precision=eval_precision, for_inference=True):
-                logits = self.model(batch['input_ids'], batch['attention_mask'])
+                output = self.model(batch['input_ids'], batch['attention_mask'])
+                if isinstance(output, tuple):
+                    logits = output[0]  # Just take the logits for evaluation
+                else:
+                    logits = output
                 loss_dict = self.compute_loss(logits, batch['labels'], batch['loss_weights'])
             
             if not (torch.isnan(loss_dict['loss']).any() or torch.isinf(loss_dict['loss']).any()):

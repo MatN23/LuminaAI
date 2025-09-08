@@ -269,7 +269,7 @@ def main():
     process_oasst = None
     max_conversations = None
     check_environment = False
-    estimate_time = True
+    estimate_time = False
     dry_run = False
     
     # New sharding-specific options
@@ -476,7 +476,7 @@ def main():
             
             # Create DeepSeek config for parameter estimation
             deepseek_config = config_to_deepseek_config(config)
-            estimates = estimate_training_time(deepseek_config, dataset_size)
+            estimates = estimate_training_time(config, dataset_size)  # Pass the main 'config', not 'deepseek_config'
             
             logging.info("Training Time Estimates:")
             logging.info(f"  Dataset size: {dataset_size:,} conversations")
