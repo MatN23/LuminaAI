@@ -495,8 +495,6 @@ def main():
             if dataset_strategy == "streaming":
                 logging.info("  Note: Streaming mode will minimize memory usage")
             
-            if not dry_run:
-                return 0
         except Exception as e:
             logging.error(f"Time estimation failed: {e}")
             return 1
