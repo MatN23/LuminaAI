@@ -1006,12 +1006,22 @@ class EnhancedConversationTrainer:
         
         # Precision info
         precision_info = f" | Train: {self.training_precision} | Infer: {self.inference_precision}"
+
+        try:
+            raw_loss_clamped = min(metrics['raw_loss'], 50)  # Higher clamp
+            perplexity = math.exp(raw_loss_clamped)
+            if perplexity > 10000:  # Use scientific notation for large numbers
+                ppl_str = f"{perplexity:.2e}"
+            else:
+                ppl_str = f"{perplexity:.2f}"
+        except (OverflowError, ValueError):
+            ppl_str = "INF"
         
         logging.info(
             f"Epoch {epoch+1} | Step {self.global_step:6d} | "
             f"Batch {batch_idx+1:4d}/{total_batches} | "
             f"Loss: {metrics['loss']:.6f} | "
-            f"PPL: {math.exp(min(metrics['raw_loss'], 10)):.2f} | "
+            f"PPL: {ppl_str} | "
             f"LR: {opt_metrics['lr']:.2e} | "
             f"GradNorm: {opt_metrics['grad_norm']:.4f} | "
             f"Tokens/s: {tokens_per_sec:.0f}"
