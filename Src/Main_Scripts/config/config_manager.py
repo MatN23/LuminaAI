@@ -190,15 +190,15 @@ class ConfigPresets:
     
     @staticmethod
     def small() -> Config:
-        """Small model for limited resources (~1B parameters)."""
+        """Larger small model for limited resources (~2B parameters)."""
         return Config(
-            # Small but capable model
-            hidden_size=768,
-            num_layers=6,
-            num_heads=12,
-            num_kv_heads=4,
+            # Larger small model
+            hidden_size=1280,
+            num_layers=16,
+            num_heads=20,
+            num_kv_heads=5,
             seq_length=2048,
-            intermediate_size=2048,
+            intermediate_size=3456,
             
             # Balanced training settings - FIXED: Reduced learning rate
             batch_size=4,
@@ -213,15 +213,15 @@ class ConfigPresets:
             compile=True,
             num_workers=2,
             
-            # MoE settings for 1B model
+            # Enhanced MoE settings for 2B model
             use_moe=True,
-            num_experts=8,  # Moderate number of experts
+            num_experts=16,  # Increased from 8
             moe_top_k=2,
-            capacity_factor=1.25,
-            load_balancing_weight=0.01,
+            capacity_factor=1.5,  # Increased from 1.25
+            load_balancing_weight=0.015,  # Increased from 0.01
             
             # Production settings
-            experiment_name="small_1b_model",
+            experiment_name="small_2b_model",
             log_level="INFO",
             health_check_interval=100,
             save_total_limit=5,
@@ -237,15 +237,15 @@ class ConfigPresets:
     
     @staticmethod
     def medium() -> Config:
-        """Medium model for serious training (~7B parameters)."""
+        """Larger medium model for serious training (~14B parameters)."""
         return Config(
-            # 7B parameter model
-            hidden_size=2048,
-            num_layers=22,
-            num_heads=16,
-            num_kv_heads=8,
+            # 14B parameter model (doubled from 7B)
+            hidden_size=2560,
+            num_layers=28,
+            num_heads=20,
+            num_kv_heads=10,
             seq_length=4096,
-            intermediate_size=5504,
+            intermediate_size=6912,
             
             # Serious training configuration - FIXED: Reduced learning rate
             batch_size=2,
@@ -260,15 +260,15 @@ class ConfigPresets:
             compile=True,
             num_workers=4,
             
-            # MoE settings for 7B model
+            # Enhanced MoE settings for 14B model
             use_moe=True,
-            num_experts=16,  # More experts for larger model
+            num_experts=32,  # Doubled from 16
             moe_top_k=2,
-            capacity_factor=1.5,
-            load_balancing_weight=0.01,
+            capacity_factor=1.8,  # Increased from 1.5
+            load_balancing_weight=0.015,  # Increased from 0.01
             
             # Production monitoring
-            experiment_name="medium_7b_model",
+            experiment_name="medium_14b_model",
             log_level="INFO",
             health_check_interval=100,
             save_total_limit=10,
@@ -287,7 +287,7 @@ class ConfigPresets:
     def large() -> Config:
         """Large model for high-end training (~30B parameters)."""
         return Config(
-            # 30B parameter model
+            # 30B parameter model (unchanged)
             hidden_size=4096,
             num_layers=32,
             num_heads=32,
@@ -308,7 +308,7 @@ class ConfigPresets:
             compile=True,
             num_workers=8,
             
-            # MoE settings for 30B model
+            # MoE settings for 30B model (unchanged)
             use_moe=True,
             num_experts=32,  # Even more experts
             moe_top_k=2,
@@ -335,15 +335,15 @@ class ConfigPresets:
     
     @staticmethod
     def xlarge() -> Config:
-        """Extra large model for massive training (~200B parameters)."""
+        """Even larger model for massive training (~400B parameters)."""
         return Config(
-            # 200B parameter model
-            hidden_size=8192,
-            num_layers=48,
-            num_heads=64,
-            num_kv_heads=16,
+            # 400B parameter model (doubled from 200B)
+            hidden_size=10240,
+            num_layers=64,
+            num_heads=80,
+            num_kv_heads=20,
             seq_length=8192,
-            intermediate_size=22016,
+            intermediate_size=27648,
             
             # Massive-scale training
             batch_size=1,
@@ -358,15 +358,15 @@ class ConfigPresets:
             compile=True,
             num_workers=16,
             
-            # MoE settings for 200B model
+            # Enhanced MoE settings for 400B model
             use_moe=True,
-            num_experts=64,  # Many experts for massive model
+            num_experts=128,  # Doubled from 64
             moe_top_k=2,
-            capacity_factor=2.0,
-            load_balancing_weight=0.02,
+            capacity_factor=2.2,  # Increased from 2.0
+            load_balancing_weight=0.025,  # Increased from 0.02
             
             # Enterprise monitoring
-            experiment_name="xlarge_200b_model",
+            experiment_name="xlarge_400b_model",
             log_level="INFO",
             health_check_interval=500,
             save_total_limit=20,
@@ -385,15 +385,15 @@ class ConfigPresets:
     
     @staticmethod
     def inference_optimized() -> Config:
-        """Configuration optimized specifically for inference performance (~350M parameters)."""
+        """Larger configuration optimized specifically for inference performance (~700M parameters)."""
         return Config(
-            # Medium model optimized for inference
-            hidden_size=1280,
-            num_layers=16,
-            num_heads=20,
-            num_kv_heads=5,
+            # Larger model optimized for inference
+            hidden_size=1536,
+            num_layers=24,
+            num_heads=24,
+            num_kv_heads=6,
             seq_length=2048,
-            intermediate_size=3456,
+            intermediate_size=4096,
             
             # Training settings (if fine-tuning) - FIXED: Reduced learning rate
             batch_size=1,
@@ -406,12 +406,12 @@ class ConfigPresets:
             compile=True,
             num_workers=4,
             
-            # MoE settings for inference
+            # Enhanced MoE settings for inference
             use_moe=True,
-            num_experts=8,
+            num_experts=16,  # Increased from 8
             moe_top_k=2,
-            capacity_factor=1.2,
-            load_balancing_weight=0.005,
+            capacity_factor=1.3,  # Increased from 1.2
+            load_balancing_weight=0.008,  # Increased from 0.005
             
             # Generation parameters optimized for quality and speed
             max_new_tokens=256,
@@ -435,15 +435,15 @@ class ConfigPresets:
     
     @staticmethod
     def quality_focused() -> Config:
-        """Configuration focused on generation quality over speed (~3B parameters)."""
+        """Larger configuration focused on generation quality (~6B parameters)."""
         return Config(
-            # Quality-focused model
-            hidden_size=3200,
-            num_layers=26,
-            num_heads=25,
-            num_kv_heads=5,
+            # Quality-focused model (doubled from 3B)
+            hidden_size=4096,
+            num_layers=32,
+            num_heads=32,
+            num_kv_heads=8,
             seq_length=4096,
-            intermediate_size=8640,
+            intermediate_size=11008,
             
             # Training for quality - FIXED: Reduced learning rate
             batch_size=1,
@@ -456,12 +456,12 @@ class ConfigPresets:
             compile=True,
             num_workers=6,
             
-            # MoE settings for quality
+            # Enhanced MoE settings for quality
             use_moe=True,
-            num_experts=16,
+            num_experts=32,  # Doubled from 16
             moe_top_k=2,
-            capacity_factor=1.5,
-            load_balancing_weight=0.01,
+            capacity_factor=1.8,  # Increased from 1.5
+            load_balancing_weight=0.015,  # Increased from 0.01
             
             # Generation parameters for quality
             max_new_tokens=1024,
@@ -470,7 +470,7 @@ class ConfigPresets:
             top_k=100,
             
             # Quality settings
-            experiment_name="quality_focused_3b",
+            experiment_name="quality_focused_6b",
             log_level="INFO",
             gradient_checkpointing=True,
             use_stable_embedding=True,
@@ -488,15 +488,15 @@ class ConfigPresets:
     
     @staticmethod
     def speed_optimized() -> Config:
-        """Configuration optimized specifically for maximum speed (~60M parameters)."""
+        """Larger configuration optimized specifically for maximum speed (~120M parameters)."""
         return Config(
-            # Lean model for speed
-            hidden_size=512,
-            num_layers=12,
-            num_heads=8,
+            # Larger lean model for speed
+            hidden_size=768,
+            num_layers=16,
+            num_heads=12,
             num_kv_heads=4,
             seq_length=1024,
-            intermediate_size=1376,
+            intermediate_size=2048,
             
             # Speed-focused training - FIXED: Reduced learning rate
             batch_size=8,
@@ -511,12 +511,12 @@ class ConfigPresets:
             compile=True,
             num_workers=8,
             
-            # MoE settings for speed
+            # Enhanced MoE settings for speed
             use_moe=True,
-            num_experts=4,
+            num_experts=8,  # Increased from 4
             moe_top_k=2,
-            capacity_factor=1.1,
-            load_balancing_weight=0.005,
+            capacity_factor=1.2,  # Increased from 1.1
+            load_balancing_weight=0.008,  # Increased from 0.005
             
             # Speed generation parameters
             max_new_tokens=128,
@@ -525,7 +525,7 @@ class ConfigPresets:
             top_k=40,
             
             # Speed optimization settings
-            experiment_name="speed_optimized_60m",
+            experiment_name="speed_optimized_120m",
             log_level="INFO",
             gradient_checkpointing=False,
             use_stable_embedding=False,
@@ -542,15 +542,15 @@ class ConfigPresets:
     
     @staticmethod
     def memory_optimized() -> Config:
-        """Configuration optimized for minimal memory usage (~35M parameters)."""
+        """Larger configuration optimized for minimal memory usage (~70M parameters)."""
         return Config(
-            # Memory-efficient model
-            hidden_size=512,
-            num_layers=8,
-            num_heads=8,
+            # Larger memory-efficient model
+            hidden_size=768,
+            num_layers=12,
+            num_heads=12,
             num_kv_heads=4,
             seq_length=1024,
-            intermediate_size=1376,
+            intermediate_size=2048,
             
             # Memory-conscious training - FIXED: Reduced learning rate
             batch_size=1,
@@ -565,12 +565,12 @@ class ConfigPresets:
             compile=True,
             num_workers=2,
             
-            # MoE settings for memory optimization
+            # Enhanced MoE settings for memory optimization
             use_moe=True,
-            num_experts=4,
+            num_experts=8,  # Increased from 4
             moe_top_k=2,
-            capacity_factor=1.1,
-            load_balancing_weight=0.005,
+            capacity_factor=1.2,  # Increased from 1.1
+            load_balancing_weight=0.008,  # Increased from 0.005
             
             # Memory-conscious generation
             max_new_tokens=256,
@@ -579,7 +579,7 @@ class ConfigPresets:
             top_k=50,
             
             # Memory optimization settings
-            experiment_name="memory_optimized_35m",
+            experiment_name="memory_optimized_70m",
             log_level="INFO",
             gradient_checkpointing=True,
             use_stable_embedding=True,
@@ -595,15 +595,15 @@ class ConfigPresets:
     
     @staticmethod
     def production() -> Config:
-        """Production-ready configuration with reliability focus (~500M parameters)."""
+        """Larger production-ready configuration with reliability focus (~1B parameters)."""
         return Config(
-            # Production-scale model
-            hidden_size=1536,
-            num_layers=18,
-            num_heads=24,
+            # Larger production-scale model
+            hidden_size=2048,
+            num_layers=24,
+            num_heads=32,
             num_kv_heads=8,
             seq_length=2048,
-            intermediate_size=4096,
+            intermediate_size=5504,
             
             # Reliable production training - FIXED: Reduced learning rate
             batch_size=2,
@@ -618,12 +618,12 @@ class ConfigPresets:
             compile=True,
             num_workers=4,
             
-            # MoE settings for production
+            # Enhanced MoE settings for production
             use_moe=True,
-            num_experts=12,
+            num_experts=24,  # Increased from 12
             moe_top_k=2,
-            capacity_factor=1.3,
-            load_balancing_weight=0.01,
+            capacity_factor=1.5,  # Increased from 1.3
+            load_balancing_weight=0.015,  # Increased from 0.01
             
             # Production generation parameters
             max_new_tokens=512,
@@ -632,7 +632,7 @@ class ConfigPresets:
             top_k=50,
             
             # Production reliability settings
-            experiment_name="production_500m_model",
+            experiment_name="production_1b_model",
             log_level="INFO",
             gradient_checkpointing=True,
             use_stable_embedding=True,
@@ -653,15 +653,15 @@ class ConfigPresets:
     
     @staticmethod
     def experimental() -> Config:
-        """Experimental configuration with advanced features (~1.5B parameters)."""
+        """Larger experimental configuration with advanced features (~3B parameters)."""
         return Config(
-            # Experimental model architecture
-            hidden_size=2560,
-            num_layers=24,
-            num_heads=20,
+            # Larger experimental model architecture
+            hidden_size=3200,
+            num_layers=32,
+            num_heads=25,
             num_kv_heads=10,
-            seq_length=3072,
-            intermediate_size=6912,
+            seq_length=4096,
+            intermediate_size=8640,
             
             # Experimental training settings - FIXED: Reduced learning rate
             batch_size=1,
@@ -676,12 +676,12 @@ class ConfigPresets:
             compile=True,
             num_workers=6,
             
-            # MoE settings for experimentation
+            # Enhanced MoE settings for experimentation
             use_moe=True,
-            num_experts=24,
+            num_experts=32,  # Increased from 24
             moe_top_k=2,
-            capacity_factor=1.6,
-            load_balancing_weight=0.015,
+            capacity_factor=1.8,  # Increased from 1.6
+            load_balancing_weight=0.02,  # Increased from 0.015
             
             # Experimental generation parameters
             max_new_tokens=768,
@@ -690,7 +690,7 @@ class ConfigPresets:
             top_k=60,
             
             # Experimental settings
-            experiment_name="experimental_1_5b_model",
+            experiment_name="experimental_3b_model",
             log_level="DEBUG",
             gradient_checkpointing=True,
             use_stable_embedding=True,
@@ -725,20 +725,20 @@ class ConfigPresets:
             "small": {
                 "description": "Small model for limited resources",
                 "use_case": "Resource-constrained environments",
-                "model_size": "Small (~1B parameters)",
+                "model_size": "Small (~2B parameters)",
                 "memory_usage": "Low",
                 "training_speed": "Fast",
                 "precision": "fp16 with auto-tuning",
-                "moe_experts": 8
+                "moe_experts": 16
             },
             "medium": {
                 "description": "Medium model for serious training",
                 "use_case": "General purpose training",
-                "model_size": "Medium (~7B parameters)",
+                "model_size": "Medium (~14B parameters)",
                 "memory_usage": "Medium-High",
                 "training_speed": "Medium",
                 "precision": "mixed_bf16",
-                "moe_experts": 16
+                "moe_experts": 32
             },
             "large": {
                 "description": "Large model for high-end training",
@@ -752,65 +752,65 @@ class ConfigPresets:
             "xlarge": {
                 "description": "Extra large model for massive training",
                 "use_case": "Research and massive scaling",
-                "model_size": "Massive (~200B parameters)",
+                "model_size": "Massive (~400B parameters)",
                 "memory_usage": "Extreme",
                 "training_speed": "Very Slow",
                 "precision": "mixed_bf16 with TF32",
-                "moe_experts": 64
+                "moe_experts": 128
             },
             "inference_optimized": {
                 "description": "Optimized for inference performance",
                 "use_case": "Production inference",
-                "model_size": "Medium (~350M parameters)",
+                "model_size": "Medium (~700M parameters)",
                 "memory_usage": "Medium",
                 "training_speed": "Fast",
                 "precision": "fp16 for speed",
-                "moe_experts": 8
+                "moe_experts": 16
             },
             "quality_focused": {
                 "description": "Optimized for generation quality",
                 "use_case": "High-quality text generation",
-                "model_size": "Large (~3B parameters)",
+                "model_size": "Large (~6B parameters)",
                 "memory_usage": "High",
                 "training_speed": "Slow",
                 "precision": "mixed_bf16 for stability",
-                "moe_experts": 16
+                "moe_experts": 32
             },
             "speed_optimized": {
                 "description": "Optimized for maximum speed",
                 "use_case": "Real-time applications",
-                "model_size": "Small (~60M parameters)",
+                "model_size": "Small (~120M parameters)",
                 "memory_usage": "Low",
                 "training_speed": "Very Fast",
                 "precision": "fp16 with TF32",
-                "moe_experts": 4
+                "moe_experts": 8
             },
             "memory_optimized": {
                 "description": "Optimized for minimal memory usage",
                 "use_case": "Memory-constrained environments",
-                "model_size": "Small (~35M parameters)",
+                "model_size": "Small (~70M parameters)",
                 "memory_usage": "Very Low",
                 "training_speed": "Medium",
                 "precision": "fp16 with gradient checkpointing",
-                "moe_experts": 4
+                "moe_experts": 8
             },
             "production": {
                 "description": "Production-ready with reliability focus",
                 "use_case": "Production deployments",
-                "model_size": "Medium (~500M parameters)",
+                "model_size": "Medium (~1B parameters)",
                 "memory_usage": "Medium",
                 "training_speed": "Medium",
                 "precision": "mixed_bf16 for reliability",
-                "moe_experts": 12
+                "moe_experts": 24
             },
             "experimental": {
                 "description": "Experimental configuration with advanced features",
                 "use_case": "Research and experimentation",
-                "model_size": "Large (~1.5B parameters)",
+                "model_size": "Large (~3B parameters)",
                 "memory_usage": "High",
                 "training_speed": "Medium",
                 "precision": "dynamic precision selection",
-                "moe_experts": 24
+                "moe_experts": 32
             }
         }
     

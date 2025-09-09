@@ -1,7 +1,5 @@
-"""
-Enhanced Training Module - FIXED VERSION WITH COMPREHENSIVE PRECISION SUPPORT
-Main trainer class with comprehensive monitoring, fault tolerance, and multiple precision types.
-"""
+# Copyright (c) 2025 Matias Nielsen. All rights reserved.
+# Licensed under the Custom License below.
 
 import math
 import time

@@ -57,39 +57,47 @@ class ModelAnalyzer:
         self.model.eval()
         with torch.no_grad():
             # Get logits and try to extract hidden states if model supports it
-            outputs = self.model(input_ids, return_hidden_states=True)
-            if isinstance(outputs, tuple):
-                logits, hidden_states = outputs[0], outputs[1]
-            else:
-                logits = outputs
-                hidden_states = None
-            
-            # Basic analysis
-            analysis = {
-                'sequence_length': input_ids.shape[1],
-                'vocab_size': logits.shape[-1],
-                'batch_size': input_ids.shape[0],
-            }
-            
-            if hidden_states:
-                analysis.update({
-                    'num_layers': len(hidden_states),
-                    'hidden_size': hidden_states[0].shape[-1],
-                    'layer_activations': [h.abs().mean().item() for h in hidden_states],
-                    'layer_variances': [h.var().item() for h in hidden_states]
-                })
-            
-            return analysis
+            try:
+                outputs = self.model(input_ids, return_hidden_states=True)
+                if isinstance(outputs, tuple):
+                    logits, hidden_states = outputs[0], outputs[1]
+                else:
+                    logits = outputs
+                    hidden_states = None
+                
+                # Basic analysis
+                analysis = {
+                    'sequence_length': input_ids.shape[1],
+                    'vocab_size': logits.shape[-1],
+                    'batch_size': input_ids.shape[0],
+                }
+                
+                if hidden_states:
+                    analysis.update({
+                        'num_layers': len(hidden_states),
+                        'hidden_size': hidden_states[0].shape[-1],
+                        'layer_activations': [h.abs().mean().item() for h in hidden_states],
+                        'layer_variances': [h.var().item() for h in hidden_states]
+                    })
+                
+                return analysis
+            except Exception as e:
+                logging.error(f"Attention analysis failed: {e}")
+                return {'error': str(e)}
     
     def analyze_generation_quality(self, prompt: str, responses: List[str]) -> Dict[str, Any]:
         """Analyze quality metrics for generated responses."""
-        metrics = {
-            'diversity': self._calculate_diversity(responses),
-            'coherence': self._calculate_coherence(responses),
-            'length_stats': self._calculate_length_stats(responses),
-            'repetition_score': self._calculate_repetition(responses)
-        }
-        return metrics
+        try:
+            metrics = {
+                'diversity': self._calculate_diversity(responses),
+                'coherence': self._calculate_coherence(responses),
+                'length_stats': self._calculate_length_stats(responses),
+                'repetition_score': self._calculate_repetition(responses)
+            }
+            return metrics
+        except Exception as e:
+            logging.error(f"Generation quality analysis failed: {e}")
+            return {'error': str(e)}
     
     def _calculate_diversity(self, responses: List[str]) -> float:
         """Calculate diversity score based on unique token usage."""
@@ -98,8 +106,11 @@ class ModelAnalyzer:
         
         all_tokens = []
         for response in responses:
-            tokens = self.tokenizer.tokenizer.encode(response)
-            all_tokens.extend(tokens)
+            try:
+                tokens = self.tokenizer.tokenizer.encode(response)
+                all_tokens.extend(tokens)
+            except:
+                continue
         
         if not all_tokens:
             return 0.0
@@ -126,7 +137,7 @@ class ModelAnalyzer:
                 coherence = len(valid_sentences) / len(non_empty_sentences)
                 coherence_scores.append(coherence)
         
-        return sum(coherence_scores) / len(coherence_scores)
+        return sum(coherence_scores) / len(coherence_scores) if coherence_scores else 0.0
     
     def _calculate_length_stats(self, responses: List[str]) -> Dict[str, float]:
         """Calculate length statistics."""
@@ -134,11 +145,12 @@ class ModelAnalyzer:
             return {'mean': 0, 'min': 0, 'max': 0, 'std': 0}
         
         lengths = [len(response) for response in responses]
+        mean_length = sum(lengths) / len(lengths)
         return {
-            'mean': sum(lengths) / len(lengths),
+            'mean': mean_length,
             'min': min(lengths),
             'max': max(lengths),
-            'std': (sum((l - sum(lengths)/len(lengths))**2 for l in lengths) / len(lengths))**0.5
+            'std': (sum((l - mean_length)**2 for l in lengths) / len(lengths))**0.5
         }
     
     def _calculate_repetition(self, responses: List[str]) -> float:
@@ -164,7 +176,7 @@ class ModelAnalyzer:
             repetition = 1.0 - (unique_bigrams / total_bigrams)
             repetition_scores.append(repetition)
         
-        return sum(repetition_scores) / len(repetition_scores)
+        return sum(repetition_scores) / len(repetition_scores) if repetition_scores else 0.0
 
 
 def find_best_checkpoint() -> Optional[str]:
@@ -174,37 +186,47 @@ def find_best_checkpoint() -> Optional[str]:
     # List of checkpoint locations to search (in order of preference)
     search_locations = [
         Path("checkpoints"),
+        Path("experiments"),
         Path("."),
     ]
     
     best_checkpoint = None
+    best_time = 0
     
     for location in search_locations:
         if not location.exists():
             continue
             
-        print(f"Checking {location}...")
-        
         # Look for checkpoint files
         checkpoint_patterns = [
             "best_*.pt",
             "*_best.pt", 
             "checkpoint_*.pt",
             "model_*.pt",
-            "*.pt"
+            "*.pt",
+            "*.pth",
+            "*.bin"
         ]
         
         for pattern in checkpoint_patterns:
             checkpoints = list(location.glob(pattern))
-            if checkpoints:
-                # Sort by modification time, newest first
-                checkpoints.sort(key=lambda x: x.stat().st_mtime, reverse=True)
-                best_checkpoint = str(checkpoints[0])
-                print(f"Found checkpoint: {best_checkpoint}")
-                return best_checkpoint
+            for checkpoint in checkpoints:
+                try:
+                    mtime = checkpoint.stat().st_mtime
+                    if mtime > best_time:
+                        best_checkpoint = str(checkpoint)
+                        best_time = mtime
+                        print(f"Found checkpoint: {best_checkpoint}")
+                except:
+                    continue
     
-    print("ERROR: No checkpoints found!")
-    return None
+    if best_checkpoint:
+        print(f"Using checkpoint: {best_checkpoint}")
+    else:
+        print("ERROR: No checkpoints found!")
+        print("Please train a model first or specify a checkpoint with --checkpoint")
+    
+    return best_checkpoint
 
 
 class AdvancedChat:
@@ -283,9 +305,9 @@ class AdvancedChat:
         print("Initializing chat system...")
         
         try:
-            # Initialize tokenizer
+            # Initialize tokenizer - use GPT-2 to match model vocabulary
             self.tokenizer = ConversationTokenizer(
-                model_name="gpt-4",
+                model_name="gpt2",  # Changed to match model vocabulary
                 max_context_length=self.config.seq_length,
                 enable_caching=True,
                 thread_safe=False
@@ -303,10 +325,15 @@ class AdvancedChat:
             # Load checkpoint
             self._load_checkpoint()
             
+            # Set model to evaluation mode
+            self.model.eval()
+            
             print("Chat system ready!")
             
         except Exception as e:
             print(f"Failed to initialize chat system: {e}")
+            import traceback
+            traceback.print_exc()
             raise
     
     def _load_checkpoint(self):
@@ -319,14 +346,19 @@ class AdvancedChat:
             
             print(f"Loading checkpoint: {checkpoint_path}")
             
-            # Load checkpoint
-            checkpoint = torch.load(checkpoint_path, map_location=self.device)
+            # Load checkpoint with proper device mapping
+            if self.device.type == 'cuda':
+                checkpoint = torch.load(checkpoint_path, map_location='cuda')
+            else:
+                checkpoint = torch.load(checkpoint_path, map_location='cpu')
             
             # Handle different checkpoint formats
             if 'model_state_dict' in checkpoint:
                 self.model.load_state_dict(checkpoint['model_state_dict'])
                 if 'epoch' in checkpoint:
                     print(f"Loaded from epoch {checkpoint['epoch']}")
+            elif 'state_dict' in checkpoint:
+                self.model.load_state_dict(checkpoint['state_dict'])
             else:
                 # Assume the checkpoint is just the state dict
                 self.model.load_state_dict(checkpoint)
@@ -335,6 +367,8 @@ class AdvancedChat:
             
         except Exception as e:
             print(f"Failed to load checkpoint: {e}")
+            import traceback
+            traceback.print_exc()
             raise
     
     def _generate_response(self, user_input: str) -> Tuple[str, Dict[str, Any]]:
@@ -343,8 +377,7 @@ class AdvancedChat:
         
         try:
             # Add user message to history
-            if not self.conversation_history or 'assistant' in self.conversation_history[-1]:
-                self.conversation_history.append({'user': user_input})
+            self.conversation_history.append({'role': 'user', 'content': user_input})
             
             # Format conversation for model
             conversation = self._format_conversation_for_model()
@@ -359,7 +392,7 @@ class AdvancedChat:
             input_ids = torch.tensor([input_tokens], dtype=torch.long, device=self.device)
             
             # Truncate if too long - use config.seq_length instead of max_new_tokens
-            max_new_tokens = getattr(self.config, 'max_new_tokens', 512)  # Default to 512 if not set
+            max_new_tokens = getattr(self.config, 'max_new_tokens', 100)
             if input_ids.shape[1] > self.config.seq_length - max_new_tokens:
                 input_ids = input_ids[:, -(self.config.seq_length - max_new_tokens):]
             
@@ -382,6 +415,8 @@ class AdvancedChat:
                     skip_special_tokens=True,
                     clean_up_tokenization_spaces=True
                 )
+                # Clean up response
+                response = response.strip()
             else:
                 response = "I'm sorry, I couldn't generate a response."
             
@@ -400,7 +435,7 @@ class AdvancedChat:
             }
             
             # Update conversation history
-            self._update_conversation_history(user_input, response)
+            self.conversation_history.append({'role': 'assistant', 'content': response})
             
             # Update session stats
             self._update_session_stats(metrics)
@@ -423,51 +458,55 @@ class AdvancedChat:
             
             for _ in range(max_new_tokens):
                 # Forward pass
-                logits = self.model(current_ids)
-                if isinstance(logits, tuple):
-                    logits = logits[0]  # If model returns tuple, take first element
-                
-                next_token_logits = logits[0, -1, :]  # Last token predictions
-                
-                # Apply temperature
-                if temperature != 1.0:
-                    next_token_logits = next_token_logits / temperature
-                
-                # Apply top-k filtering
-                if top_k > 0:
-                    top_k_actual = min(top_k, next_token_logits.size(-1))
-                    indices_to_remove = next_token_logits < torch.topk(next_token_logits, top_k_actual)[0][..., -1, None]
-                    next_token_logits[indices_to_remove] = -float('Inf')
-                
-                # Apply top-p (nucleus) sampling
-                if top_p < 1.0:
-                    sorted_logits, sorted_indices = torch.sort(next_token_logits, descending=True)
-                    cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+                try:
+                    logits = self.model(current_ids)
+                    if isinstance(logits, tuple):
+                        logits = logits[0]  # If model returns tuple, take first element
                     
-                    # Remove tokens with cumulative probability above the threshold
-                    sorted_indices_to_remove = cumulative_probs > top_p
-                    sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
-                    sorted_indices_to_remove[..., 0] = 0
+                    next_token_logits = logits[0, -1, :]  # Last token predictions
                     
-                    indices_to_remove = sorted_indices_to_remove.scatter(0, sorted_indices, sorted_indices_to_remove)
-                    next_token_logits[indices_to_remove] = -float('Inf')
-                
-                # Sample next token
-                probs = F.softmax(next_token_logits, dim=-1, dtype=torch.float32).to(next_token_logits.dtype)
-                next_token = torch.multinomial(probs, num_samples=1).item()
-                
-                # Check for special tokens that indicate end of response
-                if self.tokenizer.is_special_token(next_token):
-                    if next_token == self.tokenizer.special_tokens.get("<|im_end|>"):
+                    # Apply temperature
+                    if temperature != 1.0:
+                        next_token_logits = next_token_logits / temperature
+                    
+                    # Apply top-k filtering
+                    if top_k > 0:
+                        top_k_actual = min(top_k, next_token_logits.size(-1))
+                        indices_to_remove = next_token_logits < torch.topk(next_token_logits, top_k_actual)[0][..., -1, None]
+                        next_token_logits[indices_to_remove] = -float('Inf')
+                    
+                    # Apply top-p (nucleus) sampling
+                    if top_p < 1.0:
+                        sorted_logits, sorted_indices = torch.sort(next_token_logits, descending=True)
+                        cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
+                        
+                        # Remove tokens with cumulative probability above the threshold
+                        sorted_indices_to_remove = cumulative_probs > top_p
+                        sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+                        sorted_indices_to_remove[..., 0] = 0
+                        
+                        indices_to_remove = sorted_indices_to_remove.scatter(0, sorted_indices, sorted_indices_to_remove)
+                        next_token_logits[indices_to_remove] = -float('Inf')
+                    
+                    # Sample next token
+                    probs = F.softmax(next_token_logits, dim=-1, dtype=torch.float32).to(next_token_logits.dtype)
+                    next_token = torch.multinomial(probs, num_samples=1).item()
+                    
+                    # Check for end of sequence tokens
+                    if next_token == self.tokenizer.tokenizer.eot_token:  # End of text token
                         break
-                
-                generated.append(next_token)
-                
-                # Add token to current sequence for next iteration
-                current_ids = torch.cat([current_ids, torch.tensor([[next_token]], device=self.device)], dim=1)
-                
-                # Check for context length limit
-                if current_ids.shape[1] >= self.config.seq_length:
+                    
+                    generated.append(next_token)
+                    
+                    # Add token to current sequence for next iteration
+                    current_ids = torch.cat([current_ids, torch.tensor([[next_token]], device=self.device)], dim=1)
+                    
+                    # Check for context length limit
+                    if current_ids.shape[1] >= self.config.seq_length:
+                        break
+                        
+                except Exception as e:
+                    logging.error(f"Token generation failed: {e}")
                     break
         
         return generated
@@ -483,33 +522,16 @@ class AdvancedChat:
                 'content': self.system_prompt
             })
         
-        # Add conversation history
+        # Add conversation history (limit to max_history_length)
         history_to_include = self.conversation_history[-self.max_history_length:]
         
-        for exchange in history_to_include:
+        for message in history_to_include:
             messages.append({
-                'role': 'user',
-                'content': exchange['user']
+                'role': message['role'],
+                'content': message['content']
             })
-            if 'assistant' in exchange:
-                messages.append({
-                    'role': 'assistant',
-                    'content': exchange['assistant']
-                })
         
         return {'messages': messages}
-    
-    def _update_conversation_history(self, user_message: str, assistant_response: str):
-        """Update conversation history."""
-        if self.conversation_history and 'assistant' not in self.conversation_history[-1]:
-            self.conversation_history[-1]['assistant'] = assistant_response
-        else:
-            self.conversation_history.append({
-                'user': user_message,
-                'assistant': assistant_response,
-                'timestamp': datetime.now().isoformat(),
-                'mode': self.conversation_mode
-            })
     
     def _update_session_stats(self, metrics: Dict[str, Any]):
         """Update session statistics."""
@@ -784,9 +806,10 @@ class AdvancedChat:
                 filepath = Path("exports") / f"chat_{timestamp}.txt"
                 with open(filepath, 'w', encoding='utf-8') as f:
                     for exchange in self.conversation_history:
-                        f.write(f"User: {exchange['user']}\n")
-                        if 'assistant' in exchange:
-                            f.write(f"Assistant: {exchange['assistant']}\n")
+                        if exchange['role'] == 'user':
+                            f.write(f"User: {exchange['content']}\n")
+                        elif exchange['role'] == 'assistant':
+                            f.write(f"Assistant: {exchange['content']}\n")
                         f.write("\n")
             
             elif format_type == "md":
@@ -797,10 +820,12 @@ class AdvancedChat:
                     f.write(f"**Mode:** {self.conversation_mode}\n\n")
                     
                     for i, exchange in enumerate(self.conversation_history, 1):
-                        f.write(f"## Exchange {i}\n\n")
-                        f.write(f"**User:** {exchange['user']}\n\n")
-                        if 'assistant' in exchange:
-                            f.write(f"**Assistant:** {exchange['assistant']}\n\n")
+                        if exchange['role'] == 'user':
+                            f.write(f"## User (Exchange {i})\n\n")
+                            f.write(f"{exchange['content']}\n\n")
+                        elif exchange['role'] == 'assistant':
+                            f.write(f"## Assistant (Exchange {i})\n\n")
+                            f.write(f"{exchange['content']}\n\n")
             
             else:
                 print("Invalid export format. Use: json, txt, or md")
@@ -893,15 +918,21 @@ class AdvancedChat:
             print("No conversation history to regenerate from")
             return
         
-        last_exchange = self.conversation_history[-1]
-        if 'assistant' not in last_exchange:
-            print("No assistant response to regenerate")
+        # Find the last user message
+        last_user_idx = None
+        for i in range(len(self.conversation_history)-1, -1, -1):
+            if self.conversation_history[i]['role'] == 'user':
+                last_user_idx = i
+                break
+        
+        if last_user_idx is None:
+            print("No user message to respond to")
             return
         
-        user_message = last_exchange['user']
+        user_message = self.conversation_history[last_user_idx]['content']
         
-        # Remove the assistant response
-        del last_exchange['assistant']
+        # Remove all messages after the user message
+        self.conversation_history = self.conversation_history[:last_user_idx+1]
         
         print("Regenerating last response...")
         print(f"User: {user_message}")
@@ -925,23 +956,28 @@ class AdvancedChat:
             print("No conversation history for comparison")
             return
         
-        last_exchange = self.conversation_history[-1]
-        if 'user' not in last_exchange:
+        # Find the last user message
+        last_user_idx = None
+        for i in range(len(self.conversation_history)-1, -1, -1):
+            if self.conversation_history[i]['role'] == 'user':
+                last_user_idx = i
+                break
+        
+        if last_user_idx is None:
             print("No user message to respond to")
             return
         
-        user_message = last_exchange['user']
+        user_message = self.conversation_history[last_user_idx]['content']
         print(f"\nGenerating {count} different responses to: '{user_message[:50]}...'")
         
         responses = []
+        original_history = self.conversation_history.copy()
+        
         for i in range(count):
             print(f"\nResponse {i+1}:")
             
-            # Temporarily remove last assistant response if exists
-            had_assistant = 'assistant' in last_exchange
-            if had_assistant:
-                old_response = last_exchange['assistant']
-                del last_exchange['assistant']
+            # Restore original history (without previous assistant responses)
+            self.conversation_history = original_history.copy()
             
             response, metrics = self._generate_response(user_message)
             responses.append(response)
@@ -949,6 +985,9 @@ class AdvancedChat:
             
             if self.show_analysis:
                 print(f"   [Tokens: {metrics.get('output_tokens', 0)}, Time: {metrics.get('response_time', 0):.2f}s]")
+        
+        # Restore original history
+        self.conversation_history = original_history
         
         # Analyze responses
         if self.show_analysis:
@@ -972,13 +1011,13 @@ class AdvancedChat:
         ]
         
         results = []
+        original_history = self.conversation_history.copy()
         
         for prompt in test_prompts:
             print(f"Testing: '{prompt[:30]}...'")
             
             # Clear history for clean test
-            original_history = self.conversation_history.copy()
-            self.conversation_history = [{'user': prompt}]
+            self.conversation_history = [{'role': 'user', 'content': prompt}]
             
             start_time = time.time()
             response, metrics = self._generate_response(prompt)
@@ -992,8 +1031,8 @@ class AdvancedChat:
                 'tokens_per_second': metrics.get('tokens_per_second', 0)
             })
             
-            # Restore original history
-            self.conversation_history = original_history
+        # Restore original history
+        self.conversation_history = original_history
         
         # Display results
         print("\nBenchmark Results:")
@@ -1046,22 +1085,25 @@ class AdvancedChat:
         print("-" * 50)
         
         # Basic tokenization
-        tokens = self.tokenizer.tokenizer.encode(text)
-        print(f"Token count: {len(tokens)}")
-        print(f"Character count: {len(text)}")
-        print(f"Chars per token: {len(text) / len(tokens) if tokens else 0:.2f}")
-        
-        # Show token breakdown
-        print(f"\nToken breakdown:")
-        for i, token_id in enumerate(tokens[:20]):  # Show first 20 tokens
-            try:
-                token_text = self.tokenizer.tokenizer.decode([token_id])
-                print(f"  {i:2d}: {token_id:5d} -> '{token_text}'")
-            except:
-                print(f"  {i:2d}: {token_id:5d} -> [decode error]")
-        
-        if len(tokens) > 20:
-            print(f"  ... and {len(tokens) - 20} more tokens")
+        try:
+            tokens = self.tokenizer.tokenizer.encode(text)
+            print(f"Token count: {len(tokens)}")
+            print(f"Character count: {len(text)}")
+            print(f"Chars per token: {len(text) / len(tokens) if tokens else 0:.2f}")
+            
+            # Show token breakdown
+            print(f"\nToken breakdown:")
+            for i, token_id in enumerate(tokens[:20]):  # Show first 20 tokens
+                try:
+                    token_text = self.tokenizer.tokenizer.decode([token_id])
+                    print(f"  {i:2d}: {token_id:5d} -> '{token_text}'")
+                except:
+                    print(f"  {i:2d}: {token_id:5d} -> [decode error]")
+            
+            if len(tokens) > 20:
+                print(f"  ... and {len(tokens) - 20} more tokens")
+        except Exception as e:
+            print(f"Tokenization failed: {e}")
         
         print("-" * 50)
     
@@ -1147,7 +1189,7 @@ class AdvancedChat:
                     
                     if self.show_analysis and len(self.conversation_history) > 0:
                         # Analyze this specific response
-                        last_response = self.conversation_history[-1].get('assistant', '')
+                        last_response = self.conversation_history[-1]['content'] if self.conversation_history[-1]['role'] == 'assistant' else ''
                         if last_response:
                             analysis = self.analyzer.analyze_generation_quality(user_input, [last_response])
                             print(f"   [Quality - Coherence: {analysis['coherence']:.2f}, Length: {len(last_response)} chars]")
@@ -1205,7 +1247,7 @@ Examples:
     parser.add_argument('--temperature', type=float, help='Sampling temperature')
     parser.add_argument('--top-p', type=float, help='Top-p sampling threshold')
     parser.add_argument('--top-k', type=int, help='Top-k sampling threshold')
-    parser.add_argument('--max-tokens', type=int, help='Maximum tokens to generate')
+    parser.add_argument('--max-tokens', type=int, default=100, help='Maximum tokens to generate')
     
     # Chat settings
     parser.add_argument('--mode', choices=['standard', 'creative', 'analytical', 'precise'],
@@ -1235,30 +1277,19 @@ Examples:
         config = config_map[args.config]()
         
         # Add missing attributes that the chat system expects
-        config.max_new_tokens = args.max_tokens or 512
+        config.max_new_tokens = args.max_tokens
         config.experiment_name = f"deepseek_{args.config}"
-        
-        # Apply CLI overrides
-        if args.temperature is not None:
-            # Store for later use in generation configs
-            pass
         
     except Exception as e:
         print(f"Configuration error: {e}")
         return 1
     
-    # Determine checkpoint path - now required
+    # Determine checkpoint path
     checkpoint_path = args.checkpoint
     if not checkpoint_path:
         # Auto-detect checkpoint
         checkpoint_path = find_best_checkpoint()
         if not checkpoint_path:
-            print("ERROR: No checkpoint found!")
-            print("The chat interface requires a trained model checkpoint to function.")
-            print("Please:")
-            print("1. Train a model first")
-            print("2. Or specify a checkpoint path with --checkpoint")
-            print("3. Or place a checkpoint file in the checkpoints/ directory")
             return 1
     
     # Initialize chat
@@ -1304,7 +1335,8 @@ Examples:
         return 0
     except Exception as e:
         print(f"Chat failed: {e}")
-        logging.error(f"Chat initialization failed: {e}")
+        import traceback
+        traceback.print_exc()
         return 1
 
 
