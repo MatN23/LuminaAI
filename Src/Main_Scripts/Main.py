@@ -408,11 +408,17 @@ def main():
         else:
             config_map = {
                 'debug': ConfigPresets.debug,
-                'small': ConfigPresets.small,
-                'medium': ConfigPresets.medium,
-                'large': ConfigPresets.large,
-                'inference_optimized': ConfigPresets.inference_optimized,
-                'quality_focused': ConfigPresets.quality_focused,
+                'b1': ConfigPresets.b1,
+                'b7': ConfigPresets.b7,
+                'b14': ConfigPresets.b14,
+                'b50': ConfigPresets.b50,
+                'b100': ConfigPresets.b100,
+                'b200': ConfigPresets.b200,
+                'b300': ConfigPresets.b300,
+                'b3_inference': ConfigPresets.b3_inference,
+                'b6_quality': ConfigPresets.b6_quality,
+                'm120_speed': ConfigPresets.m120_speed,
+                'm70_memory': ConfigPresets.m70_memory
             }
             config = config_map[config_choice]()
         
@@ -680,9 +686,13 @@ def test_sharding_system():
     try:
         # Test with different file sizes
         test_cases = [
-            ("small", 10000),    # 100 conversations
-            ("medium", 1000000), # 10k conversations 
-            ("large", 100000000)  # 100k conversations
+            ("b1", 100),    # 100 conversations
+            ("b7", 1000),   # 1,000 conversations
+            ("b14", 10000), # 10,000 conversations
+            ("b50", 50000), # 50,000 conversations
+            ("b100", 100000), # 100,000 conversations 
+            ("b200", 200000),  # 200,000 conversations
+            ("b300", 300000)   # 300,000 conversations
         ]
         
         for test_name, conv_count in test_cases:
