@@ -53,7 +53,7 @@ class Config:
     init_std: float = 0.02
     layer_norm_eps: float = 1e-5
     use_stable_embedding: bool = True
-    gradient_checkpointing: bool = False
+    gradient_checkpointing: bool = True  # Changed to True by default
     
     # MoE parameters - ADDED FOR YOUR MODEL
     use_moe: bool = False
@@ -181,6 +181,7 @@ class ConfigPresets:
             early_stopping_patience=None,
             max_retries=1,
             lr_scheduler="cosine",
+            gradient_checkpointing=True,  # Enabled
             
             # Precision settings
             auto_tune_precision=False,
@@ -228,6 +229,7 @@ class ConfigPresets:
             early_stopping_patience=5,
             backup_every_n_hours=12,
             lr_scheduler="cosine",
+            gradient_checkpointing=True,  # Enabled
             
             # Precision settings
             auto_tune_precision=True,
@@ -274,7 +276,7 @@ class ConfigPresets:
             save_total_limit=10,
             early_stopping_patience=10,
             backup_every_n_hours=6,
-            gradient_checkpointing=True,
+            gradient_checkpointing=True,  # Already enabled
             lr_scheduler="cosine",
             
             # Precision settings
@@ -322,7 +324,7 @@ class ConfigPresets:
             save_total_limit=15,
             early_stopping_patience=15,
             backup_every_n_hours=4,
-            gradient_checkpointing=True,
+            gradient_checkpointing=True,  # Already enabled
             lr_scheduler="cosine",
             warmup_ratio=0.05,
             
@@ -372,7 +374,7 @@ class ConfigPresets:
             save_total_limit=18,
             early_stopping_patience=18,
             backup_every_n_hours=3,
-            gradient_checkpointing=True,
+            gradient_checkpointing=True,  # Already enabled
             lr_scheduler="cosine",
             warmup_ratio=0.08,
             
@@ -422,7 +424,7 @@ class ConfigPresets:
             save_total_limit=20,
             early_stopping_patience=20,
             backup_every_n_hours=2,
-            gradient_checkpointing=True,
+            gradient_checkpointing=True,  # Already enabled
             lr_scheduler="cosine",
             warmup_ratio=0.1,
             
@@ -472,7 +474,7 @@ class ConfigPresets:
             save_total_limit=20,
             early_stopping_patience=20,
             backup_every_n_hours=2,
-            gradient_checkpointing=True,
+            gradient_checkpointing=True,  # Already enabled
             lr_scheduler="cosine",
             warmup_ratio=0.1,
             
@@ -522,7 +524,7 @@ class ConfigPresets:
             save_total_limit=20,
             early_stopping_patience=20,
             backup_every_n_hours=2,
-            gradient_checkpointing=True,
+            gradient_checkpointing=True,  # Already enabled
             lr_scheduler="cosine",
             warmup_ratio=0.1,
             
@@ -572,7 +574,7 @@ class ConfigPresets:
             # Fast inference settings
             experiment_name="b3_inference",
             log_level="INFO",
-            gradient_checkpointing=False,
+            gradient_checkpointing=True,  # Enabled (was False)
             use_stable_embedding=True,
             lr_scheduler="cosine",
             
@@ -622,7 +624,7 @@ class ConfigPresets:
             # Quality settings
             experiment_name="b6_quality",
             log_level="INFO",
-            gradient_checkpointing=True,
+            gradient_checkpointing=True,  # Already enabled
             use_stable_embedding=True,
             init_std=0.015,
             dropout=0.1,
@@ -677,7 +679,7 @@ class ConfigPresets:
             # Speed optimization settings
             experiment_name="m120_speed",
             log_level="INFO",
-            gradient_checkpointing=False,
+            gradient_checkpointing=True,  # Enabled (was False)
             use_stable_embedding=False,
             health_check_interval=50,
             save_total_limit=3,
@@ -731,7 +733,7 @@ class ConfigPresets:
             # Memory optimization settings
             experiment_name="m70_memory",
             log_level="INFO",
-            gradient_checkpointing=True,
+            gradient_checkpointing=True,  # Already enabled
             use_stable_embedding=True,
             save_total_limit=2,
             lr_scheduler="cosine",
@@ -754,7 +756,8 @@ class ConfigPresets:
                 "memory_usage": "Very Low",
                 "training_speed": "Very Fast",
                 "precision": "fp32 (debugging clarity)",
-                "moe_experts": 4
+                "moe_experts": 4,
+                "gradient_checkpointing": True
             },
             "b1": {
                 "description": "1B parameter model for limited resources",
@@ -763,7 +766,8 @@ class ConfigPresets:
                 "memory_usage": "Low",
                 "training_speed": "Fast",
                 "precision": "fp16 with auto-tuning",
-                "moe_experts": 8
+                "moe_experts": 8,
+                "gradient_checkpointing": True
             },
             "b7": {
                 "description": "7B parameter model for serious training",
@@ -772,7 +776,8 @@ class ConfigPresets:
                 "memory_usage": "Medium-High",
                 "training_speed": "Medium",
                 "precision": "mixed_bf16",
-                "moe_experts": 16
+                "moe_experts": 16,
+                "gradient_checkpointing": True
             },
             "b14": {
                 "description": "14B parameter model for high-end training",
@@ -781,7 +786,8 @@ class ConfigPresets:
                 "memory_usage": "High",
                 "training_speed": "Slow",
                 "precision": "mixed_bf16 with TF32",
-                "moe_experts": 32
+                "moe_experts": 32,
+                "gradient_checkpointing": True
             },
             "b50": {
                 "description": "50B parameter model for massive training",
@@ -790,7 +796,8 @@ class ConfigPresets:
                 "memory_usage": "Very High",
                 "training_speed": "Slow",
                 "precision": "mixed_bf16 with TF32",
-                "moe_experts": 64
+                "moe_experts": 64,
+                "gradient_checkpointing": True
             },
             "b100": {
                 "description": "100B parameter model for extreme training",
@@ -799,7 +806,8 @@ class ConfigPresets:
                 "memory_usage": "Extreme",
                 "training_speed": "Very Slow",
                 "precision": "mixed_bf16 with TF32",
-                "moe_experts": 96
+                "moe_experts": 96,
+                "gradient_checkpointing": True
             },
             "b200": {
                 "description": "200B parameter model for production deployment",
@@ -808,7 +816,8 @@ class ConfigPresets:
                 "memory_usage": "Extreme",
                 "training_speed": "Very Slow",
                 "precision": "mixed_bf16 with TF32",
-                "moe_experts": 128
+                "moe_experts": 128,
+                "gradient_checkpointing": True
             },
             "b300": {
                 "description": "300B parameter model for research",
@@ -817,7 +826,8 @@ class ConfigPresets:
                 "memory_usage": "Extreme",
                 "training_speed": "Very Slow",
                 "precision": "mixed_bf16 with TF32",
-                "moe_experts": 144
+                "moe_experts": 144,
+                "gradient_checkpointing": True
             },
             "b3_inference": {
                 "description": "Optimized for inference performance",
@@ -826,7 +836,8 @@ class ConfigPresets:
                 "memory_usage": "Medium",
                 "training_speed": "Fast",
                 "precision": "fp16 for speed",
-                "moe_experts": 16
+                "moe_experts": 16,
+                "gradient_checkpointing": True
             },
             "b6_quality": {
                 "description": "Optimized for generation quality",
@@ -835,7 +846,8 @@ class ConfigPresets:
                 "memory_usage": "High",
                 "training_speed": "Slow",
                 "precision": "mixed_bf16 for stability",
-                "moe_experts": 32
+                "moe_experts": 32,
+                "gradient_checkpointing": True
             },
             "m120_speed": {
                 "description": "Optimized for maximum speed",
@@ -844,7 +856,8 @@ class ConfigPresets:
                 "memory_usage": "Low",
                 "training_speed": "Very Fast",
                 "precision": "fp16 with TF32",
-                "moe_experts": 8
+                "moe_experts": 8,
+                "gradient_checkpointing": True
             },
             "m70_memory": {
                 "description": "Optimized for minimal memory usage",
@@ -853,7 +866,8 @@ class ConfigPresets:
                 "memory_usage": "Very Low",
                 "training_speed": "Medium",
                 "precision": "fp16 with gradient checkpointing",
-                "moe_experts": 8
+                "moe_experts": 8,
+                "gradient_checkpointing": True
             }
         }
     

@@ -686,13 +686,13 @@ def test_sharding_system():
     try:
         # Test with different file sizes
         test_cases = [
-            ("b1", 100),    # 100 conversations
-            ("b7", 1000),   # 1,000 conversations
-            ("b14", 10000), # 10,000 conversations
-            ("b50", 50000), # 50,000 conversations
-            ("b100", 100000), # 100,000 conversations 
-            ("b200", 200000),  # 200,000 conversations
-            ("b300", 300000)   # 300,000 conversations
+            ("b1", 1000000),    # 100 conversations
+            ("b7", 1000000000000),   # 1,000 conversations
+            ("b14", 10000000000), # 10,000 conversations
+            ("b50", 50000000000000), # 50,000 conversations
+            ("b100", 100000000000), # 100,000 conversations 
+            ("b200", 200000000000000),  # 200,000 conversations
+            ("b300", 300000000000000)   # 300,000 conversations
         ]
         
         for test_name, conv_count in test_cases:
