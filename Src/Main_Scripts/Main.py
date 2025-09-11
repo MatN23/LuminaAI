@@ -22,7 +22,7 @@ try:
     from utils.environment import validate_environment, estimate_training_time
     from utils.reporting import create_data_summary_report
     from core.tokenizer import ConversationTokenizer
-    from core.model import estimate_parameters, DeepSeekTransformer, DeepSeekConfig  # Added DeepSeekConfig
+    from core.model import estimate_parameters, DeepSeekTransformer, DeepSeekConfig
     from core.dataset import ConversationDataset, StreamingConversationDataset, create_memory_efficient_dataloader
 except ImportError as e:
     print(f"Import error: {e}")
@@ -211,10 +211,11 @@ def create_sharding_aware_config(base_config, system_resources: dict, dataset_st
     """Create configuration optimized for the detected dataset strategy."""
     
     # Add sharding configuration to base config
-    base_config.max_shard_size_mb = system_resources['max_shard_size_mb']
-    base_config.max_memory_usage_gb = system_resources['max_memory_usage_gb']
-    base_config.enable_memory_mapping = True
-    base_config.shard_shuffle = True
+    # Use setattr to dynamically add attributes if they don't exist
+    setattr(base_config, 'max_shard_size_mb', system_resources['max_shard_size_mb'])
+    setattr(base_config, 'max_memory_usage_gb', system_resources['max_memory_usage_gb'])
+    setattr(base_config, 'enable_memory_mapping', True)
+    setattr(base_config, 'shard_shuffle', True)
     
     # Adjust batch size and workers based on strategy
     if dataset_strategy == "streaming":
@@ -441,13 +442,13 @@ def main():
         if experiment_name is not None:
             config.experiment_name = experiment_name
         if shard_size_mb is not None:
-            config.max_shard_size_mb = shard_size_mb
+            setattr(config, 'max_shard_size_mb', shard_size_mb)
         
         config.train_data_path = train_data
         config.eval_data_path = eval_data
         config.seed = seed
         
-        # Override lr_scheduler
+        # Override lr_scheduler to None if needed
         config.lr_scheduler = None
         
         # Re-validate after overrides
@@ -480,9 +481,8 @@ def main():
                 else:
                     dataset_size = 10000  # Default estimate
             
-            # Create DeepSeek config for parameter estimation
-            deepseek_config = config_to_deepseek_config(config)
-            estimates = estimate_training_time(config, dataset_size)  # Pass the main 'config', not 'deepseek_config'
+            # Use estimate_training_time function
+            estimates = estimate_training_time(config, dataset_size)
             
             logging.info("Training Time Estimates:")
             logging.info(f"  Dataset size: {dataset_size:,} conversations")
@@ -493,7 +493,8 @@ def main():
             logging.info(f"  Memory utilization: {estimates['memory_utilization']:.1%}")
             logging.info(f"  Training precision: {config.precision}")
             logging.info(f"  Inference precision: {config.inference_precision}")
-            logging.info(f"  Shard size: {config.max_shard_size_mb}MB")
+            if hasattr(config, 'max_shard_size_mb'):
+                logging.info(f"  Shard size: {config.max_shard_size_mb}MB")
             
             if estimates['memory_warning']:
                 logging.warning("  High memory utilization expected - consider reducing batch size")
@@ -511,7 +512,8 @@ def main():
         logging.info(f"Would use training precision: {config.precision}")
         logging.info(f"Would use inference precision: {config.inference_precision}")
         logging.info(f"Would use dataset strategy: {dataset_strategy}")
-        logging.info(f"Would use shard size: {config.max_shard_size_mb}MB")
+        if hasattr(config, 'max_shard_size_mb'):
+            logging.info(f"Would use shard size: {config.max_shard_size_mb}MB")
         return 0
     
     # Main training with sharding support
@@ -538,8 +540,10 @@ def main():
         logging.info(f"Inference precision: {config.inference_precision}")
         logging.info(f"Dataset strategy: {dataset_strategy}")
         logging.info(f"Shard configuration:")
-        logging.info(f"  Max shard size: {config.max_shard_size_mb}MB")
-        logging.info(f"  Max memory usage: {config.max_memory_usage_gb:.1f}GB")
+        if hasattr(config, 'max_shard_size_mb'):
+            logging.info(f"  Max shard size: {config.max_shard_size_mb}MB")
+        if hasattr(config, 'max_memory_usage_gb'):
+            logging.info(f"  Max memory usage: {config.max_memory_usage_gb:.1f}GB")
         logging.info(f"  Workers: {config.num_workers}")
         
         # Run training with memory monitoring
@@ -640,7 +644,8 @@ def main():
         
         logging.info("\nTraining and testing completed successfully!")
         logging.info(f"Dataset strategy used: {dataset_strategy}")
-        logging.info(f"Final inference precision: {orchestrator.trainer.inference_precision}")
+        if hasattr(orchestrator.trainer, 'inference_precision'):
+            logging.info(f"Final inference precision: {orchestrator.trainer.inference_precision}")
         
         # Summary of sharding benefits
         if dataset_strategy in ["sharded", "streaming"]:
@@ -686,13 +691,13 @@ def test_sharding_system():
     try:
         # Test with different file sizes
         test_cases = [
-            ("b1", 1000000),    # 100 conversations
-            ("b7", 1000000000000),   # 1,000 conversations
-            ("b14", 10000000000), # 10,000 conversations
-            ("b50", 50000000000000), # 50,000 conversations
-            ("b100", 100000000000), # 100,000 conversations 
-            ("b200", 200000000000000),  # 200,000 conversations
-            ("b300", 300000000000000)   # 300,000 conversations
+            ("b1", 100),       # 100 conversations
+            ("b7", 1000),      # 1,000 conversations
+            ("b14", 10000),    # 10,000 conversations
+            ("b50", 50000),    # 50,000 conversations
+            ("b100", 100000),  # 100,000 conversations 
+            ("b200", 200000),  # 200,000 conversations
+            ("b300", 300000)   # 300,000 conversations
         ]
         
         for test_name, conv_count in test_cases:
