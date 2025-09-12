@@ -1,358 +1,397 @@
 # LuminaAI
 
-A machine learning framework for training conversational transformers with Mixture of Experts architecture.
+A production-ready machine learning framework for training large-scale conversational transformers with Mixture of Experts (MoE) architecture, intelligent data sharding, and dynamic precision optimization.
 
 [![License](https://img.shields.io/badge/license-Custom-blue.svg)](./LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10+-brightgreen.svg)]()
-[![PyTorch](https://img.shields.io/badge/pytorch-1.13+-ee4c2c.svg)](https://pytorch.org/)
-[![WandB](https://img.shields.io/badge/weights_&_biases-integrated-orange.svg)](https://wandb.ai)
+[![PyTorch](https://img.shields.io/badge/pytorch-2.0+-ee4c2c.svg)](https://pytorch.org/)
+[![Flash Attention](https://img.shields.io/badge/flash_attention-2.0+-yellow.svg)]()
 
 <p align="center">
   <img src="assets/logo.png" alt="LuminaAI Logo" width="200"/>
 </p>
 
-## Features
+## 🚀 Key Features
 
-### Core Capabilities
-- Training pipeline with error handling
-- Support for conversational datasets (OASST format)
-- Mixed precision training (FP16/BF16)
-- Mixture of Experts (MoE) architecture
-- AdamW optimizer
-- Flash attention support
-- PyTorch 2.0+ model compilation
+### Production-Ready Training Pipeline
+- **Intelligent Data Sharding**: Automatic detection and optimization for datasets of any size (MB to TB)
+- **Mixture of Experts (MoE)**: Sparse expert routing with load balancing for efficient scaling
+- **Dynamic Precision Management**: Automatic precision selection and multi-precision inference testing
+- **Advanced Memory Management**: Gradient checkpointing, streaming datasets, and memory-efficient loading
+- **Fault Tolerance**: Automatic recovery, health monitoring, and emergency checkpointing
 
-### Training
-- Gradient accumulation
-- Learning rate scheduling (Cosine, OneCycle, Linear)
-- Early stopping with configurable patience
-- Automatic and manual checkpointing
-- Training resumption from checkpoints
+### Scalable Architecture
+- **DeepSeek-Style Transformer**: RoPE, GQA, RMSNorm, and SwiGLU activation
+- **Flash Attention Support**: Optimized attention computation for long sequences  
+- **Model Compilation**: PyTorch 2.0+ compilation for accelerated training
+- **Multi-GPU Ready**: Distributed training capabilities with gradient accumulation
 
-### Monitoring
-- Training metrics logging
-- Health checks and anomaly detection
-- Automatic failure recovery
-- GPU memory monitoring
-- Periodic backups
+### Intelligent Dataset Handling
+- **Automatic Strategy Detection**: Memory, sharded, or streaming based on dataset size
+- **Memory-Efficient Loading**: Smart batching and worker allocation
+- **OASST Format Support**: Native support for conversational dataset formats
+- **Comprehensive Validation**: Dataset integrity checking and quality metrics
 
-### Data Processing
-- GPT-4 compatible tokenization
-- Dataset validation
-- Multi-threaded batch processing
-- OpenAssistant dataset format support
+## 📊 Model Configurations
 
-## Requirements
+### Pre-configured Model Sizes
 
+| Configuration | Hidden Size | Layers | Heads | Parameters | Memory (FP16) | Use Case |
+|---------------|-------------|--------|-------|------------|---------------|----------|
+| **Debug**     | 128         | 2      | 2     | ~0.5M      | ~0.01GB       | Development/Testing |
+| **B1**        | 1024        | 12     | 16    | ~1B        | ~2GB          | Resource-constrained |
+| **B7**        | 2048        | 22     | 16    | ~7B        | ~14GB         | General training |
+| **B14**       | 2560        | 28     | 20    | ~14B       | ~28GB         | High-performance |
+| **B50**       | 5120        | 40     | 40    | ~50B       | ~100GB        | Large-scale research |
+| **B100**      | 7168        | 48     | 56    | ~100B      | ~200GB        | Cutting-edge research |
+| **B200**      | 8192        | 56     | 64    | ~200B      | ~400GB        | Enterprise production |
+| **B300**      | 9216        | 64     | 72    | ~300B      | ~600GB        | Advanced research |
+
+### Specialized Configurations
+
+| Configuration | Parameters | Optimization Focus | Key Features |
+|---------------|------------|--------------------|--------------|
+| **Speed Optimized (M120)** | ~120M | Maximum throughput | Real-time inference, minimal latency |
+| **Memory Optimized (M70)** | ~70M | Minimal VRAM usage | Edge deployment, mobile-friendly |
+| **Inference Optimized (B3)** | ~3B | Production serving | Balanced speed/quality, optimized caching |
+| **Quality Focused (B6)** | ~6B | Output quality | Enhanced generation, research applications |
+
+## 🛠 Installation
+
+### System Requirements
+- Python 3.10+
+- PyTorch 2.0+
+- CUDA 11.8+ (recommended)
+- 16GB+ RAM (32GB+ for large models)
+
+### Quick Install
 ```bash
-# Core dependencies
-torch>=1.13.0
-tiktoken>=0.5.0
-numpy>=1.21.0
-psutil>=5.8.0
-
-# Optional dependencies
-flash-attn>=2.0.0  # For flash attention support
-wandb>=0.15.0      # For experiment tracking
-```
-
-## Installation
-
-1. **Clone the repository**
-```bash
+# Clone repository
 git clone https://github.com/MatN23/LuminaAI.git
 cd LuminaAI
-```
 
-2. **Install dependencies**
-```bash
+# Install dependencies
 pip install -r requirements.txt
+
+# Optional: Install Flash Attention for performance
+pip install flash-attn>=2.0.0
+
+# Optional: Install Weights & Biases for tracking
+pip install wandb>=0.15.0
 ```
 
-## Usage
+## 🚀 Quick Start
 
 ### Basic Training
-
 ```bash
 python Src/Main_Scripts/main.py \
-  --config medium \
-  --train-data data/train.jsonl \
-  --eval-data data/eval.jsonl \
+  --config b7 \
+  --train-data data/conversations.jsonl \
   --epochs 10 \
-  --lr 1e-4 \
-  --batch-size 4 \
-  --experiment-name my_experiment
+  --experiment-name my_model_v1
 ```
 
-### Configuration Presets
+### Advanced Training with Custom Settings
+```bash
+python Src/Main_Scripts/main.py \
+  --config b14 \
+  --train-data data/large_dataset.jsonl \
+  --eval-data data/eval.jsonl \
+  --batch-size 2 \
+  --grad-accum 8 \
+  --precision mixed_bf16 \
+  --inference-precision auto \
+  --experiment-name production_model
+```
 
-Available configurations:
-- **`debug`**: Small model for testing
-- **`small`**: Lightweight model 
-- **`medium`**: Balanced configuration
-- **`large`**: High-capacity model
+## 📁 Data Format
 
-### Data Format
-
-Training data in JSONL format:
-
+### Conversational Dataset (JSONL)
 ```json
 {
   "messages": [
-    {"role": "user", "content": "Hello, how are you?"},
-    {"role": "assistant", "content": "I'm doing well, thank you for asking!"}
+    {"role": "user", "content": "What is machine learning?"},
+    {"role": "assistant", "content": "Machine learning is a subset of artificial intelligence..."}
   ]
 }
 ```
 
-Supported roles: `user`, `assistant`, `system`, `prompter`, `human`, `ai`, `bot`
+### Supported Roles
+- `user`, `human`, `prompter` - Human input
+- `assistant`, `ai`, `bot` - AI responses  
+- `system` - System instructions
 
-## Model Architecture
+## 🔧 Configuration Options
 
-### Components
-- **Mixture of Experts (MoE)**: Sparse expert routing
-- **Rotary Position Embedding (RoPE)**: Positional encoding
-- **SwiGLU Activation**: Activation function
-- **RMSNorm**: Layer normalization
-- **Weight Tying**: Shared embedding and output weights
+### Training Parameters
+- `--config`: Model size preset (debug, b1, b7, b14, etc.)
+- `--epochs`: Number of training epochs
+- `--lr`: Learning rate (auto-optimized per config)
+- `--batch-size`: Per-GPU batch size
+- `--grad-accum`: Gradient accumulation steps
+- `--precision`: Training precision (fp32, fp16, bf16, mixed_bf16, auto)
+- `--inference-precision`: Inference precision (auto-detected if not specified)
 
-### Optimization
-- **AdamW Optimizer**: Adaptive learning rate with weight decay
-- **Gradient Checkpointing**: Memory optimization
-- **Mixed Precision**: FP16/BF16 training
+### Data Processing
+- `--shard-size-mb`: Override automatic shard size detection
+- `--force-streaming`: Force streaming mode for any dataset size
+- `--disable-sharding`: Disable sharding (for testing)
+- `--max-conversations`: Limit dataset size for testing
 
-### Model Configurations
+### Monitoring & Debugging
+- `--test-generation`: Enable generation testing after training
+- `--test-precision`: Test multiple inference precisions
+- `--check-environment`: Validate training environment
+- `--estimate-time`: Estimate training duration
+- `--dry-run`: Test configuration without training
 
-| Config | Hidden Size | Layers | Heads | Experts | Active Experts | Seq Length | Parameters | Memory (FP16) | Precision |
-|--------|-------------|--------|-------|---------|----------------|------------|------------|---------------|-----------|
-| Debug  | 128         | 2      | 2     | 4       | 2              | 256        | ~0.5M      | ~0.01GB       | FP32      |
-| Small  | 768         | 6      | 12    | 8       | 2              | 2048       | ~1B        | ~2GB          | FP16      |
-| Medium | 2048        | 22     | 16    | 16      | 2              | 4096       | ~7B        | ~14GB         | Mixed BF16|
-| Large  | 4096        | 32     | 32    | 32      | 2              | 4096       | ~30B       | ~60GB         | Mixed BF16|
-| XLarge | 8192        | 48     | 64    | 64      | 2              | 8192       | ~200B      | ~400GB        | Mixed BF16|
+## 📊 Automatic Data Sharding
 
-### Specialized Configurations
+LuminaAI automatically detects the optimal loading strategy based on dataset size and system resources:
 
-| Config | Hidden Size | Layers | Heads | Experts | Active Experts | Seq Length | Parameters | Use Case |
-|--------|-------------|--------|-------|---------|----------------|------------|------------|----------|
-| Speed Optimized | 512 | 12 | 8 | 4 | 2 | 1024 | ~60M | Real-time applications |
-| Memory Optimized | 512 | 8 | 8 | 4 | 2 | 1024 | ~35M | Memory-constrained environments |
-| Inference Optimized | 1280 | 16 | 20 | 8 | 2 | 2048 | ~350M | Production inference |
-| Quality Focused | 3200 | 26 | 25 | 16 | 2 | 4096 | ~3B | High-quality generation |
-| Production | 1536 | 18 | 24 | 12 | 2 | 2048 | ~500M | Production deployments |
-| Experimental | 2560 | 24 | 20 | 24 | 2 | 3072 | ~1.5B | Research and experimentation |
+### Sharding Strategies
+- **Memory Strategy** (<500MB): Load entire dataset in memory
+- **Sharded Strategy** (500MB-10GB): Load dataset in configurable shards
+- **Streaming Strategy** (>10GB): Stream data with minimal memory footprint
 
-*Parameter counts include all model weights. Memory estimates are for model weights only (FP16) and exclude activations, optimizer states, and gradients.*
-
-## Configuration
-
-### Command Line Options
-
-| Option | Description | Default |
-|--------|-------------|---------|
-| `--config` | Configuration preset | `medium` |
-| `--train-data` | Training data path | Required |
-| `--eval-data` | Evaluation data path | Optional |
-| `--epochs` | Number of training epochs | `10` |
-| `--lr` | Learning rate | `1e-4` |
-| `--batch-size` | Batch size per GPU | `2` |
-| `--grad-accum` | Gradient accumulation steps | `4` |
-| `--precision` | Training precision | `fp16` |
-| `--experiment-name` | Experiment identifier | `experiment` |
-
-### Custom Configuration
-
-YAML configuration file example:
-
-```yaml
-# config/custom.yaml
-model_name: "custom_model"
-hidden_size: 1024
-num_layers: 24
-num_heads: 16
-num_experts: 16
-num_active_experts: 2
-seq_length: 4096
-vocab_size: 50304
-
-learning_rate: 1e-4
-batch_size: 4
-gradient_accumulation_steps: 4
-max_grad_norm: 1.0
-weight_decay: 0.01
-
-precision: "fp16"
-compile: true
-gradient_checkpointing: true
-
-lr_scheduler: "cosine"
-warmup_ratio: 0.1
-min_lr: 1e-6
-
-early_stopping_patience: 5
-eval_every_n_batches: 500
-save_every_n_batches: 1000
-health_check_interval: 100
+### System Resource Optimization
+```bash
+# Automatic detection based on system specs
+System Resources:
+  RAM: 32.0 GB
+  CPU cores: 16
+  GPU memory: 80.0 GB
+  
+Recommended sharding config:
+  Shard size: 512 MB
+  Workers: 8
+  Max memory usage: 22.4 GB
 ```
 
-## Monitoring
+## 🎯 Precision Management
 
-### Metrics Tracked
-- Training loss and perplexity
-- Learning rate and gradient norms
-- GPU and system memory usage
-- Training throughput
-- Expert utilization (for MoE)
+### Training Precisions
+- **FP32**: Full precision (debugging, small models)
+- **FP16**: Half precision (memory efficiency)  
+- **BF16**: Brain float (numerical stability)
+- **Mixed BF16**: Mixed precision with BF16 (recommended for large models)
+- **Auto**: Automatic precision selection based on hardware
 
-### Log Output
-```
+### Inference Precisions
+- **Dynamic**: Runtime precision switching
+- **Auto**: Automatic optimization based on model size and hardware
+- **Multi-precision Testing**: Automatic benchmarking across precisions
+
+## 🔍 Monitoring & Logging
+
+### Real-time Metrics
+```bash
 Epoch 1 | Step 150 | Batch 150/2000 | Loss: 2.456789 | PPL: 11.67 | 
-LR: 8.50e-05 | GradNorm: 0.8432 | Tokens/s: 1250 | GPU: 8.2GB/16.0GB
+LR: 8.50e-05 | GradNorm: 0.8432 | Tokens/s: 1250 | GPU: 8.2GB/16.0GB | 
+Strategy: sharded | Memory: 45.2%
 ```
+
+### Health Monitoring
+- GPU memory tracking
+- System memory monitoring
+- Training anomaly detection
+- Automatic failure recovery
+- Emergency checkpointing
 
 ### Experiment Tracking
-Supports Weights & Biases integration:
-
 ```bash
+# Weights & Biases integration
 export WANDB_PROJECT="conversational-transformer"
 export WANDB_ENTITY="your-username"
 ```
 
-## Utilities
+## 🛡 Data Validation & Processing
 
-### Data Processing
-
-Process OASST dataset:
+### Dataset Validation
 ```bash
+# Comprehensive dataset analysis
+python Src/Main_Scripts/main.py --validate-data data/train.jsonl --create-report
+
+# Validation output
+Data Validation Results:
+  Valid conversations: 50,000
+  Success rate: 98.5%
+  Average tokens: 245.3
+  Loading strategy: sharded
+  Quality score: 9.2/10
+```
+
+### OASST Data Processing
+```bash
+# Convert OASST format
 python Src/Main_Scripts/main.py --process-oasst input.jsonl output.jsonl --max-conversations 10000
 ```
 
-Validate dataset:
+## 🚀 Generation Testing
+
+### Multi-Precision Inference Testing
 ```bash
-python Src/Main_Scripts/main.py --validate-data data/train.jsonl
-```
+python Src/Main_Scripts/main.py --test-generation --test-precision --resume checkpoints/best_model.pt
 
-Create data report:
-```bash
-python Src/Main_Scripts/main.py --validate-data data/train.jsonl --create-report
-```
-
-### Environment
-
-Check training environment:
-```bash
-python Src/Main_Scripts/main.py --check-environment
-```
-
-Estimate training time:
-```bash
-python Src/Main_Scripts/main.py --estimate-time --config medium
-```
-
-## Text Generation
-
-Built-in text generation:
-
-```bash
-python Src/Main_Scripts/main.py --test-generation --resume checkpoints/best_model.pt
+# Automatic testing across precisions
+FP32: Response generated in 245ms, Memory: 2.1GB
+FP16: Response generated in 180ms, Memory: 1.2GB  
+BF16: Response generated in 185ms, Memory: 1.2GB
 ```
 
 ### Generation Parameters
-- **Temperature**: Controls randomness (0.1-2.0)
-- **Top-k**: Vocabulary limit for sampling (1-100)
-- **Top-p**: Nucleus sampling threshold (0.1-1.0)
-- **Max Length**: Maximum tokens to generate (1-2048)
+- `temperature`: Randomness control (0.1-2.0)
+- `top_p`: Nucleus sampling (0.1-1.0) 
+- `top_k`: Vocabulary limiting (1-100)
+- `max_new_tokens`: Response length limit
 
-## Error Handling
+## 📈 Performance Optimization
 
-### Recovery Features
-- Checkpoint resumption from latest save
-- Skip batches with NaN/Inf gradients
-- Automatic GPU memory cleanup
-- Periodic training state backups
+### Memory Efficiency Features
+- **Gradient Checkpointing**: Enabled by default for all configs
+- **Flash Attention**: Automatic detection and usage for long sequences
+- **Model Compilation**: PyTorch 2.0+ compilation for 20%+ speedup
+- **Streaming Datasets**: Handle TB-scale datasets with constant memory
 
-### Validation
-- Dataset validation before training
-- Corrupted sample handling
-- Emergency checkpoint saving
-- Training anomaly detection
+### MoE Optimization
+- **Load Balancing**: Automatic expert utilization balancing
+- **Capacity Factor**: Dynamic routing with overflow handling
+- **Expert Pruning**: Unused expert detection and optimization
 
-## Project Structure
+## 🔧 Environment Validation
+
+### System Compatibility Check
+```bash
+python Src/Main_Scripts/main.py --check-environment
+
+# Validation output
+Environment Validation:
+✓ PyTorch version: 2.1.0
+✓ CUDA available: 11.8
+✓ Flash Attention: Available
+✓ Memory: 64GB available
+✓ GPU Memory: 80GB available
+⚠ Warning: Large model selected for available VRAM
+```
+
+## 📊 Training Time Estimation
+
+```bash
+python Src/Main_Scripts/main.py --estimate-time --config b7
+
+# Estimation output
+Training Time Estimates:
+  Dataset size: 50,000 conversations
+  Dataset strategy: sharded
+  Estimated time: 12.5 hours (0.5 days)
+  Total tokens: 12,250,000
+  Throughput: 1,200 tokens/sec
+  Memory utilization: 67%
+  Note: Sharding mode will minimize memory usage
+```
+
+## 🗂 Project Structure
 
 ```
 LuminaAI/
 ├── Src/
 │   └── Main_Scripts/
-│       ├── main.py        # Main entry point
-│       ├── core/
-│       │   ├── model.py           # Transformer with MoE architecture
-│       │   ├── tokenizer.py       # Tokenization
-│       │   └── dataset.py         # Dataset handling
+│       ├── main.py                    # Main entry point with sharding support
+│       ├── chat.py
+        ├── core/
+│       │   ├── model.py              # DeepSeek-style Transformer with MoE
+│       │   ├── tokenizer.py          # GPT-4 compatible tokenization
+│       │   └── dataset.py            # Sharded dataset loading
 │       ├── training/
-│       │   ├── trainer.py         # Training logic
-│       │   ├── orchestrator.py    # Training orchestration
-│       │   └── checkpoint.py      # Checkpoint management
+│       │   ├── trainer.py            # Advanced trainer with precision management
+│       │   ├── orchestrator.py       # Training orchestration
+│       │   └── checkpoint.py         # Checkpoint management
 │       ├── config/
-│       │   └── config_manager.py  # Configuration management
+│       │   └── config_manager.py     # Configuration presets
 │       ├── monitoring/
-│       │   └── logger.py          # Logging and monitoring
+│       │   └── logger.py             # Advanced logging and monitoring
 │       └── utils/
-│           ├── data_processing.py # Data utilities
-│           ├── environment.py     # Environment checks
-│           └── reporting.py       # Report generation
-├── data/                  # Training data
-├── checkpoints/           # Model checkpoints
-├── experiments/           # Experiment outputs
-├── logs/                  # Training logs
-└── backups/               # Emergency backups
+│           ├── data_processing.py    # Data utilities and validation
+│           ├── environment.py        # System validation
+│           └── reporting.py          # Performance reporting
+├── data/
+│   └── shards/                       # Automatic dataset sharding
+├── checkpoints/                      # Model checkpoints
+├── experiments/                      # Experiment tracking
+├── logs/                            # Training logs
+└── backups/                         # Emergency backups
 ```
 
-## Troubleshooting
+## 🐛 Troubleshooting
 
-### Common Issues
-
-**CUDA Out of Memory**:
+### Memory Issues
 ```bash
-python Src/Main_Scripts/main.py --batch-size 1 --grad-accum 8
+# For OOM errors
+python Src/Main_Scripts/main.py --batch-size 1 --grad-accum 16 --precision fp16
+
+# Enable aggressive memory optimization
+python Src/Main_Scripts/main.py --force-streaming --precision fp16
 ```
 
-**Slow Training**:
+### Performance Optimization
 ```bash
-python Src/Main_Scripts/main.py --precision fp16 --compile
+# Enable all optimizations
+python Src/Main_Scripts/main.py --precision mixed_bf16 --compile --enable-flash-attention
+
+# Test system performance
+python Src/Main_Scripts/main.py --test-sharding
 ```
 
-**Data Loading Errors**:
+### Data Issues
 ```bash
+# Comprehensive data analysis
 python Src/Main_Scripts/main.py --validate-data data/train.jsonl --create-report
+
+# Clean problematic data
+python Src/Main_Scripts/main.py --process-oasst dirty_data.jsonl clean_data.jsonl
 ```
 
-### Optimization Options
+## 🏆 Advanced Features
 
-1. Use mixed precision: `--precision fp16`
-2. Install flash attention: `pip install flash-attn`
-3. Enable model compilation: `--compile` (PyTorch 2.0+)
-4. Enable gradient checkpointing for large models
-5. Adjust batch size for optimal memory usage
+### Intelligent Resource Management
+- Automatic GPU memory optimization
+- Dynamic worker allocation based on system resources
+- Smart batch size adjustment for optimal throughput
+- Memory-mapped file I/O for large datasets
 
-## Performance
+### Production Readiness
+- Comprehensive error handling and recovery
+- Health monitoring with automatic alerts
+- Periodic backup creation
+- Experiment reproducibility with seed management
 
-### Memory Requirements (A100 80GB)
+### Research Features
+- Multi-precision inference benchmarking
+- Expert utilization analysis for MoE models
+- Token-level loss analysis and reporting
+- Advanced generation quality metrics
 
-| Model Size | Parameters | Training Precision | VRAM (weights only) |
-| ---------- | ---------- | ------------------ | ------------------- |
-| Small      | 500M       | FP16               | ~1GB                |
-| Medium     | 4B         | BF16               | ~8GB                |
-| Large      | 15B        | BF16               | ~30GB               |
+## 🤝 Contributing
 
-*Training requires additional memory for activations, optimizer states, and gradients (typically 3-4x model size).*
+Contributions are welcome! Please ensure:
+1. Code follows the existing architecture patterns
+2. New features include comprehensive testing
+3. Documentation is updated for user-facing changes
+4. Performance impact is considered and documented
 
-## License
+## 📄 License
 
 This project is licensed under a Custom License. See license headers in source files for details.
 
-## Support
+## 🆘 Support
 
-For issues:
+For technical issues:
 1. Check the troubleshooting section
-2. Review existing GitHub issues
-3. Create a new issue with logs, configuration, and system information
+2. Review system requirements and environment validation
+3. Run diagnostic commands to identify the issue
+4. Check existing GitHub issues
+5. Create a detailed issue with logs, configuration, and system information
+
+---
+
+*LuminaAI: Pushing the boundaries of conversational AI with production-ready scaling and optimization.*
