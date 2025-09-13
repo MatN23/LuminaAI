@@ -494,7 +494,7 @@ class ConfigPresets:
             num_layers=64,
             num_heads=72,
             num_kv_heads=18,
-            seq_length=32000,  # Budget-friendly research context
+            seq_length=204800,  # 200K context for 300B model
             intermediate_size=24576,
             
             # Research-scale training
