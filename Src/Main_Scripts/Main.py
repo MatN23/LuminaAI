@@ -8,8 +8,10 @@ import argparse
 import traceback
 import psutil
 import gc
+import json
 from pathlib import Path
 from datetime import datetime
+from typing import Dict, Any, Optional
 
 # Add the current directory to Python path for imports
 sys.path.insert(0, str(Path(__file__).parent))
@@ -17,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 # Import our modules
 try:
     from config.config_manager import Config, ConfigPresets
-    from training.orchestrator import TrainingOrchestrator
+    from training.orchestrator import AdaptiveTrainingOrchestrator, TrainingMetrics
     from utils.data_processing import process_oasst_data, validate_data_comprehensive
     from utils.environment import validate_environment, estimate_training_time
     from utils.reporting import create_data_summary_report
@@ -28,6 +30,450 @@ except ImportError as e:
     print(f"Import error: {e}")
     print("Make sure all required modules are present in the correct directory structure.")
     sys.exit(1)
+
+
+class AdaptiveConfigurationWizard:
+    """Natural language configuration system."""
+    
+    def __init__(self):
+        self.config_templates = {
+            'small_efficient': 'Optimized for small models (1-3B parameters) with maximum efficiency',
+            'medium_balanced': 'Balanced configuration for medium models (7-14B parameters)',
+            'large_performance': 'High-performance setup for large models (70B+ parameters)',
+            'code_specialized': 'Specialized for code generation and programming tasks',
+            'conversation_optimized': 'Optimized for conversational AI and chat applications',
+            'research_experimental': 'Experimental setup for research and novel architectures'
+        }
+    
+    def parse_natural_language_config(self, description: str) -> str:
+        """Parse natural language description to determine config."""
+        description_lower = description.lower()
+        
+        # Model size detection
+        if any(word in description_lower for word in ['small', '1b', '3b', 'efficient', 'fast']):
+            if 'code' in description_lower:
+                return 'b3_inference'
+            return 'debug'
+        elif any(word in description_lower for word in ['medium', '7b', '14b', 'balanced']):
+            return 'b14'
+        elif any(word in description_lower for word in ['large', '70b', '100b', 'performance']):
+            return 'b100'
+        
+        # Task-specific detection
+        if any(word in description_lower for word in ['code', 'programming', 'developer']):
+            return 'b6_quality'  # Good for code tasks
+        elif any(word in description_lower for word in ['chat', 'conversation', 'assistant']):
+            return 'b7'
+        elif any(word in description_lower for word in ['research', 'experiment', 'novel']):
+            return 'b50'
+        
+        # Default to balanced
+        return 'b7'
+    
+    def get_config_explanation(self, config_choice: str) -> str:
+        """Get human-readable explanation of config choice."""
+        explanations = {
+            'debug': 'Ultra-lightweight config for testing and debugging',
+            'b1': '1B parameter model - very fast training and inference',
+            'b7': '7B parameter model - balanced performance and efficiency', 
+            'b14': '14B parameter model - high quality with reasonable resource usage',
+            'b50': '50B parameter model - research-grade performance',
+            'b100': '100B parameter model - maximum performance for production',
+            'b200': '200B parameter model - cutting-edge large scale',
+            'b300': '300B parameter model - experimental massive scale',
+            'b3_inference': '3B model optimized for fast inference',
+            'b6_quality': '6B model optimized for high-quality outputs',
+            'm120_speed': '120M model optimized for maximum speed',
+            'm70_memory': '70M model optimized for minimal memory usage'
+        }
+        return explanations.get(config_choice, f'Custom configuration: {config_choice}')
+
+
+class IntelligentResourceManager:
+    """Intelligent system resource management and optimization."""
+    
+    def __init__(self):
+        self.system_info = self._gather_system_info()
+        self.optimization_history = []
+    
+    def _gather_system_info(self) -> Dict[str, Any]:
+        """Gather comprehensive system information."""
+        info = {
+            'memory_gb': psutil.virtual_memory().total / (1024**3),
+            'cpu_count': psutil.cpu_count(),
+            'cpu_freq': psutil.cpu_freq().current if psutil.cpu_freq() else 2000,
+            'available_memory_gb': psutil.virtual_memory().available / (1024**3),
+            'memory_usage_percent': psutil.virtual_memory().percent
+        }
+        
+        # GPU information
+        try:
+            import torch
+            if torch.cuda.is_available():
+                info['gpu_count'] = torch.cuda.device_count()
+                info['gpu_memory_gb'] = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                info['gpu_name'] = torch.cuda.get_device_name(0)
+                info['cuda_version'] = torch.version.cuda
+            else:
+                info.update({'gpu_count': 0, 'gpu_memory_gb': 0, 'gpu_name': 'None'})
+        except ImportError:
+            info.update({'gpu_count': 0, 'gpu_memory_gb': 0, 'gpu_name': 'None'})
+        
+        # Storage information
+        try:
+            disk_usage = psutil.disk_usage('.')
+            info['disk_free_gb'] = disk_usage.free / (1024**3)
+            info['disk_total_gb'] = disk_usage.total / (1024**3)
+        except Exception:
+            info.update({'disk_free_gb': 100, 'disk_total_gb': 500})
+        
+        return info
+    
+    def intelligent_config_optimization(self, base_config, dataset_size: int) -> Dict[str, Any]:
+        """Intelligently optimize configuration based on system resources and dataset."""
+        optimizations = {}
+        
+        # Memory-based optimizations
+        if self.system_info['memory_gb'] < 16:
+            optimizations.update({
+                'batch_size': min(base_config.batch_size, 2),
+                'gradient_accumulation_steps': max(base_config.gradient_accumulation_steps, 8),
+                'num_workers': min(2, self.system_info['cpu_count'] // 2),
+                'max_shard_size_mb': 256,
+                'enable_gradient_checkpointing': True,
+                'precision': 'fp16',
+                'reasoning': 'Low memory system - reduced batch size, increased accumulation'
+            })
+        elif self.system_info['memory_gb'] < 64:
+            optimizations.update({
+                'batch_size': min(base_config.batch_size, 8),
+                'num_workers': min(4, self.system_info['cpu_count'] // 2),
+                'max_shard_size_mb': 512,
+                'precision': 'bf16' if self.system_info.get('gpu_memory_gb', 0) > 8 else 'fp16',
+                'reasoning': 'Medium memory system - balanced optimization'
+            })
+        else:
+            optimizations.update({
+                'num_workers': min(8, self.system_info['cpu_count']),
+                'max_shard_size_mb': 1024,
+                'precision': 'bf16',
+                'enable_flash_attention': True,
+                'reasoning': 'High memory system - optimized for performance'
+            })
+        
+        # GPU-based optimizations
+        gpu_memory = self.system_info.get('gpu_memory_gb', 0)
+        if gpu_memory > 0:
+            if gpu_memory < 8:
+                optimizations.update({
+                    'batch_size': min(optimizations.get('batch_size', base_config.batch_size), 1),
+                    'gradient_accumulation_steps': max(optimizations.get('gradient_accumulation_steps', base_config.gradient_accumulation_steps), 16),
+                    'model_parallel': False,
+                    'reasoning': optimizations.get('reasoning', '') + ' | Small GPU memory - aggressive batching'
+                })
+            elif gpu_memory > 24:
+                optimizations.update({
+                    'enable_model_parallel': True,
+                    'enable_large_model_optimizations': True,
+                    'reasoning': optimizations.get('reasoning', '') + ' | Large GPU memory - enabled advanced features'
+                })
+        
+        # Dataset-based optimizations
+        dataset_gb = dataset_size * 0.001  # Rough estimate
+        if dataset_gb > 10:
+            optimizations.update({
+                'streaming_dataset': True,
+                'prefetch_factor': 4,
+                'persistent_workers': True,
+                'reasoning': optimizations.get('reasoning', '') + ' | Large dataset - streaming optimizations'
+            })
+        elif dataset_gb < 1:
+            optimizations.update({
+                'streaming_dataset': False,
+                'cache_dataset': True,
+                'reasoning': optimizations.get('reasoning', '') + ' | Small dataset - in-memory caching'
+            })
+        
+        # CPU optimizations
+        if self.system_info['cpu_count'] > 16:
+            optimizations.update({
+                'enable_cpu_offload': True,
+                'num_workers': min(12, self.system_info['cpu_count'] - 4),
+                'reasoning': optimizations.get('reasoning', '') + ' | Many CPU cores - enabled CPU offload'
+            })
+        
+        self.optimization_history.append({
+            'timestamp': datetime.now(),
+            'system_info': self.system_info.copy(),
+            'optimizations': optimizations.copy()
+        })
+        
+        return optimizations
+    
+    def get_resource_recommendations(self) -> Dict[str, str]:
+        """Get human-readable resource optimization recommendations."""
+        recommendations = {}
+        
+        # Memory recommendations
+        memory_usage = self.system_info['memory_usage_percent']
+        if memory_usage > 85:
+            recommendations['memory'] = 'WARNING: High memory usage. Consider closing other applications or reducing batch size.'
+        elif memory_usage > 70:
+            recommendations['memory'] = 'CAUTION: Moderate memory usage. Monitor during training.'
+        else:
+            recommendations['memory'] = 'OK: Memory usage is healthy.'
+        
+        # GPU recommendations
+        gpu_memory = self.system_info.get('gpu_memory_gb', 0)
+        if gpu_memory == 0:
+            recommendations['gpu'] = 'INFO: No GPU detected. Training will use CPU (much slower).'
+        elif gpu_memory < 8:
+            recommendations['gpu'] = 'WARNING: Limited GPU memory. Use small models and aggressive optimizations.'
+        elif gpu_memory < 24:
+            recommendations['gpu'] = 'OK: Moderate GPU memory. Medium models should work well.'
+        else:
+            recommendations['gpu'] = 'EXCELLENT: High GPU memory. Large models supported.'
+        
+        # Storage recommendations
+        free_space = self.system_info.get('disk_free_gb', 100)
+        if free_space < 10:
+            recommendations['storage'] = 'CRITICAL: Very low disk space. Training may fail.'
+        elif free_space < 50:
+            recommendations['storage'] = 'WARNING: Limited disk space. Monitor checkpoint storage.'
+        else:
+            recommendations['storage'] = 'OK: Sufficient disk space available.'
+        
+        return recommendations
+
+
+class PredictiveTrainingAnalyzer:
+    """Predicts training outcomes and provides intelligent suggestions."""
+    
+    def __init__(self):
+        self.historical_data = []
+    
+    def predict_training_time(self, config, dataset_size: int, system_info: Dict) -> Dict[str, Any]:
+        """Predict training time with multiple scenarios."""
+        # Base calculations
+        total_tokens = dataset_size * getattr(config, 'seq_length', 2048)
+        batch_size = getattr(config, 'batch_size', 8)
+        grad_accum = getattr(config, 'gradient_accumulation_steps', 1)
+        effective_batch_size = batch_size * grad_accum
+        
+        # Model size factor
+        model_size_factor = self._estimate_model_size_factor(config)
+        
+        # System performance factor
+        gpu_memory = system_info.get('gpu_memory_gb', 0)
+        if gpu_memory == 0:
+            system_factor = 0.1  # CPU is much slower
+        elif gpu_memory < 8:
+            system_factor = 0.5
+        elif gpu_memory < 24:
+            system_factor = 1.0
+        else:
+            system_factor = 1.5
+        
+        # Base throughput estimation (tokens per second)
+        base_throughput = 1000 * system_factor / model_size_factor
+        
+        # Training time scenarios
+        scenarios = {
+            'optimistic': {
+                'throughput_multiplier': 1.5,
+                'description': 'Everything goes perfectly, no issues'
+            },
+            'realistic': {
+                'throughput_multiplier': 1.0,
+                'description': 'Normal training with typical issues'
+            },
+            'pessimistic': {
+                'throughput_multiplier': 0.6,
+                'description': 'Training difficulties and optimization needed'
+            }
+        }
+        
+        predictions = {}
+        for scenario, params in scenarios.items():
+            actual_throughput = base_throughput * params['throughput_multiplier']
+            total_training_time = total_tokens / actual_throughput
+            
+            predictions[scenario] = {
+                'hours': total_training_time / 3600,
+                'days': total_training_time / (3600 * 24),
+                'tokens_per_second': actual_throughput,
+                'description': params['description'],
+                'total_tokens': total_tokens,
+                'effective_batch_size': effective_batch_size
+            }
+        
+        # Add recommendations
+        predictions['recommendations'] = self._get_timing_recommendations(predictions, config)
+        
+        return predictions
+    
+    def _estimate_model_size_factor(self, config) -> float:
+        """Estimate computational complexity factor based on model size."""
+        hidden_size = getattr(config, 'hidden_size', 768)
+        num_layers = getattr(config, 'num_layers', 12)
+        
+        # Rough parameter count estimation
+        param_estimate = hidden_size * hidden_size * num_layers * 12  # Simplified
+        
+        if param_estimate < 1e9:  # < 1B parameters
+            return 1.0
+        elif param_estimate < 10e9:  # < 10B parameters
+            return 3.0
+        elif param_estimate < 100e9:  # < 100B parameters
+            return 10.0
+        else:  # >= 100B parameters
+            return 30.0
+    
+    def _get_timing_recommendations(self, predictions: Dict, config) -> List[str]:
+        """Get recommendations based on timing predictions."""
+        recommendations = []
+        
+        realistic_hours = predictions['realistic']['hours']
+        
+        if realistic_hours > 72:  # More than 3 days
+            recommendations.extend([
+                "Consider using a smaller model for initial experiments",
+                "Enable gradient checkpointing to reduce memory usage",
+                "Use mixed precision training (fp16/bf16)",
+                "Consider distributed training if multiple GPUs available"
+            ])
+        elif realistic_hours > 24:  # More than 1 day
+            recommendations.extend([
+                "Plan for overnight training sessions",
+                "Enable automatic checkpointing every few hours",
+                "Monitor training progress remotely"
+            ])
+        else:
+            recommendations.append("Training time looks reasonable for experimentation")
+        
+        # Memory-based recommendations
+        if predictions['realistic']['tokens_per_second'] < 100:
+            recommendations.append("Low throughput detected - consider optimizing batch size or model architecture")
+        
+        return recommendations
+
+
+class InteractiveTrainingDebugger:
+    """Interactive debugging and analysis system."""
+    
+    def __init__(self, orchestrator):
+        self.orchestrator = orchestrator
+        self.debug_history = []
+    
+    def analyze_current_state(self) -> Dict[str, Any]:
+        """Provide comprehensive analysis of current training state."""
+        status = self.orchestrator.get_adaptive_status()
+        
+        analysis = {
+            'timestamp': datetime.now().isoformat(),
+            'overall_health': 'unknown',
+            'issues_detected': [],
+            'recommendations': [],
+            'metrics_summary': {},
+            'adaptive_intelligence_status': {}
+        }
+        
+        # Analyze current metrics
+        if 'current_metrics' in status and status['current_metrics']:
+            metrics = status['current_metrics']
+            analysis['metrics_summary'] = {
+                'loss': metrics.get('loss', 'unknown'),
+                'learning_rate': metrics.get('learning_rate', 'unknown'),
+                'gradient_norm': metrics.get('grad_norm', 'unknown'),
+                'memory_usage': metrics.get('memory_usage', {}).get('gpu_memory_percent', 'unknown')
+            }
+            
+            # Health assessment
+            loss = metrics.get('loss', float('inf'))
+            grad_norm = metrics.get('grad_norm', 0)
+            
+            if loss == float('inf') or loss > 10:
+                analysis['overall_health'] = 'critical'
+                analysis['issues_detected'].append('Loss is very high or infinite')
+                analysis['recommendations'].append('Check data preprocessing and model initialization')
+            elif grad_norm > 10:
+                analysis['overall_health'] = 'warning'
+                analysis['issues_detected'].append('High gradient norm detected')
+                analysis['recommendations'].append('Consider gradient clipping or learning rate reduction')
+            elif loss < 0.1:
+                analysis['overall_health'] = 'excellent'
+                analysis['recommendations'].append('Training is converging well')
+            else:
+                analysis['overall_health'] = 'good'
+        
+        # Analyze adaptive intelligence
+        analysis['adaptive_intelligence_status'] = {
+            'decisions_made': status.get('adaptive_decisions_made', 0),
+            'metrics_collected': status.get('metrics_collected', 0),
+            'meta_learning_runs': status.get('meta_learning_runs', 0),
+            'monitoring_active': status.get('monitoring_active', False)
+        }
+        
+        # Recent decisions analysis
+        if 'recent_decisions' in status and status['recent_decisions']:
+            decision_types = [d['type'] for d in status['recent_decisions']]
+            confidence_avg = sum(d['confidence'] for d in status['recent_decisions']) / len(status['recent_decisions'])
+            
+            analysis['adaptive_intelligence_status'].update({
+                'recent_decision_types': list(set(decision_types)),
+                'average_confidence': confidence_avg,
+                'most_recent_decision': status['recent_decisions'][-1]['type']
+            })
+            
+            if confidence_avg < 0.5:
+                analysis['issues_detected'].append('Low confidence in recent adaptive decisions')
+                analysis['recommendations'].append('Consider manual intervention or configuration adjustment')
+        
+        self.debug_history.append(analysis)
+        return analysis
+    
+    def get_debug_conversation(self) -> str:
+        """Generate a natural language summary of training state."""
+        analysis = self.analyze_current_state()
+        
+        conversation = f"""
+Training Assistant Analysis ({datetime.now().strftime('%H:%M:%S')})
+
+Overall Health: {analysis['overall_health'].upper()}
+
+Current Metrics:
+"""
+        
+        for metric, value in analysis['metrics_summary'].items():
+            if isinstance(value, float):
+                conversation += f"  • {metric.replace('_', ' ').title()}: {value:.4f}\n"
+            else:
+                conversation += f"  • {metric.replace('_', ' ').title()}: {value}\n"
+        
+        if analysis['issues_detected']:
+            conversation += f"\nIssues Detected:\n"
+            for issue in analysis['issues_detected']:
+                conversation += f"  • {issue}\n"
+        
+        if analysis['recommendations']:
+            conversation += f"\nRecommendations:\n"
+            for rec in analysis['recommendations']:
+                conversation += f"  • {rec}\n"
+        
+        ai_status = analysis['adaptive_intelligence_status']
+        conversation += f"""
+Adaptive AI Status:
+  • Decisions Made: {ai_status['decisions_made']}
+  • Metrics Collected: {ai_status['metrics_collected']}
+  • Meta-learning Runs: {ai_status['meta_learning_runs']}
+  • Monitoring: {'Active' if ai_status['monitoring_active'] else 'Inactive'}
+"""
+        
+        if 'recent_decision_types' in ai_status:
+            conversation += f"  • Recent Decision Types: {', '.join(ai_status['recent_decision_types'])}\n"
+            conversation += f"  • Average Confidence: {ai_status['average_confidence']:.2f}\n"
+        
+        return conversation
 
 
 def config_to_deepseek_config(config):
@@ -55,203 +501,111 @@ def config_to_deepseek_config(config):
     )
 
 
-def setup_logging_basic():
-    """Setup basic logging before full system initialization."""
+def setup_logging_advanced():
+    """Setup advanced logging with real-time monitoring."""
     logging.basicConfig(
         level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
+        format='%(asctime)s - %(levelname)s - %(name)s - %(message)s',
         handlers=[
-            logging.StreamHandler(sys.stdout)
+            logging.StreamHandler(sys.stdout),
+            logging.FileHandler(f'logs/training_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log')
         ]
     )
+    
+    # Create logs directory
+    Path('logs').mkdir(exist_ok=True)
 
 
-def create_directory_structure():
-    """Create necessary directory structure including sharding directories."""
+def create_enhanced_directory_structure():
+    """Create comprehensive directory structure."""
     directories = [
-        'data',
-        'data/shards',  # For sharded datasets
-        'checkpoints', 
-        'experiments',
-        'logs',
-        'backups'
+        'data', 'data/shards', 'data/processed', 'data/cache',
+        'checkpoints', 'checkpoints/best', 'checkpoints/emergency',
+        'experiments', 'experiments/archive',
+        'logs', 'logs/adaptive', 'logs/performance',
+        'backups', 'backups/configs', 'backups/models',
+        'reports', 'reports/adaptive', 'reports/performance',
+        'monitoring', 'monitoring/metrics', 'monitoring/visualizations'
     ]
     
     for directory in directories:
         Path(directory).mkdir(exist_ok=True, parents=True)
 
 
-def check_system_resources():
-    """Check system resources and recommend configuration."""
-    # Get system information
-    memory_gb = psutil.virtual_memory().total / (1024**3)
-    cpu_count = psutil.cpu_count()
+def interactive_configuration_setup():
+    """Interactive setup for advanced users."""
+    print("\n" + "="*70)
+    print("ADAPTIVE AI TRAINING CONFIGURATION WIZARD")
+    print("="*70)
     
-    # Check GPU memory if available
-    gpu_memory_gb = 0
-    try:
-        import torch
-        if torch.cuda.is_available():
-            gpu_memory_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
-    except ImportError:
-        pass
+    wizard = AdaptiveConfigurationWizard()
     
-    logging.info(f"System Resources:")
-    logging.info(f"  RAM: {memory_gb:.1f} GB")
-    logging.info(f"  CPU cores: {cpu_count}")
-    logging.info(f"  GPU memory: {gpu_memory_gb:.1f} GB" if gpu_memory_gb > 0 else "  GPU: Not available")
+    print("\nAvailable configuration templates:")
+    for key, description in wizard.config_templates.items():
+        print(f"  • {key}: {description}")
     
-    # Recommend sharding configuration
-    if memory_gb < 16:
-        recommended_shard_size = 256
-        recommended_workers = min(2, cpu_count // 2)
-        max_memory_usage = memory_gb * 0.6
-    elif memory_gb < 64:
-        recommended_shard_size = 512
-        recommended_workers = min(4, cpu_count // 2)
-        max_memory_usage = memory_gb * 0.7
+    print(f"\nYou can also describe your needs in natural language!")
+    print(f"Example: 'Train a 7B model optimized for code generation with aggressive memory optimization'")
+    
+    user_input = input("\nDescribe your training needs or choose a template: ").strip()
+    
+    if user_input.lower() in wizard.config_templates:
+        config_choice = user_input.lower()
     else:
-        recommended_shard_size = 1024
-        recommended_workers = min(8, cpu_count)
-        max_memory_usage = memory_gb * 0.8
+        config_choice = wizard.parse_natural_language_config(user_input)
     
-    logging.info(f"Recommended sharding config:")
-    logging.info(f"  Shard size: {recommended_shard_size} MB")
-    logging.info(f"  Workers: {recommended_workers}")
-    logging.info(f"  Max memory usage: {max_memory_usage:.1f} GB")
+    explanation = wizard.get_config_explanation(config_choice)
+    print(f"\nSelected configuration: {config_choice}")
+    print(f"Explanation: {explanation}")
     
-    return {
-        'max_shard_size_mb': recommended_shard_size,
-        'num_workers': recommended_workers,
-        'max_memory_usage_gb': max_memory_usage
-    }
-
-
-def auto_detect_dataset_strategy(data_path: str) -> str:
-    """Automatically detect the best dataset loading strategy."""
-    path = Path(data_path)
-    
-    if not path.exists():
-        return "file_not_found"
-    
-    # Check if it's already sharded
-    parent_dir = path.parent
-    shard_files = list(parent_dir.glob("*_shard_*.jsonl"))
-    if shard_files:
-        total_shard_size = sum(f.stat().st_size for f in shard_files) / (1024**3)
-        if total_shard_size > 10:  # > 10GB in shards
-            return "streaming"
-        else:
-            return "sharded"
-    
-    # Check file size
-    file_size_gb = path.stat().st_size / (1024**3)
-    
-    if file_size_gb < 0.5:  # < 500MB
-        return "memory"
-    elif file_size_gb < 10:  # < 10GB
-        return "sharded"
-    else:  # >= 10GB
-        return "streaming"
-
-
-def test_inference_precision(orchestrator):
-    """Test different inference precision settings."""
-    if not orchestrator.trainer:
-        logging.warning("No trainer available for precision testing")
-        return
-    
-    logging.info("\n" + "="*70)
-    logging.info("TESTING INFERENCE PRECISION")
-    logging.info("="*70)
-    
-    test_prompts = [
-        "What is artificial intelligence?",
-        "Explain machine learning in simple terms.",
-        "Write a short Python function to add two numbers."
-    ]
-    
-    try:
-        # Test generation with multiple precisions
-        for i, prompt in enumerate(test_prompts, 1):
-            logging.info(f"\nTest Prompt {i}: {prompt}")
-            logging.info("-" * 50)
-            
-            # Generate with different precisions
-            responses = orchestrator.trainer.generate_with_multiple_precisions(prompt)
-            
-            for precision, response in responses.items():
-                logging.info(f"{precision.upper()}: {response[:100]}{'...' if len(response) > 100 else ''}")
-        
-        # Benchmark different precisions
-        logging.info("\n" + "="*50)
-        logging.info("PRECISION BENCHMARK")
-        logging.info("="*50)
-        
-        benchmark_results = orchestrator.trainer.benchmark_inference_precision(
-            test_prompts=test_prompts[:2],  # Use fewer prompts for benchmark
-            max_new_tokens=50
-        )
-        
-        # Display benchmark results
-        for precision, results in benchmark_results.items():
-            if results['success']:
-                logging.info(f"{precision.upper()} Performance:")
-                logging.info(f"  Tokens/second: {results['tokens_per_second']:.1f}")
-                logging.info(f"  Avg time/prompt: {results['avg_time_per_prompt']:.3f}s")
-                logging.info(f"  Peak memory: {results['peak_memory_mb']:.1f}MB")
-            else:
-                logging.warning(f"{precision.upper()}: Failed to complete benchmark")
-                
-    except Exception as e:
-        logging.error(f"Precision testing failed: {e}")
-
-
-def create_sharding_aware_config(base_config, system_resources: dict, dataset_strategy: str):
-    """Create configuration optimized for the detected dataset strategy."""
-    
-    # Add sharding configuration to base config
-    # Use setattr to dynamically add attributes if they don't exist
-    setattr(base_config, 'max_shard_size_mb', system_resources['max_shard_size_mb'])
-    setattr(base_config, 'max_memory_usage_gb', system_resources['max_memory_usage_gb'])
-    setattr(base_config, 'enable_memory_mapping', True)
-    setattr(base_config, 'shard_shuffle', True)
-    
-    # Adjust batch size and workers based on strategy
-    if dataset_strategy == "streaming":
-        # For streaming datasets, use smaller batches and more workers
-        base_config.batch_size = min(base_config.batch_size, 1)
-        base_config.gradient_accumulation_steps = max(base_config.gradient_accumulation_steps, 8)
-        base_config.num_workers = system_resources['num_workers']
-        logging.info("Optimized config for streaming (massive dataset)")
-        
-    elif dataset_strategy == "sharded":
-        # For sharded datasets, balance batch size and workers
-        base_config.num_workers = max(2, system_resources['num_workers'] // 2)
-        logging.info("Optimized config for sharded (large dataset)")
-        
-    else:  # memory strategy
-        # For in-memory datasets, can use larger batches
-        base_config.num_workers = min(4, system_resources['num_workers'])
-        logging.info("Optimized config for in-memory (small dataset)")
-    
-    return base_config
+    return config_choice
 
 
 def main():
-    """Enhanced main function with comprehensive sharding support for any dataset size."""
-    # Setup basic logging first
-    setup_logging_basic()
+    """Enhanced main function with adaptive intelligence and natural language interface."""
+    # Setup advanced logging
+    setup_logging_advanced()
     
-    # Create directory structure
-    create_directory_structure()
+    # Create enhanced directory structure
+    create_enhanced_directory_structure()
     
-    # Check system resources
-    system_resources = check_system_resources()
+    # Initialize intelligent components
+    resource_manager = IntelligentResourceManager()
     
-    # Hardcoded arguments with enhanced sharding support
-    config_choice = 'debug'
-    config_file = None
+    print("\n" + "="*80)
+    print("ADAPTIVE AI-DRIVEN TRANSFORMER TRAINING SYSTEM")
+    print("   Self-Improving • Intelligent • Production-Ready")
+    print("="*80)
+    
+    # Display system information
+    print(f"\nSystem Information:")
+    system_info = resource_manager.system_info
+    print(f"   RAM: {system_info['memory_gb']:.1f}GB ({system_info['memory_usage_percent']:.1f}% used)")
+    print(f"   CPU: {system_info['cpu_count']} cores @ {system_info['cpu_freq']:.0f}MHz")
+    print(f"   GPU: {system_info['gpu_name']} ({system_info['gpu_memory_gb']:.1f}GB)" if system_info['gpu_memory_gb'] > 0 else "   GPU: None detected")
+    print(f"   Storage: {system_info['disk_free_gb']:.1f}GB free")
+    
+    # Resource recommendations
+    recommendations = resource_manager.get_resource_recommendations()
+    print(f"\nSystem Assessment:")
+    for component, recommendation in recommendations.items():
+        status_emoji = "✅" if "OK" in recommendation or "EXCELLENT" in recommendation else "⚠️" if "WARNING" in recommendation or "CAUTION" in recommendation else "🚨"
+        print(f"   {status_emoji} {component.upper()}: {recommendation}")
+    
+    # Configuration setup - you can modify these parameters
+    config_choice = 'debug'  # Change this or use interactive_configuration_setup()
+    natural_language_config = None  # e.g., "Train a 7B model optimized for code generation"
+    
+    # Uncomment for interactive setup:
+    # config_choice = interactive_configuration_setup()
+    
+    # Parse natural language if provided
+    if natural_language_config:
+        wizard = AdaptiveConfigurationWizard()
+        config_choice = wizard.parse_natural_language_config(natural_language_config)
+        print(f"\nInterpreted '{natural_language_config}' as: {config_choice}")
+    
+    # Training parameters - modify as needed
     train_data = 'oasst1_data/oasst1_train.jsonl'
     eval_data = 'data/eval.jsonl'
     epochs = 10
@@ -260,490 +614,257 @@ def main():
     grad_accum = 4
     precision = 'auto'
     inference_precision = 'auto'
-    experiment_name = 'LuminaAI_Experiment_' + datetime.now().strftime("%Y%m%d_%H%M%S")
-    resume = None
+    experiment_name = f'AdaptiveAI_Experiment_{datetime.now().strftime("%Y%m%d_%H%M%S")}'
     seed = 42
-    test_generation = True
-    test_precision = True
-    validate_data = None
+    
+    # Advanced features
+    enable_adaptive_intelligence = True
+    enable_meta_learning = True
+    enable_real_time_monitoring = True
+    enable_predictive_analytics = True
+    enable_interactive_debugging = False  # Set to True for interactive mode
+    
+    # Validation and processing flags
+    validate_data = None  # Set to data path to validate
+    process_oasst = None  # Set to (input_file, output_file) to process
     create_report = False
-    process_oasst = None
-    max_conversations = None
     check_environment = False
-    estimate_time = False
+    estimate_time = True
     dry_run = False
-    
-    # New sharding-specific options
-    force_streaming = False  # Force streaming mode even for smaller datasets
-    disable_sharding = False  # Disable sharding (for testing)
-    shard_size_mb = None  # Override shard size
-    
-    # Auto-detect dataset strategy
-    dataset_strategy = auto_detect_dataset_strategy(train_data)
-    logging.info(f"Detected dataset strategy: {dataset_strategy}")
     
     # Environment validation
     if check_environment:
-        logging.info("Checking training environment...")
+        logging.info("Validating training environment...")
         issues = validate_environment()
         if issues:
             logging.warning("Environment issues found:")
             for issue in issues:
-                logging.warning(f"  - {issue}")
+                logging.warning(f"     - {issue}")
         else:
-            logging.info("Environment looks good!")
+            logging.info("Environment validation passed!")
         
-        if not dry_run:
+        if dry_run:
             return 0
     
     # Data processing
     if process_oasst:
         input_file, output_file = process_oasst
         try:
-            count = process_oasst_data(input_file, output_file, max_conversations)
-            logging.info(f"Successfully processed {count} conversations")
+            count = process_oasst_data(input_file, output_file)
+            logging.info(f"Successfully processed {count:,} conversations")
             return 0
         except Exception as e:
             logging.error(f"Data processing failed: {e}")
             return 1
     
-    # Initialize tokenizer and log its details
+    # Initialize tokenizer
     try:
         tokenizer = ConversationTokenizer(model_name="gpt-4")
+        logging.info("Tokenizer initialized successfully")
     except Exception as e:
         logging.error(f"Failed to initialize tokenizer: {e}")
         return 1
     
-    # Data validation with sharding awareness
+    # Data validation
     if validate_data:
         try:
-            logging.info("Data Validation Results:")
+            logging.info(f"Validating data: {validate_data}")
             
-            # Check if we're validating a sharded dataset
             validate_path = Path(validate_data)
             if not validate_path.exists():
                 # Check for sharded files
                 shard_files = list(validate_path.parent.glob(f"{validate_path.stem}_shard_*.jsonl"))
                 if shard_files:
-                    logging.info(f"Found {len(shard_files)} shard files for validation")
-                    # Validate first shard as representative
+                    logging.info(f"Found {len(shard_files)} shard files")
                     validate_data = str(shard_files[0])
                 else:
-                    logging.error(f"Data validation failed - no file found: {validate_data}")
+                    logging.error(f"File not found: {validate_data}")
                     return 1
             
             stats = validate_data_comprehensive(validate_data, tokenizer)
             
-            if stats is None:
-                logging.error("Data validation failed - no stats returned")
-                return 1
-            
-            # Log validation results with safe access to keys
-            try:
-                # Handle conversation stats
-                if 'conversation_stats' in stats:
-                    conv_stats = stats['conversation_stats']
-                    valid_convs = conv_stats.get('valid_conversations', conv_stats.get('total_conversations', 0))
-                    logging.info(f"  Valid conversations: {valid_convs:,}")
-                elif 'total_conversations' in stats:
-                    logging.info(f"  Total conversations: {stats['total_conversations']:,}")
-                
-                # Handle quality metrics
-                if 'quality_metrics' in stats:
-                    qual_metrics = stats['quality_metrics']
-                    success_rate = qual_metrics.get('success_rate', qual_metrics.get('validation_success_rate', 0))
-                    logging.info(f"  Success rate: {success_rate:.2%}")
-                elif 'success_rate' in stats:
-                    logging.info(f"  Success rate: {stats['success_rate']:.2%}")
-                
-                # Handle token stats
-                if 'token_stats' in stats:
-                    token_stats = stats['token_stats']
-                    avg_tokens = token_stats.get('avg_tokens', token_stats.get('average_tokens', 0))
-                    logging.info(f"  Average tokens: {avg_tokens:.1f}")
-                elif 'avg_tokens' in stats:
-                    logging.info(f"  Average tokens: {stats['avg_tokens']:.1f}")
-                elif 'average_tokens' in stats:
-                    logging.info(f"  Average tokens: {stats['average_tokens']:.1f}")
-                
-                # Log dataset strategy
-                if 'sharding_strategy' in stats:
-                    logging.info(f"  Loading strategy: {stats['sharding_strategy']}")
-                
-                # Log additional useful stats
+            if stats:
+                logging.info("Validation Results:")
+                # Log stats safely
                 for key, value in stats.items():
-                    if key not in ['conversation_stats', 'quality_metrics', 'token_stats', 'sharding_strategy']:
-                        if isinstance(value, (int, float)):
-                            if isinstance(value, float) and 0 <= value <= 1:
-                                logging.info(f"  {key.replace('_', ' ').title()}: {value:.2%}")
-                            else:
-                                logging.info(f"  {key.replace('_', ' ').title()}: {value:,}")
-                        elif isinstance(value, str):
-                            logging.info(f"  {key.replace('_', ' ').title()}: {value}")
-                            
-            except Exception as stat_error:
-                logging.warning(f"Error processing stats: {stat_error}")
-                logging.info(f"Raw stats keys: {list(stats.keys())}")
-            
-            if create_report:
-                create_data_summary_report([validate_data], tokenizer)
+                    if isinstance(value, dict):
+                        continue
+                    elif isinstance(value, float) and 0 <= value <= 1:
+                        logging.info(f"   {key.replace('_', ' ').title()}: {value:.2%}")
+                    elif isinstance(value, (int, float)):
+                        logging.info(f"   {key.replace('_', ' ').title()}: {value:,}")
+                
+                if create_report:
+                    create_data_summary_report([validate_data], tokenizer)
+                    logging.info("Data summary report created")
             
             return 0
             
-        except FileNotFoundError:
-            logging.error(f"Data validation failed: File '{validate_data}' not found")
-            return 1
-        except KeyError as e:
-            logging.error(f"Data validation failed: Missing key {e}")
-            logging.debug(f"Available keys: {list(stats.keys()) if 'stats' in locals() else 'No stats available'}")
-            return 1
         except Exception as e:
             logging.error(f"Data validation failed: {e}")
-            logging.debug(traceback.format_exc())
             return 1
     
-    # Load configuration
+    # Load and optimize configuration
     try:
-        if config_file:
-            config = Config.load(config_file)
-        else:
-            config_map = {
-                'debug': ConfigPresets.debug,
-                'b1': ConfigPresets.b1,
-                'b7': ConfigPresets.b7,
-                'b14': ConfigPresets.b14,
-                'b50': ConfigPresets.b50,
-                'b100': ConfigPresets.b100,
-                'b200': ConfigPresets.b200,
-                'b300': ConfigPresets.b300,
-                'b3_inference': ConfigPresets.b3_inference,
-                'b6_quality': ConfigPresets.b6_quality,
-                'm120_speed': ConfigPresets.m120_speed,
-                'm70_memory': ConfigPresets.m70_memory
-            }
-            config = config_map[config_choice]()
+        config_map = {
+            'debug': ConfigPresets.debug,
+            'b1': ConfigPresets.b1,
+            'b7': ConfigPresets.b7,
+            'b14': ConfigPresets.b14,
+            'b50': ConfigPresets.b50,
+            'b100': ConfigPresets.b100,
+            'b200': ConfigPresets.b200,
+            'b300': ConfigPresets.b300,
+            'b3_inference': ConfigPresets.b3_inference,
+            'b6_quality': ConfigPresets.b6_quality,
+            'm120_speed': ConfigPresets.m120_speed,
+            'm70_memory': ConfigPresets.m70_memory
+        }
+        config = config_map[config_choice]()
         
-        # Apply system resource optimizations
-        config = create_sharding_aware_config(config, system_resources, dataset_strategy)
+        # Apply intelligent optimizations
+        try:
+            with open(train_data, 'r') as f:
+                dataset_size = sum(1 for _ in f)
+        except:
+            dataset_size = 10000  # Default estimate
         
-        # Apply hardcoded overrides
-        if epochs is not None:
-            config.num_epochs = epochs
-        if lr is not None:
-            config.learning_rate = lr
-        if batch_size is not None:
-            config.batch_size = batch_size
-        if grad_accum is not None:
-            config.gradient_accumulation_steps = grad_accum
-        if precision is not None:
-            config.precision = precision
-        if inference_precision is not None:
-            config.inference_precision = inference_precision
-        if experiment_name is not None:
-            config.experiment_name = experiment_name
-        if shard_size_mb is not None:
-            setattr(config, 'max_shard_size_mb', shard_size_mb)
+        optimizations = resource_manager.intelligent_config_optimization(config, dataset_size)
         
+        # Apply optimizations to config
+        for key, value in optimizations.items():
+            if key != 'reasoning' and hasattr(config, key):
+                setattr(config, key, value)
+                logging.info(f"Optimization: {key} = {value}")
+        
+        if 'reasoning' in optimizations:
+            logging.info(f"Optimization reasoning: {optimizations['reasoning']}")
+        
+        # Apply manual overrides
+        config.num_epochs = epochs
+        config.learning_rate = lr
+        config.batch_size = batch_size
+        config.gradient_accumulation_steps = grad_accum
+        config.precision = precision
+        config.inference_precision = inference_precision
+        config.experiment_name = experiment_name
         config.train_data_path = train_data
         config.eval_data_path = eval_data
         config.seed = seed
-        
-        # Override lr_scheduler to None if needed
         config.lr_scheduler = None
         
-        # Re-validate after overrides
         config.validate()
+        logging.info(f"Configuration loaded and optimized: {config_choice}")
         
     except Exception as e:
         logging.error(f"Configuration error: {e}")
         return 1
     
-    # Training time estimation with sharding awareness
+    # Predictive analysis
     if estimate_time:
         try:
-            # Estimate dataset size more accurately for sharded datasets
-            if Path(config.train_data_path).exists():
-                with open(config.train_data_path, 'r') as f:
-                    dataset_size = sum(1 for _ in f)
-            else:
-                # Check for sharded files
-                train_path = Path(config.train_data_path)
-                shard_files = list(train_path.parent.glob(f"{train_path.stem}_shard_*.jsonl"))
-                if shard_files:
-                    dataset_size = 0
-                    for shard_file in shard_files:
-                        try:
-                            with open(shard_file, 'r') as f:
-                                dataset_size += sum(1 for _ in f)
-                        except Exception:
-                            continue
-                    logging.info(f"Counted {dataset_size:,} conversations across {len(shard_files)} shards")
-                else:
-                    dataset_size = 10000  # Default estimate
+            analyzer = PredictiveTrainingAnalyzer()
+            predictions = analyzer.predict_training_time(config, dataset_size, system_info)
             
-            # Use estimate_training_time function
-            estimates = estimate_training_time(config, dataset_size)
+            print(f"\nTraining Time Predictions:")
+            for scenario, pred in predictions.items():
+                if scenario == 'recommendations':
+                    continue
+                print(f"   {scenario.upper()}: {pred['hours']:.1f} hours ({pred['days']:.1f} days)")
+                print(f"     Throughput: {pred['tokens_per_second']:,.0f} tokens/sec")
+                print(f"     {pred['description']}")
             
-            logging.info("Training Time Estimates:")
-            logging.info(f"  Dataset size: {dataset_size:,} conversations")
-            logging.info(f"  Dataset strategy: {dataset_strategy}")
-            logging.info(f"  Estimated time: {estimates['estimated_hours']:.1f} hours ({estimates['estimated_days']:.1f} days)")
-            logging.info(f"  Total tokens: {estimates['total_tokens']:,}")
-            logging.info(f"  Throughput: {estimates['tokens_per_second']:,} tokens/sec")
-            logging.info(f"  Memory utilization: {estimates['memory_utilization']:.1%}")
-            logging.info(f"  Training precision: {config.precision}")
-            logging.info(f"  Inference precision: {config.inference_precision}")
-            if hasattr(config, 'max_shard_size_mb'):
-                logging.info(f"  Shard size: {config.max_shard_size_mb}MB")
-            
-            if estimates['memory_warning']:
-                logging.warning("  High memory utilization expected - consider reducing batch size")
-            
-            if dataset_strategy == "streaming":
-                logging.info("  Note: Streaming mode will minimize memory usage")
+            if predictions['recommendations']:
+                print(f"\nTiming Recommendations:")
+                for rec in predictions['recommendations']:
+                    print(f"   • {rec}")
             
         except Exception as e:
             logging.error(f"Time estimation failed: {e}")
-            return 1
     
     # Dry run
     if dry_run:
-        logging.info("Dry run completed successfully!")
-        logging.info(f"Would use training precision: {config.precision}")
-        logging.info(f"Would use inference precision: {config.inference_precision}")
-        logging.info(f"Would use dataset strategy: {dataset_strategy}")
-        if hasattr(config, 'max_shard_size_mb'):
-            logging.info(f"Would use shard size: {config.max_shard_size_mb}MB")
+        print(f"\nDry Run Summary:")
+        print(f"   Configuration: {config_choice}")
+        print(f"   Dataset: {train_data}")
+        print(f"   Estimated size: {dataset_size:,} conversations")
+        print(f"   Training precision: {config.precision}")
+        print(f"   Inference precision: {config.inference_precision}")
+        print(f"   Adaptive features: {'Enabled' if enable_adaptive_intelligence else 'Disabled'}")
+        print(f"\nDry run completed - ready for training!")
         return 0
     
-    # Main training with sharding support
-    logging.info("="*80)
-    logging.info("PRODUCTION CONVERSATIONAL TRANSFORMER TRAINING WITH SHARDING")
-    logging.info("="*80)
-    
+    # Main adaptive training
     try:
-        # Memory monitoring setup
-        initial_memory = psutil.virtual_memory().percent
-        logging.info(f"Initial memory usage: {initial_memory:.1f}%")
+        print(f"\nInitializing Adaptive Training System...")
         
-        # Initialize training orchestrator
-        orchestrator = TrainingOrchestrator(config)
+        # Initialize adaptive orchestrator
+        orchestrator = AdaptiveTrainingOrchestrator(config)
         
         # Create DeepSeek config for parameter estimation  
         deepseek_config = config_to_deepseek_config(config)
         
-        # Log configuration with sharding info
-        logging.info(f"Configuration: {config_choice}")
-        logging.info(f"Model parameters: ~{estimate_parameters(deepseek_config):,}")
-        logging.info(f"Experiment: {config.experiment_name}")
-        logging.info(f"Training precision: {config.precision}")
-        logging.info(f"Inference precision: {config.inference_precision}")
-        logging.info(f"Dataset strategy: {dataset_strategy}")
-        logging.info(f"Shard configuration:")
-        if hasattr(config, 'max_shard_size_mb'):
-            logging.info(f"  Max shard size: {config.max_shard_size_mb}MB")
-        if hasattr(config, 'max_memory_usage_gb'):
-            logging.info(f"  Max memory usage: {config.max_memory_usage_gb:.1f}GB")
-        logging.info(f"  Workers: {config.num_workers}")
+        # Display training information
+        print(f"\nTraining Configuration:")
+        print(f"   Experiment: {config.experiment_name}")
+        print(f"   Model: ~{estimate_parameters(deepseek_config):,} parameters")
+        print(f"   Dataset: {dataset_size:,} conversations")
+        print(f"   Precision: {config.precision} (training) / {config.inference_precision} (inference)")
+        print(f"   Epochs: {config.num_epochs}")
+        print(f"   Batch size: {config.batch_size} (effective: {config.batch_size * config.gradient_accumulation_steps})")
+        print(f"   Learning rate: {config.learning_rate}")
         
-        # Run training with memory monitoring
-        memory_before = psutil.virtual_memory().percent
+        # Adaptive features status
+        print(f"\nAdaptive Intelligence Features:")
+        print(f"   Meta-learning: {'Enabled' if enable_meta_learning else 'Disabled'}")
+        print(f"   Real-time monitoring: {'Enabled' if enable_real_time_monitoring else 'Disabled'}")
+        print(f"   Predictive analytics: {'Enabled' if enable_predictive_analytics else 'Disabled'}")
+        print(f"   Interactive debugging: {'Enabled' if enable_interactive_debugging else 'Disabled'}")
         
-        orchestrator.run_training()
+        # Initialize interactive debugger if requested
+        debugger = None
+        if enable_interactive_debugging:
+            debugger = InteractiveTrainingDebugger(orchestrator)
+            print(f"\nInteractive debugging enabled - use debugger.get_debug_conversation() for insights")
         
-        memory_after = psutil.virtual_memory().percent
-        logging.info(f"Memory usage: {memory_before:.1f}% -> {memory_after:.1f}%")
+        # Run adaptive training
+        print(f"\n" + "="*60)
+        print(f"STARTING ADAPTIVE TRAINING")
+        print(f"="*60)
         
-        # Test precision if requested
-        if test_precision and orchestrator.trainer:
-            test_inference_precision(orchestrator)
+        start_time = datetime.now()
+        orchestrator.run_adaptive_training()
+        end_time = datetime.now()
         
-        # Test generation with sharding-aware memory management
-        if test_generation and orchestrator.trainer:
-            logging.info("\n" + "="*60)
-            logging.info("TESTING GENERATION WITH SHARDING SUPPORT")
-            logging.info("="*60)
-            
-            test_prompts = [
-                "Hello, how are you today?",
-                "What is machine learning?",
-                "Write a simple Python function to calculate factorial.",
-                "Explain the concept of recursion in programming.",
-                "What are the benefits of using transformers in NLP?"
-            ]
-            
-            # Memory monitoring during generation
-            memory_before_gen = psutil.virtual_memory().percent
-            
-            # Test with different inference precisions
-            for precision_test in ["fp32", "fp16", "bf16"]:
-                logging.info(f"\n--- Testing with {precision_test.upper()} inference precision ---")
-                
-                # Set inference precision
-                try:
-                    orchestrator.trainer.set_inference_precision(precision_test)
-                except Exception as e:
-                    logging.warning(f"Failed to set {precision_test} precision: {e}")
-                    continue
-                
-                for i, prompt in enumerate(test_prompts[:3], 1):  # Test first 3 prompts
-                    logging.info(f"\nTest {i}/3 ({precision_test.upper()}):")
-                    logging.info(f"User: {prompt}")
-                    try:
-                        # Monitor memory during generation
-                        mem_before = psutil.virtual_memory().percent
-                        
-                        response = orchestrator.trainer.generate(
-                            prompt,
-                            max_new_tokens=100,
-                            temperature=0.7
-                        )
-                        
-                        mem_after = psutil.virtual_memory().percent
-                        
-                        logging.info(f"Assistant: {response}")
-                        logging.info(f"Memory: {mem_before:.1f}% -> {mem_after:.1f}%")
-                        
-                        # Force garbage collection to manage memory
-                        if mem_after > 85:  # If memory usage is high
-                            gc.collect()
-                            try:
-                                import torch
-                                if torch.cuda.is_available():
-                                    torch.cuda.empty_cache()
-                            except ImportError:
-                                pass
-                            
-                    except Exception as e:
-                        logging.error(f"Generation failed with {precision_test}: {e}")
-                    logging.info("-" * 50)
-            
-            memory_after_gen = psutil.virtual_memory().percent
-            logging.info(f"\nGeneration memory impact: {memory_before_gen:.1f}% -> {memory_after_gen:.1f}%")
-            
-            # Reset to original inference precision
-            try:
-                orchestrator.trainer.set_inference_precision(config.inference_precision)
-                logging.info(f"\nReset inference precision to: {config.inference_precision}")
-            except Exception as e:
-                logging.warning(f"Failed to reset inference precision: {e}")
+        training_duration = (end_time - start_time).total_seconds()
+        print(f"\nTraining completed successfully!")
+        print(f"   Duration: {training_duration:.1f} seconds ({training_duration/3600:.2f} hours)")
         
-        # Final memory cleanup
-        final_memory = psutil.virtual_memory().percent
-        logging.info(f"\nFinal memory usage: {final_memory:.1f}%")
+        # Get final status
+        final_status = orchestrator.get_adaptive_status()
+        print(f"   Adaptive decisions made: {final_status.get('adaptive_decisions_made', 0)}")
+        print(f"   Metrics collected: {final_status.get('metrics_collected', 0)}")
+        print(f"   Meta-learning runs: {final_status.get('meta_learning_runs', 0)}")
         
-        if final_memory > 90:
-            logging.warning("High memory usage detected - running cleanup...")
-            gc.collect()
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-            except ImportError:
-                pass
-        
-        logging.info("\nTraining and testing completed successfully!")
-        logging.info(f"Dataset strategy used: {dataset_strategy}")
-        if hasattr(orchestrator.trainer, 'inference_precision'):
-            logging.info(f"Final inference precision: {orchestrator.trainer.inference_precision}")
-        
-        # Summary of sharding benefits
-        if dataset_strategy in ["sharded", "streaming"]:
-            logging.info("\nSharding Benefits Achieved:")
-            logging.info(f"  Memory efficient loading: Yes")
-            logging.info(f"  Scalable to massive datasets: Yes")
-            logging.info(f"  Parallel processing: Yes")
-            logging.info(f"  Automatic strategy selection: Yes")
+        # Interactive debugging session
+        if enable_interactive_debugging and debugger:
+            print(f"\nFinal Training Analysis:")
+            print(debugger.get_debug_conversation())
         
         return 0
         
     except KeyboardInterrupt:
-        logging.info("Training interrupted by user")
-        # Cleanup on interrupt
-        gc.collect()
-        try:
-            import torch
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except ImportError:
-            pass
+        print(f"\nTraining interrupted by user")
+        if 'orchestrator' in locals():
+            orchestrator.cleanup()
         return 1
     except Exception as e:
         logging.error(f"Training failed: {e}")
         logging.error(traceback.format_exc())
-        # Cleanup on error
-        gc.collect()
-        try:
-            import torch
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-        except ImportError:
-            pass
+        if 'orchestrator' in locals():
+            orchestrator.cleanup()
         return 1
 
 
-def test_sharding_system():
-    """Test the sharding system with different dataset sizes."""
-    logging.info("="*60)
-    logging.info("TESTING SHARDING SYSTEM")
-    logging.info("="*60)
-    
-    try:
-        # Test with different file sizes
-        test_cases = [
-            ("b1", 100),       # 100 conversations
-            ("b7", 1000),      # 1,000 conversations
-            ("b14", 10000),    # 10,000 conversations
-            ("b50", 50000),    # 50,000 conversations
-            ("b100", 100000),  # 100,000 conversations 
-            ("b200", 200000),  # 200,000 conversations
-            ("b300", 300000)   # 300,000 conversations
-        ]
-        
-        for test_name, conv_count in test_cases:
-            logging.info(f"\nTesting {test_name} dataset simulation ({conv_count:,} conversations)")
-            
-            # Create mock conversations
-            mock_conversations = []
-            for i in range(conv_count):
-                mock_conv = {
-                    'conversation_id': f'test_{i}',
-                    'messages': [
-                        {'role': 'user', 'content': f'Test question {i}', 'turn': 1},
-                        {'role': 'assistant', 'content': f'Test response {i}', 'turn': 2}
-                    ],
-                    'total_turns': 2
-                }
-                mock_conversations.append(mock_conv)
-            
-            # Test memory usage
-            import sys
-            memory_mb = sys.getsizeof(mock_conversations) / (1024 * 1024)
-            logging.info(f"  Memory usage: {memory_mb:.1f}MB")
-            
-            # Simulate sharding decision
-            if memory_mb < 100:
-                strategy = "memory"
-            elif memory_mb < 1000:
-                strategy = "sharded"
-            else:
-                strategy = "streaming"
-            
-            logging.info(f"  Recommended strategy: {strategy}")
-            
-            # Cleanup
-            del mock_conversations
-            gc.collect()
-    
-    except Exception as e:
-        logging.error(f"Sharding test failed: {e}")
-
-
 if __name__ == "__main__":
-    # Add sharding system test option
-    if len(sys.argv) > 1 and sys.argv[1] == "--test-sharding":
-        setup_logging_basic()
-        test_sharding_system()
-        exit(0)
-    
     exit(main())
