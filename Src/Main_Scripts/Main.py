@@ -11,7 +11,7 @@ import gc
 import json
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 # Add the current directory to Python path for imports
 sys.path.insert(0, str(Path(__file__).parent))
@@ -511,9 +511,6 @@ def setup_logging_advanced():
             logging.FileHandler(f'logs/training_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log')
         ]
     )
-    
-    # Create logs directory
-    Path('logs').mkdir(exist_ok=True)
 
 
 def create_enhanced_directory_structure():
@@ -563,11 +560,11 @@ def interactive_configuration_setup():
 
 def main():
     """Enhanced main function with adaptive intelligence and natural language interface."""
+    # Create enhanced directory structure first
+    create_enhanced_directory_structure()
+    
     # Setup advanced logging
     setup_logging_advanced()
-    
-    # Create enhanced directory structure
-    create_enhanced_directory_structure()
     
     # Initialize intelligent components
     resource_manager = IntelligentResourceManager()
