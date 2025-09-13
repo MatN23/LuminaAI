@@ -344,7 +344,7 @@ class ConfigPresets:
             num_layers=40,
             num_heads=40,
             num_kv_heads=10,
-            seq_length=4096,
+            seq_length=128000,  # Production context length like Claude
             intermediate_size=13824,
             
             # Massive-scale training
@@ -394,7 +394,7 @@ class ConfigPresets:
             num_layers=48,
             num_heads=56,
             num_kv_heads=14,
-            seq_length=8192,
+            seq_length=200000,  # Extended context length like GPT-4
             intermediate_size=18432,
             
             # Extreme-scale training
@@ -444,7 +444,7 @@ class ConfigPresets:
             num_layers=56,
             num_heads=64,
             num_kv_heads=16,
-            seq_length=8192,
+            seq_length=1000000,  # Production context within training budget
             intermediate_size=22016,
             
             # Production-scale training
@@ -494,7 +494,7 @@ class ConfigPresets:
             num_layers=64,
             num_heads=72,
             num_kv_heads=18,
-            seq_length=8192,
+            seq_length=32000,  # Budget-friendly research context
             intermediate_size=24576,
             
             # Research-scale training
