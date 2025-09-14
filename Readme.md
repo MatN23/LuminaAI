@@ -989,6 +989,38 @@ python Src/Main_Scripts/main.py --log-expert-usage --expert-usage-frequency 100
 
 Run with `--verbose --debug` flags for detailed error analysis and automated fix suggestions.
 
+## Project Structure
+
+```
+LuminaAI/
+├── Src/
+│   └── Main_Scripts/
+│       ├── main.py                     # Primary CLI interface and entry point
+│       ├── chat.py                     # Interactive chat interface for testing
+│       ├── core/                       # Core model and data components
+│       │   ├── model.py               # DeepSeek transformer implementation
+│       │   ├── tokenizer.py           # GPT-4 compatible tokenization
+│       │   ├── dataset.py             
+│       ├── training/                  
+│       │   ├── trainer.py             # Core training loop and optimization
+│       │   ├── orchestrator.py        # High-level training coordination         
+│       │   ├── checkpoint.py          # Checkpoint management system         
+│       │   ├── config_manager.py      # Configuration presets and validation
+│       │   ├── training_loops.py
+│       ├── monitoring/
+│       │   ├── logger.py              
+│       ├── utils/
+│       │   ├── data_processing.py     # Data validation and processing utilities
+│       │   ├── environment.py         # System validation and optimization
+│       │   ├── reporting.py           # Performance analysis and reporting
+|       ├── Setup.py
+├── requirements.txt                  # Python dependencies
+├── pyproject.toml                   # Project configuration
+├── .gitignore                       # Git ignore rules
+├── LICENSE                          # License file
+└── README.md                        # This documentation
+```
+
 ## Configuration System Details
 
 ### Configuration File Format
