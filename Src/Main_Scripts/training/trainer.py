@@ -11,23 +11,338 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import OneCycleLR, CosineAnnealingLR
 from torch.cuda.amp import autocast, GradScaler
 from contextlib import nullcontext
-from typing import Dict, Optional, Any, Union, List, Tuple  # FIXED: Added List and Tuple
+from typing import Dict, Optional, Any, Union, List, Tuple
 from pathlib import Path
 from datetime import datetime
 from dataclasses import asdict
 import numpy as np
+import json
+import os
+
+# DeepSpeed imports with fallback
+try:
+    import deepspeed
+    from deepspeed import DeepSpeedEngine
+    from deepspeed.runtime.zero.stage3 import estimate_zero3_model_states_mem_needs_all_live
+    from deepspeed.ops.adam import DeepSpeedCPUAdam, FusedAdam
+    from deepspeed.runtime.utils import see_memory_usage
+    DEEPSPEED_AVAILABLE = True
+    logging.info("DeepSpeed available")
+except ImportError:
+    DEEPSPEED_AVAILABLE = False
+    logging.warning("DeepSpeed not available - falling back to standard training")
+    
+    # Mock classes for fallback
+    class DeepSpeedEngine:
+        pass
 
 from core.dataset import create_dataloader
 from monitoring.logger import TrainingHealthMonitor
 from training.checkpoint import CheckpointManager
 
 
+class MoEOptimizationManager:
+    """Manages MoE-specific optimizations for routing balance and communication efficiency."""
+    
+    def __init__(self, config):
+        self.config = config
+        self.routing_stats = {
+            'expert_usage': {},
+            'load_balance_losses': [],
+            'routing_decisions': [],
+            'communication_overhead': []
+        }
+        self.optimization_history = []
+        
+    def create_deepspeed_moe_config(self, base_config: dict) -> dict:
+        """Create optimized DeepSpeed MoE configuration addressing common issues."""
+        
+        # Calculate optimal expert parallel size based on available GPUs
+        world_size = int(os.environ.get('WORLD_SIZE', 1))
+        num_experts = getattr(self.config, 'num_experts', 8)
+        
+        # Expert parallelism: Use smaller groups to reduce all-to-all overhead
+        # Rule: expert_parallel_size should divide evenly into world_size and num_experts
+        optimal_ep_size = self._calculate_optimal_expert_parallel_size(world_size, num_experts)
+        
+        moe_config = {
+            # Core MoE settings
+            "moe": {
+                "enabled": True,
+                "num_experts": num_experts,
+                "expert_parallel_size": optimal_ep_size,
+                "top_k": getattr(self.config, 'moe_top_k', 2),
+                
+                # ROUTING BALANCE OPTIMIZATIONS
+                "capacity_factor": getattr(self.config, 'capacity_factor', 2.8),  # Increased from default 1.25
+                "eval_capacity_factor": 3.2,  # Higher for evaluation
+                "min_capacity": 16,  # Ensure minimum tokens per expert
+                "use_residual": True,  # Handle dropped tokens
+                
+                # LOAD BALANCING
+                "load_balance_loss_coef": getattr(self.config, 'load_balancing_weight', 0.02),  # Increased
+                "load_balance_type": "aux_loss",  # Use auxiliary loss for better balance
+                "router_jitter_noise": 0.01,  # Add noise to prevent hot experts
+                
+                # COMMUNICATION OPTIMIZATIONS
+                "enable_expert_tensor_parallelism": True,
+                "all_to_all_dispatch": True,
+                "overlap_alltoall": True,  # Critical for multi-node
+                "comm_dtype": "fp16" if self.config.precision in ["fp16", "mixed_fp16"] else "bf16",
+                
+                # MEMORY OPTIMIZATIONS  
+                "pad_expert_input_to_capacity": True,  # Better GPU utilization
+                "enable_expert_weight_parallelism": True,
+                "moe_param_group": True,  # Group MoE params for ZeRO
+                
+                # EXPERT PLACEMENT STRATEGY
+                "expert_placement_policy": "balanced",  # Distribute experts evenly
+                "use_tutel": False,  # Disable for stability unless specifically needed
+            }
+        }
+        
+        # Update base config with MoE optimizations
+        base_config.update(moe_config)
+        
+        # Add ZeRO-3 configuration for MoE parameter sharding
+        if "zero_optimization" not in base_config:
+            base_config["zero_optimization"] = {}
+            
+        base_config["zero_optimization"].update({
+            "stage": 3,  # ZeRO-3 for parameter sharding
+            "offload_param": {
+                "device": "cpu" if getattr(self.config, 'cpu_offload', False) else "none",
+                "nvme_path": getattr(self.config, 'nvme_path', None),
+                "buffer_count": 5,
+                "buffer_size": 1e8,
+                "max_in_cpu": 1e9
+            },
+            "offload_optimizer": {
+                "device": "cpu" if getattr(self.config, 'cpu_offload_optimizer', False) else "none",
+                "nvme_path": getattr(self.config, 'nvme_path', None),
+                "buffer_count": 4,
+                "pin_memory": True,
+                "pipeline_read": True,
+                "pipeline_write": True,
+                "fast_init": False
+            },
+            "stage3_param_persistence_threshold": 1e4,  # Aggressive parameter offloading
+            "stage3_max_live_parameters": 1e9,
+            "stage3_prefetch_bucket_size": 5e7,
+            "memory_efficient_linear": True,  # Critical for MoE
+            "stage3_max_reuse_distance": 1000,
+        })
+        
+        logging.info(f"MoE Config: {num_experts} experts, EP size: {optimal_ep_size}, "
+                    f"capacity factor: {moe_config['moe']['capacity_factor']}")
+        
+        return base_config
+    
+    def _calculate_optimal_expert_parallel_size(self, world_size: int, num_experts: int) -> int:
+        """Calculate optimal expert parallel size to minimize all-to-all overhead."""
+        
+        # Find divisors of world_size that also work well with num_experts
+        possible_ep_sizes = []
+        for i in range(1, world_size + 1):
+            if world_size % i == 0:
+                # Check if this EP size works well with number of experts
+                experts_per_group = num_experts // i
+                if experts_per_group >= 1:  # At least 1 expert per parallel group
+                    possible_ep_sizes.append((i, experts_per_group))
+        
+        if not possible_ep_sizes:
+            return 1
+        
+        # Scoring function: prefer smaller EP sizes (less all-to-all) but not too small
+        # that we get too few experts per group
+        best_ep_size = 1
+        best_score = 0
+        
+        for ep_size, experts_per_group in possible_ep_sizes:
+            # Score based on:
+            # 1. Communication efficiency (smaller EP groups better)
+            # 2. Expert utilization (more experts per group better to a point)
+            # 3. Load balancing potential
+            
+            comm_score = 1.0 / ep_size  # Smaller EP size = less communication overhead
+            expert_score = min(experts_per_group / 4.0, 1.0)  # Diminishing returns after 4 experts/group
+            balance_score = 1.0 if experts_per_group > 1 else 0.5  # Prefer multiple experts per group
+            
+            total_score = comm_score * expert_score * balance_score
+            
+            if total_score > best_score:
+                best_score = total_score
+                best_ep_size = ep_size
+        
+        return best_ep_size
+    
+    def monitor_routing_balance(self, aux_losses: Dict[str, torch.Tensor], 
+                              routing_probs: Optional[torch.Tensor] = None):
+        """Monitor and log routing balance metrics."""
+        
+        # Track load balancing losses
+        if 'load_balance_loss' in aux_losses:
+            self.routing_stats['load_balance_losses'].append(aux_losses['load_balance_loss'].item())
+        
+        # Analyze routing probabilities if available
+        if routing_probs is not None:
+            # Calculate expert usage statistics
+            expert_usage = routing_probs.sum(dim=0).cpu().numpy()
+            total_tokens = routing_probs.sum().item()
+            
+            if total_tokens > 0:
+                usage_percentages = expert_usage / total_tokens * 100
+                
+                # Update running statistics
+                for expert_id, usage_pct in enumerate(usage_percentages):
+                    if expert_id not in self.routing_stats['expert_usage']:
+                        self.routing_stats['expert_usage'][expert_id] = []
+                    self.routing_stats['expert_usage'][expert_id].append(usage_pct)
+                
+                # Log warnings for severe imbalance
+                max_usage = usage_percentages.max()
+                min_usage = usage_percentages.min()
+                imbalance_ratio = max_usage / max(min_usage, 0.1)  # Avoid division by zero
+                
+                if imbalance_ratio > 10:  # More than 10x difference
+                    logging.warning(f"Severe routing imbalance detected: "
+                                  f"max usage {max_usage:.1f}%, min usage {min_usage:.1f}%")
+    
+    def get_routing_diagnostics(self) -> Dict[str, Any]:
+        """Get comprehensive routing diagnostics."""
+        diagnostics = {
+            'timestamp': time.time(),
+            'load_balance_trend': [],
+            'expert_balance_score': 0.0,
+            'routing_efficiency': 0.0,
+            'recommendations': []
+        }
+        
+        # Analyze load balance losses
+        if self.routing_stats['load_balance_losses']:
+            recent_losses = self.routing_stats['load_balance_losses'][-100:]  # Last 100 steps
+            diagnostics['load_balance_trend'] = {
+                'recent_avg': np.mean(recent_losses),
+                'trend': 'improving' if len(recent_losses) > 10 and recent_losses[-5:] < recent_losses[-10:-5] else 'stable'
+            }
+        
+        # Analyze expert usage balance
+        if self.routing_stats['expert_usage']:
+            expert_usages = []
+            for expert_id, usage_history in self.routing_stats['expert_usage'].items():
+                if usage_history:
+                    expert_usages.append(np.mean(usage_history[-50:]))  # Recent average
+            
+            if expert_usages:
+                usage_std = np.std(expert_usages)
+                usage_mean = np.mean(expert_usages)
+                balance_score = max(0, 1.0 - (usage_std / max(usage_mean, 1.0)))
+                diagnostics['expert_balance_score'] = balance_score
+                
+                # Generate recommendations
+                if balance_score < 0.7:
+                    diagnostics['recommendations'].append("Consider increasing load_balance_loss_coef")
+                    diagnostics['recommendations'].append("Try adding router jitter noise")
+                    
+                if usage_std > 5.0:
+                    diagnostics['recommendations'].append("Severe imbalance: consider adjusting capacity_factor")
+        
+        return diagnostics
+
+
+class CPUOffloadManager:
+    """Manages CPU offloading strategies for memory optimization."""
+    
+    def __init__(self, config):
+        self.config = config
+        self.offload_stats = {
+            'cpu_memory_usage': [],
+            'gpu_memory_saved': [],
+            'transfer_times': []
+        }
+        
+    def setup_cpu_offload(self, model, optimizer_config: Dict[str, Any]) -> Dict[str, Any]:
+        """Setup CPU offloading configuration."""
+        
+        # Determine what to offload based on available memory
+        cpu_offload_config = {
+            "offload_param": {"device": "none"},
+            "offload_optimizer": {"device": "none"}
+        }
+        
+        if getattr(self.config, 'cpu_offload', False):
+            # Parameter offloading
+            cpu_offload_config["offload_param"] = {
+                "device": "cpu",
+                "nvme_path": getattr(self.config, 'nvme_path', None),
+                "buffer_count": 5,
+                "buffer_size": int(1e8),
+                "max_in_cpu": int(1e9),
+                "pin_memory": True
+            }
+            
+            # Optimizer state offloading
+            if getattr(self.config, 'cpu_offload_optimizer', True):
+                cpu_offload_config["offload_optimizer"] = {
+                    "device": "cpu",
+                    "nvme_path": getattr(self.config, 'nvme_path', None),
+                    "buffer_count": 4,
+                    "pin_memory": True,
+                    "pipeline_read": True,
+                    "pipeline_write": True,
+                    "fast_init": False
+                }
+            
+            logging.info("CPU offloading enabled for parameters and optimizer states")
+            
+        # Advanced memory management for large models
+        if hasattr(self.config, 'aggressive_cpu_offload') and self.config.aggressive_cpu_offload:
+            # More aggressive settings for very large models
+            cpu_offload_config.update({
+                "stage3_param_persistence_threshold": 1e3,  # More aggressive
+                "stage3_max_live_parameters": int(5e8),     # Keep fewer params on GPU
+                "stage3_prefetch_bucket_size": int(1e7),    # Smaller buckets
+                "memory_efficient_linear": True,
+                "stage3_max_reuse_distance": 500,           # More aggressive reuse
+            })
+            
+            logging.info("Aggressive CPU offloading enabled")
+        
+        return cpu_offload_config
+    
+    def monitor_memory_usage(self):
+        """Monitor memory usage during training."""
+        try:
+            # GPU memory
+            if torch.cuda.is_available():
+                gpu_memory = torch.cuda.memory_allocated() / 1e9
+                gpu_reserved = torch.cuda.memory_reserved() / 1e9
+            else:
+                gpu_memory = gpu_reserved = 0
+            
+            # CPU memory
+            try:
+                import psutil
+                cpu_memory = psutil.virtual_memory()
+                cpu_usage_gb = (cpu_memory.total - cpu_memory.available) / 1e9
+                self.offload_stats['cpu_memory_usage'].append(cpu_usage_gb)
+            except ImportError:
+                cpu_usage_gb = 0
+            
+            # Log periodically
+            if len(self.offload_stats['cpu_memory_usage']) % 100 == 0:
+                logging.info(f"Memory usage - GPU: {gpu_memory:.2f}GB/{gpu_reserved:.2f}GB, "
+                           f"CPU: {cpu_usage_gb:.2f}GB")
+            
+        except Exception as e:
+            logging.debug(f"Memory monitoring failed: {e}")
+
+
 class PrecisionManager:
     """Manages different precision types and their configurations."""
     
-    # Comprehensive precision definitions
+    # Comprehensive precision definitions (keeping your existing implementation)
     PRECISION_CONFIGS = {
-        # Standard precisions
         "fp32": {
             "dtype": torch.float32,
             "name": "Float32",
@@ -53,10 +368,8 @@ class PrecisionManager:
             "memory_efficiency": 2.0,
             "speed_multiplier": 1.4,
             "numerical_stability": "very good",
-            "supported_devices": ["cuda"]  # Requires modern GPUs
+            "supported_devices": ["cuda"]
         },
-        
-        # Mixed precision variants
         "mixed_fp16": {
             "dtype": torch.float16,
             "name": "Mixed Float16",
@@ -75,21 +388,17 @@ class PrecisionManager:
             "numerical_stability": "excellent",
             "supported_devices": ["cuda"]
         },
-        
-        # Experimental precisions (if supported by PyTorch version)
         "tf32": {
-            "dtype": None,  # Special case - handled by CUDA
+            "dtype": None,
             "name": "TensorFloat-32",
             "description": "NVIDIA Tensor Float (19-bit precision)",
             "memory_efficiency": 1.0,
             "speed_multiplier": 1.2,
             "numerical_stability": "very good",
-            "supported_devices": ["cuda"]  # Ampere+ GPUs
+            "supported_devices": ["cuda"]
         },
-        
-        # Dynamic precision
         "dynamic": {
-            "dtype": None,  # Dynamically selected
+            "dtype": None,
             "name": "Dynamic",
             "description": "Automatically select best precision",
             "memory_efficiency": "variable",
@@ -107,18 +416,15 @@ class PrecisionManager:
         
         for precision, config in cls.PRECISION_CONFIGS.items():
             if device_type in config["supported_devices"]:
-                # Additional checks for specific precisions
                 if precision in ["bf16", "mixed_bf16"]:
                     if device_type == "cuda" and torch.cuda.is_available():
                         try:
-                            # Test if bf16 is actually supported
                             test_tensor = torch.tensor([1.0], dtype=torch.bfloat16, device=device)
                             supported.append(precision)
                         except:
                             continue
                 elif precision == "tf32":
                     if device_type == "cuda" and torch.cuda.is_available():
-                        # Check for Ampere architecture (compute capability >= 8.0)
                         if hasattr(torch.cuda, 'get_device_capability'):
                             capability = torch.cuda.get_device_capability(device.index or 0)
                             if capability[0] >= 8:
@@ -129,51 +435,35 @@ class PrecisionManager:
         return supported
     
     @classmethod
-    def get_precision_info(cls, precision: str) -> Dict[str, Any]:
-        """Get detailed information about a precision type."""
-        return cls.PRECISION_CONFIGS.get(precision, {})
-    
-    @classmethod
-    def auto_select_precision(cls, device: torch.device, 
-                            priority: str = "balanced") -> str:
-        """
-        Automatically select the best precision for the device.
-        
-        Args:
-            device: Target device
-            priority: Selection priority - "speed", "memory", "stability", "balanced"
-        """
+    def auto_select_precision(cls, device: torch.device, priority: str = "balanced") -> str:
+        """Automatically select the best precision for the device."""
         supported = cls.get_supported_precisions(device)
         
         if not supported:
             return "fp32"
         
         if priority == "speed":
-            # Prioritize speed: fp16 > bf16 > mixed > fp32
             for precision in ["fp16", "bf16", "mixed_fp16", "mixed_bf16", "tf32", "fp32"]:
                 if precision in supported:
                     return precision
         elif priority == "memory":
-            # Prioritize memory efficiency: fp16/bf16 > mixed > fp32
             for precision in ["fp16", "bf16", "mixed_fp16", "mixed_bf16", "fp32"]:
                 if precision in supported:
                     return precision
         elif priority == "stability":
-            # Prioritize numerical stability: bf16 > mixed_bf16 > fp32 > mixed_fp16 > fp16
             for precision in ["bf16", "mixed_bf16", "fp32", "mixed_fp16", "fp16"]:
                 if precision in supported:
                     return precision
         else:  # balanced
-            # Balance all factors: mixed_bf16 > bf16 > mixed_fp16 > fp16 > fp32
             for precision in ["mixed_bf16", "bf16", "mixed_fp16", "tf32", "fp16", "fp32"]:
                 if precision in supported:
                     return precision
         
-        return "fp32"  # Fallback
+        return "fp32"
 
 
 class EnhancedConversationTrainer:
-    """Production trainer with comprehensive monitoring, fault tolerance, and multiple precision support."""
+    """Production trainer with DeepSpeed, MoE optimizations, and CPU offloading."""
     
     def __init__(self, model, tokenizer, config, logger):
         self.model = model
@@ -182,37 +472,14 @@ class EnhancedConversationTrainer:
         self.logger = logger
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
-        # Initialize precision manager
+        # Enhanced managers
         self.precision_manager = PrecisionManager()
+        self.moe_optimizer = MoEOptimizationManager(config)
+        self.cpu_offload_manager = CPUOffloadManager(config)
         
-        # GPU setup and memory management
-        self._setup_gpu()
-        
-        # Move model to device
-        self.model = self.model.to(self.device)
-        
-        # Optimizer and scheduler
-        self.optimizer = self._create_optimizer()
-        self.scheduler = None
-        
-        # Training precision setup
-        self.training_precision = getattr(config, 'precision', 'fp32')
-        self.use_amp = self.training_precision in ["fp16", "bf16", "mixed_fp16", "mixed_bf16"] and torch.cuda.is_available()
-        self.scaler = GradScaler() if self.use_amp and self.training_precision in ["fp16", "mixed_fp16"] else None
-        
-        # Check PyTorch version for autocast compatibility
-        self.torch_version = torch.__version__
-        logging.info(f"PyTorch version: {self.torch_version}")
-        
-        # COMPREHENSIVE INFERENCE PRECISION SETUP
-        self.inference_precision = getattr(config, 'inference_precision', 'auto')
-        self._setup_inference_precision()
-        
-        # TF32 setup for modern GPUs
-        self._setup_tf32()
-        
-        # Model compilation
-        self._compile_model()
+        # DeepSpeed integration
+        self.use_deepspeed = DEEPSPEED_AVAILABLE and getattr(config, 'use_deepspeed', False)
+        self.deepspeed_engine = None
         
         # Training state
         self.global_step = 0
@@ -220,250 +487,234 @@ class EnhancedConversationTrainer:
         self.best_eval_loss = float('inf')
         self.patience_counter = 0
         self.should_stop = False
-        self.last_backup_time = time.time()
         
-        # Precision tracking
-        self.precision_stats = {
-            'training_precision': self.training_precision,
-            'inference_precision': self.inference_precision,
-            'supported_precisions': self.precision_manager.get_supported_precisions(self.device),
-            'precision_switches': [],  # Track precision changes
-            'performance_metrics': {}  # Track performance per precision
-        }
+        # Setup training components
+        self._setup_training()
         
-        # Metrics and monitoring
-        self.metrics = {
-            'train_losses': [],
-            'eval_losses': [],
-            'learning_rates': [],
-            'gradient_norms': [],
-            'throughput': [],
-            'epoch_times': [],
-            'precision_performance': {}  # NEW: Track performance per precision
-        }
-        
-        # Health monitoring
-        try:
-            self.health_monitor = TrainingHealthMonitor()
-        except Exception as e:
-            logging.warning(f"Failed to initialize health monitor: {e}")
-            # Create a simple fallback health monitor
-            class SimpleHealthMonitor:
-                def update(self, loss, grad_norm): pass
-                def get_status(self): return "OK"
-                def get_summary(self): return {}
-            self.health_monitor = SimpleHealthMonitor()
-        
-        # Checkpoint management - FIXED
-        try:
-            self.checkpoint_manager = CheckpointManager(config)
-        except Exception as e:
-            logging.error(f"Failed to initialize checkpoint manager: {e}")
-            # Create a simple fallback checkpoint manager
-            class SimpleCheckpointManager:
-                def __init__(self, config):
-                    self.config = config
-                    self.checkpoint_dir = Path("checkpoints")
-                    self.checkpoint_dir.mkdir(exist_ok=True)
-                
-                def save_checkpoint(self, model, optimizer, scheduler, global_step, epoch, metrics, suffix=""):
-                    checkpoint_path = self.checkpoint_dir / f"checkpoint_{suffix}_{global_step}.pt"
-                    torch.save({
-                        'model_state_dict': model.state_dict(),
-                        'optimizer_state_dict': optimizer.state_dict(),
-                        'scheduler_state_dict': scheduler.state_dict() if scheduler else None,
-                        'global_step': global_step,
-                        'epoch': epoch,
-                        'metrics': metrics
-                    }, checkpoint_path)
-                    logging.info(f"Checkpoint saved: {checkpoint_path}")
-                    return str(checkpoint_path)
-                
-                def load_checkpoint(self, path, model, optimizer=None, scheduler=None):
-                    checkpoint = torch.load(path, map_location='cpu')
-                    model.load_state_dict(checkpoint['model_state_dict'])
-                    if optimizer and 'optimizer_state_dict' in checkpoint:
-                        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-                    if scheduler and 'scheduler_state_dict' in checkpoint:
-                        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-                    return checkpoint.get('epoch', 0)
-                
-                def get_resume_path(self):
-                    checkpoints = list(self.checkpoint_dir.glob("*.pt"))
-                    return str(max(checkpoints, key=lambda x: x.stat().st_mtime)) if checkpoints else None
-            
-            self.checkpoint_manager = SimpleCheckpointManager(config)
-        
-        # Log initialization
-        logging.info(f"Trainer initialized on {self.device}")
-        logging.info(f"Model parameters: {self._count_parameters():,}")
-        logging.info(f"Training precision: {self.training_precision}")
-        logging.info(f"Inference precision: {self.inference_precision}")
-        logging.info(f"Supported precisions: {', '.join(self.precision_stats['supported_precisions'])}")
-        self._log_memory_usage("Initial")
+    def _setup_training(self):
+        """Setup training with DeepSpeed or fallback to standard training."""
+        if self.use_deepspeed:
+            self._setup_deepspeed_training()
+        else:
+            self._setup_standard_training()
     
-    def _setup_tf32(self):
-        """Setup TensorFloat-32 for modern NVIDIA GPUs."""
-        if torch.cuda.is_available() and hasattr(torch, 'backends'):
-            try:
-                if hasattr(torch.backends.cuda, 'matmul'):
-                    # Enable TF32 for matrix multiplications
-                    if self.training_precision == "tf32" or self.inference_precision == "tf32":
-                        torch.backends.cuda.matmul.allow_tf32 = True
-                        torch.backends.cudnn.allow_tf32 = True
-                        logging.info("TF32 enabled for CUDA operations")
-                    else:
-                        torch.backends.cuda.matmul.allow_tf32 = False
-                        torch.backends.cudnn.allow_tf32 = False
-            except Exception as e:
-                logging.debug(f"TF32 setup failed: {e}")
-    
-    def _setup_inference_precision(self):
-        """Setup inference precision with comprehensive auto-detection."""
-        if self.inference_precision == "auto":
-            self.inference_precision = self.precision_manager.auto_select_precision(
-                self.device, priority="balanced"
+    def _setup_deepspeed_training(self):
+        """Setup DeepSpeed training with MoE and CPU offloading optimizations."""
+        logging.info("Initializing DeepSpeed training...")
+        
+        # Create DeepSpeed configuration
+        ds_config = self._create_deepspeed_config()
+        
+        # Initialize DeepSpeed engine
+        try:
+            self.deepspeed_engine, optimizer, _, lr_scheduler = deepspeed.initialize(
+                model=self.model,
+                config=ds_config,
+                model_parameters=self.model.parameters()
             )
-            logging.info(f"Auto-selected inference precision: {self.inference_precision}")
-        elif self.inference_precision == "dynamic":
-            # Dynamic precision will be selected per inference call
-            logging.info("Dynamic precision enabled - will select best precision per inference")
-        
-        # Validate precision
-        supported = self.precision_manager.get_supported_precisions(self.device)
-        if self.inference_precision not in supported and self.inference_precision != "dynamic":
-            logging.warning(f"Inference precision {self.inference_precision} not supported, falling back to auto-selection")
-            self.inference_precision = self.precision_manager.auto_select_precision(self.device)
-        
-        # Log precision info
-        if self.inference_precision != "dynamic":
-            precision_info = self.precision_manager.get_precision_info(self.inference_precision)
-            if precision_info:
-                logging.info(f"Inference precision info: {precision_info['name']} - {precision_info['description']}")
+            
+            self.optimizer = optimizer
+            self.scheduler = lr_scheduler
+            self.model = self.deepspeed_engine
+            
+            # Log DeepSpeed setup
+            logging.info(f"DeepSpeed initialized:")
+            logging.info(f"  World size: {self.deepspeed_engine.world_size}")
+            logging.info(f"  Local rank: {self.deepspeed_engine.local_rank}")
+            logging.info(f"  ZeRO stage: {ds_config.get('zero_optimization', {}).get('stage', 'disabled')}")
+            
+            if ds_config.get('moe', {}).get('enabled', False):
+                logging.info(f"  MoE enabled: {ds_config['moe']['num_experts']} experts")
+                logging.info(f"  Expert parallel size: {ds_config['moe']['expert_parallel_size']}")
+            
+            # Memory estimation
+            if hasattr(self.deepspeed_engine, 'estimate_model_mem_needs'):
+                try:
+                    mem_estimate = self.deepspeed_engine.estimate_model_mem_needs()
+                    logging.info(f"  Estimated memory needs: {mem_estimate}")
+                except Exception as e:
+                    logging.debug(f"Memory estimation failed: {e}")
+            
+        except Exception as e:
+            logging.error(f"DeepSpeed initialization failed: {e}")
+            logging.info("Falling back to standard training")
+            self.use_deepspeed = False
+            self._setup_standard_training()
     
-    def set_inference_precision(self, precision: str):
-        """
-        Dynamically change inference precision with validation.
+    def _create_deepspeed_config(self) -> Dict[str, Any]:
+        """Create comprehensive DeepSpeed configuration."""
         
-        Args:
-            precision: Target precision type
-        """
-        old_precision = self.inference_precision
+        # Base configuration
+        ds_config = {
+            "train_batch_size": getattr(self.config, 'effective_batch_size', 
+                                      self.config.batch_size * getattr(self.config, 'gradient_accumulation_steps', 1)),
+            "train_micro_batch_size_per_gpu": self.config.batch_size,
+            "gradient_accumulation_steps": getattr(self.config, 'gradient_accumulation_steps', 1),
+            
+            # Precision settings
+            "fp16": {
+                "enabled": self.config.precision in ["fp16", "mixed_fp16"],
+                "auto_cast": False,
+                "loss_scale": 0,
+                "initial_scale_power": 16,
+                "loss_scale_window": 1000,
+                "hysteresis": 2,
+                "min_loss_scale": 1
+            },
+            "bf16": {
+                "enabled": self.config.precision in ["bf16", "mixed_bf16"]
+            },
+            
+            # Gradient clipping
+            "gradient_clipping": getattr(self.config, 'max_grad_norm', 1.0),
+            
+            # Learning rate scheduler
+            "scheduler": {
+                "type": "WarmupLR",
+                "params": {
+                    "warmup_min_lr": 0.0,
+                    "warmup_max_lr": self.config.learning_rate,
+                    "warmup_num_steps": int(getattr(self.config, 'warmup_ratio', 0.1) * 
+                                          getattr(self.config, 'max_steps', 1000))
+                }
+            },
+            
+            # Communication settings for multi-GPU
+            "communication_data_type": "fp16" if self.config.precision in ["fp16", "mixed_fp16"] else "bf16",
+            "allgather_partitions": True,
+            "allgather_bucket_size": 5e8,
+            "overlap_comm": True,
+            "reduce_scatter": True,
+            "reduce_bucket_size": 5e8,
+            "contiguous_gradients": True,
+            
+            # Logging
+            "steps_per_print": 100,
+            "wall_clock_breakdown": False,
+            "dump_state": False
+        }
         
-        # Validate precision
-        if precision == "auto":
-            precision = self.precision_manager.auto_select_precision(self.device)
-        elif precision not in ["dynamic"] + self.precision_manager.get_supported_precisions(self.device):
-            logging.error(f"Precision {precision} not supported on {self.device}")
-            return False
+        # Add optimizer configuration
+        ds_config["optimizer"] = self._create_optimizer_config()
         
-        self.inference_precision = precision
+        # Add MoE configuration if model uses MoE
+        if hasattr(self.config, 'use_moe') and self.config.use_moe:
+            ds_config = self.moe_optimizer.create_deepspeed_moe_config(ds_config)
+        else:
+            # Standard ZeRO configuration
+            ds_config["zero_optimization"] = self._create_zero_config()
         
-        # Update TF32 settings if needed
-        if precision == "tf32" or old_precision == "tf32":
-            self._setup_tf32()
+        # Add CPU offloading configuration
+        cpu_offload_config = self.cpu_offload_manager.setup_cpu_offload(self.model, ds_config["optimizer"])
+        ds_config["zero_optimization"].update(cpu_offload_config)
         
-        # Track precision change
-        self.precision_stats['precision_switches'].append({
-            'timestamp': time.time(),
-            'old_precision': old_precision,
-            'new_precision': precision,
-            'step': self.global_step
+        # Advanced optimizations
+        ds_config.update({
+            "activation_checkpointing": {
+                "partition_activations": True,
+                "cpu_checkpointing": getattr(self.config, 'cpu_offload', False),
+                "contiguous_memory_optimization": True,
+                "number_checkpoints": 4,
+                "synchronize_checkpoint_boundary": True,
+                "profile": False
+            },
+            
+            "aio": {
+                "block_size": 1048576,
+                "queue_depth": 8,
+                "thread_count": 1,
+                "single_submit": False,
+                "overlap_events": True
+            } if getattr(self.config, 'nvme_path', None) else None
         })
         
-        logging.info(f"Inference precision changed: {old_precision} → {precision}")
-        return True
+        # Remove None values
+        ds_config = {k: v for k, v in ds_config.items() if v is not None}
+        
+        return ds_config
     
-    def get_all_precision_info(self) -> Dict[str, Dict[str, Any]]:
-        """Get comprehensive information about all precision types."""
-        info = {}
-        supported = self.precision_manager.get_supported_precisions(self.device)
+    def _create_optimizer_config(self) -> Dict[str, Any]:
+        """Create optimizer configuration for DeepSpeed."""
         
-        for precision in self.precision_manager.PRECISION_CONFIGS.keys():
-            precision_info = self.precision_manager.get_precision_info(precision).copy()
-            precision_info['supported'] = precision in supported
-            precision_info['current_training'] = precision == self.training_precision
-            precision_info['current_inference'] = precision == self.inference_precision
-            info[precision] = precision_info
-        
-        return info
-    
-    def _get_autocast_context(self, precision: Optional[str] = None, for_inference: bool = False):
-        """
-        Get autocast context with comprehensive precision support.
-        
-        Args:
-            precision: Override precision (if None, uses training/inference precision)
-            for_inference: Whether this is for inference (affects precision selection)
-        """
-        # Determine target precision
-        if precision is None:
-            target_precision = self.inference_precision if for_inference else self.training_precision
+        if getattr(self.config, 'cpu_offload_optimizer', False):
+            # Use CPU Adam for offloaded optimizer states
+            optimizer_config = {
+                "type": "DeepSpeedCPUAdam",
+                "params": {
+                    "lr": self.config.learning_rate,
+                    "betas": [0.9, 0.95],
+                    "eps": 1e-8,
+                    "weight_decay": getattr(self.config, 'weight_decay', 0.01)
+                }
+            }
         else:
-            target_precision = precision
+            # Use FusedAdam for GPU training
+            optimizer_config = {
+                "type": "AdamW",
+                "params": {
+                    "lr": self.config.learning_rate,
+                    "betas": [0.9, 0.95],
+                    "eps": 1e-8,
+                    "weight_decay": getattr(self.config, 'weight_decay', 0.01)
+                }
+            }
         
-        # Handle dynamic precision
-        if target_precision == "dynamic":
-            target_precision = self.precision_manager.auto_select_precision(
-                self.device, priority="speed" if for_inference else "balanced"
-            )
+        return optimizer_config
+    
+    def _create_zero_config(self) -> Dict[str, Any]:
+        """Create ZeRO optimization configuration."""
         
-        # Handle different precision types
-        if target_precision == "fp32" or not torch.cuda.is_available():
-            return nullcontext()
+        zero_stage = getattr(self.config, 'zero_stage', 3)
         
-        elif target_precision == "tf32":
-            # TF32 doesn't use autocast, it's enabled globally
-            return nullcontext()
+        zero_config = {
+            "stage": zero_stage,
+            "allgather_partitions": True,
+            "allgather_bucket_size": 5e8,
+            "overlap_comm": True,
+            "reduce_scatter": True,
+            "reduce_bucket_size": 5e8,
+            "contiguous_gradients": True,
+            "cpu_offload": getattr(self.config, 'cpu_offload', False)
+        }
         
-        elif target_precision in ["fp16", "mixed_fp16"]:
+        if zero_stage >= 2:
+            zero_config.update({
+                "stage3_param_persistence_threshold": 1e4,
+                "stage3_max_live_parameters": 1e9,
+                "stage3_prefetch_bucket_size": 5e7,
+                "memory_efficient_linear": True,
+            })
+        
+        return zero_config
+    
+    def _setup_standard_training(self):
+        """Setup standard PyTorch training as fallback."""
+        logging.info("Setting up standard PyTorch training...")
+        
+        # Move model to device
+        self.model = self.model.to(self.device)
+        
+        # Create optimizer
+        self.optimizer = self._create_standard_optimizer()
+        self.scheduler = None
+        
+        # Mixed precision setup
+        self.training_precision = getattr(self.config, 'precision', 'fp32')
+        self.use_amp = self.training_precision in ["fp16", "bf16", "mixed_fp16", "mixed_bf16"] and torch.cuda.is_available()
+        self.scaler = GradScaler() if self.use_amp and self.training_precision in ["fp16", "mixed_fp16"] else None
+        
+        # Model compilation
+        if getattr(self.config, 'compile', False) and hasattr(torch, 'compile'):
             try:
-                return autocast(device_type='cuda', dtype=torch.float16)
-            except TypeError:
-                return autocast(enabled=True)
+                self.model = torch.compile(self.model, mode='default')
+                logging.info("Model compiled successfully")
+            except Exception as e:
+                logging.warning(f"Model compilation failed: {e}")
         
-        elif target_precision in ["bf16", "mixed_bf16"]:
-            try:
-                return autocast(device_type='cuda', dtype=torch.bfloat16)
-            except TypeError:
-                return autocast(enabled=True)
-        
-        else:
-            # Fallback
-            return nullcontext()
+        logging.info(f"Standard training setup complete - Device: {self.device}")
     
-    def _count_parameters(self):
-        """Count model parameters."""
-        try:
-            return sum(p.numel() for p in self.model.parameters())
-        except:
-            return 0
-    
-    def _setup_gpu(self):
-        """Setup GPU with optimal configuration."""
-        if torch.cuda.is_available():
-            # Clear cache
-            torch.cuda.empty_cache()
-            torch.cuda.synchronize()
-            
-            # Set memory fraction
-            torch.cuda.set_per_process_memory_fraction(0.85)
-            
-            # Log GPU info
-            gpu_props = torch.cuda.get_device_properties(0)
-            logging.info(f"GPU: {gpu_props.name}, Memory: {gpu_props.total_memory / 1e9:.1f}GB")
-            
-            # Log compute capability for TF32 support
-            if hasattr(torch.cuda, 'get_device_capability'):
-                capability = torch.cuda.get_device_capability(0)
-                logging.info(f"CUDA Compute Capability: {capability[0]}.{capability[1]}")
-                if capability[0] >= 8:
-                    logging.info("TF32 precision available (Ampere+ GPU)")
-        else:
-            logging.warning("CUDA not available, using CPU")
-    
-    def _create_optimizer(self) -> torch.optim.Optimizer:
-        """Create optimizer with parameter grouping."""
+    def _create_standard_optimizer(self) -> torch.optim.Optimizer:
+        """Create standard PyTorch optimizer."""
         # Separate parameters for weight decay
         decay_params = []
         no_decay_params = []
@@ -481,7 +732,6 @@ class EnhancedConversationTrainer:
         ]
         
         try:
-            # Use fused optimizer if available
             return AdamW(
                 param_groups,
                 lr=self.config.learning_rate,
@@ -490,7 +740,6 @@ class EnhancedConversationTrainer:
                 fused=torch.cuda.is_available()
             )
         except Exception:
-            # Fallback to standard AdamW
             return AdamW(
                 param_groups,
                 lr=self.config.learning_rate,
@@ -498,46 +747,37 @@ class EnhancedConversationTrainer:
                 eps=1e-8
             )
     
-    def _compile_model(self):
-        """Compile model with error handling."""
-        if getattr(self.config, 'compile', False) and hasattr(torch, 'compile'):
-            try:
-                logging.info("Compiling model...")
-                self.model = torch.compile(self.model, mode='default')
-                logging.info("Model compiled successfully")
-            except Exception as e:
-                logging.warning(f"Model compilation failed: {e}")
-    
-    def _setup_scheduler(self, total_steps: int):
-        """Setup learning rate scheduler."""
-        warmup_ratio = getattr(self.config, 'warmup_ratio', 0.1)
-        warmup_steps = int(total_steps * warmup_ratio)
+    def _get_autocast_context(self, precision: Optional[str] = None, for_inference: bool = False):
+        """Get autocast context with comprehensive precision support."""
+        if self.use_deepspeed:
+            return nullcontext()  # DeepSpeed handles precision internally
         
-        lr_scheduler = getattr(self.config, 'lr_scheduler', None)
+        # Use existing precision logic for standard training
+        target_precision = precision or (self.inference_precision if for_inference else self.training_precision)
         
-        if lr_scheduler == "cosine":
-            self.scheduler = CosineAnnealingLR(
-                self.optimizer, T_max=total_steps, eta_min=getattr(self.config, 'min_lr', 1e-6)
+        if target_precision == "dynamic":
+            target_precision = self.precision_manager.auto_select_precision(
+                self.device, priority="speed" if for_inference else "balanced"
             )
-        elif lr_scheduler == "onecycle":
-            self.scheduler = OneCycleLR(
-                self.optimizer, max_lr=self.config.learning_rate,
-                total_steps=total_steps, pct_start=warmup_ratio
-            )
-        else:  # linear
+        
+        if target_precision == "fp32" or not torch.cuda.is_available():
+            return nullcontext()
+        elif target_precision in ["fp16", "mixed_fp16"]:
             try:
-                from torch.optim.lr_scheduler import LinearLR
-                self.scheduler = LinearLR(
-                    self.optimizer, start_factor=0.1, total_iters=warmup_steps
-                )
-            except ImportError:
-                # Fallback for older PyTorch versions
-                from torch.optim.lr_scheduler import StepLR
-                self.scheduler = StepLR(self.optimizer, step_size=warmup_steps, gamma=0.1)
+                return autocast(device_type='cuda', dtype=torch.float16)
+            except TypeError:
+                return autocast(enabled=True)
+        elif target_precision in ["bf16", "mixed_bf16"]:
+            try:
+                return autocast(device_type='cuda', dtype=torch.bfloat16)
+            except TypeError:
+                return autocast(enabled=True)
+        else:
+            return nullcontext()
     
     def compute_loss(self, logits: torch.Tensor, labels: torch.Tensor, 
                     loss_weights: torch.Tensor) -> Dict[str, torch.Tensor]:
-        """Compute weighted loss with detailed metrics."""
+        """Compute weighted loss with MoE auxiliary losses."""
         # Flatten tensors
         flat_logits = logits.view(-1, logits.size(-1))
         flat_labels = labels.view(-1)
@@ -567,7 +807,7 @@ class EnhancedConversationTrainer:
         
         # Compute additional metrics
         raw_loss = (loss * mask).sum() / mask.sum().clamp(min=1)
-        perplexity = torch.exp(raw_loss.clamp(max=10))  # Clamp to prevent overflow
+        perplexity = torch.exp(raw_loss.clamp(max=10))
         
         return {
             'loss': final_loss,
@@ -577,31 +817,71 @@ class EnhancedConversationTrainer:
         }
     
     def train_step(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
-        """Enhanced training step with comprehensive monitoring."""
+        """Enhanced training step with DeepSpeed and MoE support."""
+        if self.use_deepspeed:
+            return self._deepspeed_train_step(batch)
+        else:
+            return self._standard_train_step(batch)
+    
+    def _deepspeed_train_step(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
+        """DeepSpeed training step with MoE optimization monitoring."""
+        # Move batch to device
+        batch = {k: v.to(self.device, non_blocking=True) for k, v in batch.items()}
+        
+        if batch['input_ids'].numel() == 0:
+            return {'loss': 0.0, 'perplexity': float('inf'), 'valid_tokens': 0}
+        
+        # Forward pass
+        output = self.deepspeed_engine(batch['input_ids'], batch['attention_mask'])
+        
+        # Handle MoE outputs
+        aux_losses = {}
+        if isinstance(output, tuple):
+            if len(output) == 3:  # (logits, total_aux_loss, aux_losses_dict)
+                logits, total_aux_loss, aux_losses = output
+            else:  # (logits, total_aux_loss)
+                logits, total_aux_loss = output
+            loss_dict = self.compute_loss(logits, batch['labels'], batch['loss_weights'])
+            loss_dict['loss'] = loss_dict['loss'] + total_aux_loss
+            
+            # Monitor MoE routing if available
+            if aux_losses:
+                self.moe_optimizer.monitor_routing_balance(aux_losses)
+        else:
+            logits = output
+            loss_dict = self.compute_loss(logits, batch['labels'], batch['loss_weights'])
+        
+        loss = loss_dict['loss']
+        
+        # Backward pass (DeepSpeed handles everything)
+        self.deepspeed_engine.backward(loss)
+        
+        return {
+            'loss': loss.item() * getattr(self.config, 'gradient_accumulation_steps', 1),
+            'raw_loss': loss_dict['raw_loss'].item(),
+            'perplexity': loss_dict['perplexity'].item(),
+            'valid_tokens': loss_dict['valid_tokens'].item()
+        }
+    
+    def _standard_train_step(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
+        """Standard PyTorch training step."""
         self.model.train()
         
         # Move batch to device
         batch = {k: v.to(self.device, non_blocking=True) for k, v in batch.items()}
         
-        # Skip empty batches
         if batch['input_ids'].numel() == 0:
             return {'loss': 0.0, 'perplexity': float('inf'), 'valid_tokens': 0}
         
-        # Forward pass with training precision
+        # Forward pass with precision
         with self._get_autocast_context(for_inference=False):
-            # Get the output from the model forward pass
             output = self.model(batch['input_ids'], batch['attention_mask'])
             
-            # Handle both return types: (logits, aux_loss) or just logits
             if isinstance(output, tuple):
-                # Unpack the tuple: (logits, total_aux_loss, aux_losses)
                 logits, total_aux_loss, aux_losses = output
-                # Compute the standard language modeling loss
                 loss_dict = self.compute_loss(logits, batch['labels'], batch['loss_weights'])
-                # Add the MoE auxiliary loss to the main loss
                 loss_dict['loss'] = loss_dict['loss'] + total_aux_loss
             else:
-                # Standard model, just get logits
                 logits = output
                 loss_dict = self.compute_loss(logits, batch['labels'], batch['loss_weights'])
         
@@ -618,7 +898,6 @@ class EnhancedConversationTrainer:
         else:
             loss.backward()
         
-        # Return metrics
         return {
             'loss': loss.item() * getattr(self.config, 'gradient_accumulation_steps', 1),
             'raw_loss': loss_dict['raw_loss'].item(),
@@ -627,7 +906,32 @@ class EnhancedConversationTrainer:
         }
     
     def optimizer_step(self) -> Dict[str, float]:
-        """Enhanced optimizer step with gradient monitoring."""
+        """Enhanced optimizer step with DeepSpeed support."""
+        if self.use_deepspeed:
+            return self._deepspeed_optimizer_step()
+        else:
+            return self._standard_optimizer_step()
+    
+    def _deepspeed_optimizer_step(self) -> Dict[str, float]:
+        """DeepSpeed optimizer step."""
+        # DeepSpeed handles gradient clipping, optimization, and LR scheduling internally
+        self.deepspeed_engine.step()
+        
+        # Get metrics
+        current_lr = self.deepspeed_engine.get_lr()[0] if hasattr(self.deepspeed_engine, 'get_lr') else self.config.learning_rate
+        
+        # Get gradient norm if available
+        grad_norm = 0.0
+        try:
+            if hasattr(self.deepspeed_engine, 'get_global_grad_norm'):
+                grad_norm = self.deepspeed_engine.get_global_grad_norm()
+        except:
+            pass
+        
+        return {'grad_norm': grad_norm, 'lr': current_lr}
+    
+    def _standard_optimizer_step(self) -> Dict[str, float]:
+        """Standard optimizer step."""
         # Unscale gradients for AMP
         if self.use_amp and self.scaler is not None:
             self.scaler.unscale_(self.optimizer)
@@ -666,15 +970,14 @@ class EnhancedConversationTrainer:
         return {'grad_norm': grad_norm.item(), 'lr': current_lr}
     
     @torch.no_grad()
-    def evaluate(self, eval_dataset, max_batches: int = 100, 
-                 precision_override: Optional[str] = None) -> Dict[str, float]:
-        """Comprehensive evaluation with precision control."""
-        self.model.eval()
+    def evaluate(self, eval_dataset, max_batches: int = 100) -> Dict[str, float]:
+        """Enhanced evaluation with DeepSpeed support."""
+        if self.use_deepspeed:
+            self.deepspeed_engine.eval()
+        else:
+            self.model.eval()
         
         eval_dataloader = create_dataloader(eval_dataset, self.config, shuffle=False)
-        
-        # Determine evaluation precision
-        eval_precision = precision_override or self.inference_precision
         
         total_loss = 0.0
         total_raw_loss = 0.0
@@ -683,7 +986,7 @@ class EnhancedConversationTrainer:
         
         eval_start_time = time.time()
         
-        # Track memory usage for this precision
+        # Monitor memory usage
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats()
         
@@ -696,13 +999,20 @@ class EnhancedConversationTrainer:
             if batch['input_ids'].numel() == 0:
                 continue
             
-            with self._get_autocast_context(precision=eval_precision, for_inference=True):
-                output = self.model(batch['input_ids'], batch['attention_mask'])
-                if isinstance(output, tuple):
-                    logits = output[0]  # Just take the logits for evaluation
-                else:
-                    logits = output
-                loss_dict = self.compute_loss(logits, batch['labels'], batch['loss_weights'])
+            # Forward pass
+            if self.use_deepspeed:
+                output = self.deepspeed_engine(batch['input_ids'], batch['attention_mask'])
+            else:
+                with self._get_autocast_context(for_inference=True):
+                    output = self.model(batch['input_ids'], batch['attention_mask'])
+            
+            # Handle outputs
+            if isinstance(output, tuple):
+                logits = output[0]  # Just take the logits for evaluation
+            else:
+                logits = output
+            
+            loss_dict = self.compute_loss(logits, batch['labels'], batch['loss_weights'])
             
             if not (torch.isnan(loss_dict['loss']).any() or torch.isinf(loss_dict['loss']).any()):
                 total_loss += loss_dict['loss'].item()
@@ -711,8 +1021,6 @@ class EnhancedConversationTrainer:
                 num_batches += 1
         
         eval_time = time.time() - eval_start_time
-        
-        # Memory usage
         peak_memory = torch.cuda.max_memory_allocated() / 1e6 if torch.cuda.is_available() else 0
         
         if num_batches == 0:
@@ -721,53 +1029,45 @@ class EnhancedConversationTrainer:
                 'eval_perplexity': float('inf'),
                 'eval_time': eval_time,
                 'eval_throughput': 0.0,
-                'eval_precision': eval_precision,
                 'eval_peak_memory_mb': peak_memory
             }
         
         avg_loss = total_loss / num_batches
         avg_raw_loss = total_raw_loss / num_batches
-        perplexity = math.exp(min(avg_raw_loss, 10))  # Clamp to prevent overflow
+        perplexity = math.exp(min(avg_raw_loss, 10))
         throughput = total_tokens / eval_time if eval_time > 0 else 0
-        
-        # Store precision performance metrics
-        if eval_precision not in self.metrics['precision_performance']:
-            self.metrics['precision_performance'][eval_precision] = []
-        
-        self.metrics['precision_performance'][eval_precision].append({
-            'throughput': throughput,
-            'memory': peak_memory,
-            'timestamp': time.time()
-        })
         
         return {
             'eval_loss': avg_loss,
             'eval_perplexity': perplexity,
             'eval_time': eval_time,
             'eval_throughput': throughput,
-            'eval_precision': eval_precision,
             'eval_peak_memory_mb': peak_memory
         }
     
     def train(self, train_dataset, eval_dataset=None):
-        """Main training loop with comprehensive monitoring."""
+        """Main training loop with DeepSpeed and MoE optimizations."""
         logging.info("="*80)
-        logging.info("STARTING PRODUCTION TRAINING WITH COMPREHENSIVE PRECISION SUPPORT")
+        if self.use_deepspeed:
+            logging.info("STARTING DEEPSPEED TRAINING WITH MOE AND CPU OFFLOADING")
+        else:
+            logging.info("STARTING STANDARD TRAINING")
         logging.info("="*80)
         
-        # Store eval dataset for periodic evaluation
+        # Store eval dataset
         self.eval_dataset = eval_dataset
         
         # Setup data loaders
         train_dataloader = create_dataloader(train_dataset, self.config, shuffle=True)
         
-        # Calculate total steps and setup scheduler
-        gradient_accumulation_steps = getattr(self.config, 'gradient_accumulation_steps', 1)
-        total_steps = len(train_dataloader) * self.config.num_epochs // gradient_accumulation_steps
-        self._setup_scheduler(total_steps)
+        # Calculate total steps (DeepSpeed handles this internally)
+        if not self.use_deepspeed:
+            gradient_accumulation_steps = getattr(self.config, 'gradient_accumulation_steps', 1)
+            total_steps = len(train_dataloader) * self.config.num_epochs // gradient_accumulation_steps
+            self._setup_scheduler(total_steps)
         
         # Log training configuration
-        self._log_training_config(len(train_dataloader), total_steps)
+        self._log_training_config(len(train_dataloader))
         
         training_start_time = time.time()
         
@@ -783,43 +1083,38 @@ class EnhancedConversationTrainer:
                 # Train epoch
                 epoch_metrics = self.train_epoch(train_dataloader, epoch)
                 
-                # Full evaluation at epoch end
+                # Evaluation
                 if eval_dataset is not None:
                     eval_metrics = self.evaluate(eval_dataset)
                     epoch_metrics.update(eval_metrics)
                     
-                    # Log epoch summary
                     logging.info(f"Epoch {epoch + 1} Summary:")
                     logging.info(f"  Train Loss: {epoch_metrics['avg_loss']:.6f}")
                     logging.info(f"  Eval Loss: {eval_metrics['eval_loss']:.6f}")
                     logging.info(f"  Eval Perplexity: {eval_metrics['eval_perplexity']:.2f}")
-                    logging.info(f"  Eval Precision: {eval_metrics['eval_precision']}")
                     
                     # Early stopping check
                     if getattr(self.config, 'early_stopping_patience', None):
                         self._check_early_stopping(eval_metrics['eval_loss'])
                 
-                # Log epoch metrics
-                try:
-                    self.logger.log_metrics(epoch_metrics, epoch, "epoch")
-                except Exception as e:
-                    logging.warning(f"Failed to log epoch metrics: {e}")
-                
-                # Save epoch checkpoint
-                self.checkpoint_manager.save_checkpoint(
-                    self.model, self.optimizer, self.scheduler,
-                    self.global_step, epoch + 1, self.metrics,
-                    f"epoch_{epoch + 1:03d}"
-                )
+                # Checkpointing
+                if self.use_deepspeed:
+                    self._save_deepspeed_checkpoint(epoch + 1)
+                else:
+                    self._save_standard_checkpoint(epoch + 1)
                 
                 self.current_epoch = epoch + 1
                 
-                # Backup checkpoint periodically
-                current_time = time.time()
-                backup_interval = getattr(self.config, 'backup_every_n_hours', 6) * 3600
-                if (current_time - self.last_backup_time) > backup_interval:
-                    self._create_backup()
-                    self.last_backup_time = current_time
+                # Memory monitoring
+                self.cpu_offload_manager.monitor_memory_usage()
+                
+                # MoE diagnostics
+                if hasattr(self.config, 'use_moe') and self.config.use_moe:
+                    moe_diagnostics = self.moe_optimizer.get_routing_diagnostics()
+                    if moe_diagnostics['recommendations']:
+                        logging.info("MoE Routing Recommendations:")
+                        for rec in moe_diagnostics['recommendations']:
+                            logging.info(f"  - {rec}")
         
         except KeyboardInterrupt:
             logging.info("Training interrupted by user")
@@ -830,19 +1125,18 @@ class EnhancedConversationTrainer:
             total_training_time = time.time() - training_start_time
             logging.info(f"\nTraining finished after {total_training_time / 3600:.2f} hours")
             
-            # Save final checkpoint
-            self.checkpoint_manager.save_checkpoint(
-                self.model, self.optimizer, self.scheduler,
-                self.global_step, self.current_epoch, self.metrics,
-                "final"
-            )
-            
-            # Save training summary
-            self._save_training_summary(total_training_time)
+            # Final checkpoint
+            if self.use_deepspeed:
+                self._save_deepspeed_checkpoint(self.current_epoch, final=True)
+            else:
+                self._save_standard_checkpoint(self.current_epoch, final=True)
     
     def train_epoch(self, train_dataloader, epoch: int):
-        """Train one epoch with comprehensive monitoring."""
-        self.model.train()
+        """Train one epoch with enhanced monitoring."""
+        if self.use_deepspeed:
+            self.deepspeed_engine.train()
+        else:
+            self.model.train()
         
         epoch_metrics = {
             'total_loss': 0.0,
@@ -863,7 +1157,6 @@ class EnhancedConversationTrainer:
         last_log_time = time.time()
         
         for batch_idx, batch in enumerate(train_dataloader):
-            # Check for stop signal
             if self.should_stop:
                 break
             
@@ -890,79 +1183,29 @@ class EnhancedConversationTrainer:
                     epoch_metrics['num_batches'] += 1
                     epoch_metrics['grad_norm_sum'] += opt_metrics['grad_norm']
                 
-                # Log metrics
+                # Calculate throughput
                 step_time = time.time() - step_start_time
                 tokens_per_sec = accumulation_metrics['tokens'] / step_time if step_time > 0 else 0
                 
-                self.metrics['train_losses'].append(accumulation_metrics['loss'])
-                self.metrics['learning_rates'].append(opt_metrics['lr'])
-                self.metrics['gradient_norms'].append(opt_metrics['grad_norm'])
-                self.metrics['throughput'].append(tokens_per_sec)
-                
-                # Health monitoring
-                self.health_monitor.update(accumulation_metrics['loss'], opt_metrics['grad_norm'])
-                
                 # Periodic logging
                 current_time = time.time()
-                # Periodic logging - every 500 steps or every 5 minutes
-                current_time = time.time()
-                if self.global_step % 100 == 0 or current_time - last_log_time > 300:  # 300 seconds = 5 minutes
+                if self.global_step % 100 == 0 or current_time - last_log_time > 300:
                     self._log_training_step(
-                    epoch, batch_idx, len(train_dataloader),
-                    accumulation_metrics, opt_metrics, tokens_per_sec
-                )
-                last_log_time = current_time
-                
-                # Log to monitoring backends
-                if self.global_step % 100 == 0:
-                    try:
-                        self.logger.log_metrics({
-                            'train_loss': accumulation_metrics['loss'],
-                            'learning_rate': opt_metrics['lr'],
-                            'gradient_norm': opt_metrics['grad_norm'],
-                            'throughput_tokens_per_sec': tokens_per_sec,
-                            'perplexity': math.exp(min(accumulation_metrics['raw_loss'], 10))
-                        }, self.global_step, "train")
-                    except Exception as e:
-                        logging.debug(f"Failed to log training metrics: {e}")
+                        epoch, batch_idx, len(train_dataloader),
+                        accumulation_metrics, opt_metrics, tokens_per_sec
+                    )
+                    last_log_time = current_time
                 
                 # System monitoring
-                health_check_interval = getattr(self.config, 'health_check_interval', 100)
-                if self.global_step % health_check_interval == 0:
-                    try:
-                        if hasattr(self.logger, 'log_system_stats'):
-                            self.logger.log_system_stats(self.global_step)
-                    except Exception as e:
-                        logging.debug(f"Failed to log system stats: {e}")
+                if self.global_step % 500 == 0:
+                    self.cpu_offload_manager.monitor_memory_usage()
                     self._log_memory_usage(f"Step {self.global_step}")
-                
-                # Periodic evaluation
-                eval_every_n_batches = getattr(self.config, 'eval_every_n_batches', 0)
-                if (eval_every_n_batches > 0 and 
-                    self.global_step % eval_every_n_batches == 0):
-                    self._periodic_evaluation()
-                
-                # Periodic checkpointing
-                save_every_n_batches = getattr(self.config, 'save_every_n_batches', 0)
-                if (save_every_n_batches > 0 and 
-                    self.global_step % save_every_n_batches == 0):
-                    self.checkpoint_manager.save_checkpoint(
-                        self.model, self.optimizer, self.scheduler,
-                        self.global_step, self.current_epoch, self.metrics,
-                        f"step_{self.global_step:06d}"
-                    )
                 
                 # Reset accumulation metrics
                 accumulation_metrics = {'loss': 0.0, 'raw_loss': 0.0, 'tokens': 0}
         
-        # Handle remaining gradients
-        if (batch_idx + 1) % gradient_accumulation_steps != 0:
-            opt_metrics = self.optimizer_step()
-            self.global_step += 1
-        
         # Compute epoch statistics
         epoch_time = time.time() - epoch_start_time
-        self.metrics['epoch_times'].append(epoch_time)
         
         if epoch_metrics['num_batches'] > 0:
             avg_loss = epoch_metrics['total_loss'] / epoch_metrics['num_batches']
@@ -970,10 +1213,7 @@ class EnhancedConversationTrainer:
             avg_grad_norm = epoch_metrics['grad_norm_sum'] / epoch_metrics['num_batches']
             avg_tokens_per_sec = epoch_metrics['total_tokens'] / epoch_time
         else:
-            avg_loss = float('inf')
-            avg_raw_loss = float('inf')
-            avg_grad_norm = 0.0
-            avg_tokens_per_sec = 0.0
+            avg_loss = avg_raw_loss = avg_grad_norm = avg_tokens_per_sec = 0.0
         
         logging.info(f"Epoch {epoch+1} completed in {epoch_time:.2f}s | "
                     f"Avg Loss: {avg_loss:.6f} | "
@@ -988,6 +1228,103 @@ class EnhancedConversationTrainer:
             'throughput': avg_tokens_per_sec
         }
     
+    def _save_deepspeed_checkpoint(self, epoch: int, final: bool = False):
+        """Save DeepSpeed checkpoint."""
+        try:
+            checkpoint_dir = Path(f"checkpoints/deepspeed_epoch_{epoch}")
+            if final:
+                checkpoint_dir = Path("checkpoints/deepspeed_final")
+            
+            self.deepspeed_engine.save_checkpoint(str(checkpoint_dir))
+            logging.info(f"DeepSpeed checkpoint saved: {checkpoint_dir}")
+        except Exception as e:
+            logging.error(f"Failed to save DeepSpeed checkpoint: {e}")
+    
+    def _save_standard_checkpoint(self, epoch: int, final: bool = False):
+        """Save standard PyTorch checkpoint."""
+        try:
+            suffix = "final" if final else f"epoch_{epoch:03d}"
+            checkpoint_path = Path(f"checkpoints/checkpoint_{suffix}_{self.global_step}.pt")
+            checkpoint_path.parent.mkdir(exist_ok=True, parents=True)
+            
+            torch.save({
+                'model_state_dict': self.model.state_dict(),
+                'optimizer_state_dict': self.optimizer.state_dict(),
+                'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler else None,
+                'global_step': self.global_step,
+                'epoch': epoch,
+                'config': self.config
+            }, checkpoint_path)
+            
+            logging.info(f"Checkpoint saved: {checkpoint_path}")
+        except Exception as e:
+            logging.error(f"Failed to save checkpoint: {e}")
+    
+    def _setup_scheduler(self, total_steps: int):
+        """Setup learning rate scheduler for standard training."""
+        warmup_ratio = getattr(self.config, 'warmup_ratio', 0.1)
+        warmup_steps = int(total_steps * warmup_ratio)
+        
+        lr_scheduler = getattr(self.config, 'lr_scheduler', 'linear')
+        
+        if lr_scheduler == "cosine":
+            self.scheduler = CosineAnnealingLR(
+                self.optimizer, T_max=total_steps, 
+                eta_min=getattr(self.config, 'min_lr', 1e-6)
+            )
+        elif lr_scheduler == "onecycle":
+            self.scheduler = OneCycleLR(
+                self.optimizer, max_lr=self.config.learning_rate,
+                total_steps=total_steps, pct_start=warmup_ratio
+            )
+    
+    def _check_early_stopping(self, eval_loss: float):
+        """Check early stopping condition."""
+        if eval_loss < self.best_eval_loss:
+            self.best_eval_loss = eval_loss
+            self.patience_counter = 0
+        else:
+            self.patience_counter += 1
+            
+        if self.patience_counter >= self.config.early_stopping_patience:
+            logging.info(f"Early stopping triggered after {self.patience_counter} steps without improvement")
+            self.should_stop = True
+    
+    def _log_training_config(self, batches_per_epoch: int):
+        """Log comprehensive training configuration."""
+        try:
+            model_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        except:
+            model_params = "Unknown"
+        
+        config_info = [
+            f"Training Mode: {'DeepSpeed' if self.use_deepspeed else 'Standard PyTorch'}",
+            f"Model Parameters: {model_params:,}" if isinstance(model_params, int) else f"Model Parameters: {model_params}",
+            f"Epochs: {self.config.num_epochs}",
+            f"Batches per epoch: {batches_per_epoch:,}",
+            f"Effective batch size: {getattr(self.config, 'effective_batch_size', self.config.batch_size)}",
+            f"Learning rate: {self.config.learning_rate:.2e}",
+            f"Weight decay: {getattr(self.config, 'weight_decay', 0.01)}",
+            f"Precision: {getattr(self.config, 'precision', 'fp32')}",
+            f"Device: {self.device}"
+        ]
+        
+        if self.use_deepspeed:
+            config_info.extend([
+                f"World size: {int(os.environ.get('WORLD_SIZE', 1))}",
+                f"CPU offloading: {'Enabled' if getattr(self.config, 'cpu_offload', False) else 'Disabled'}",
+            ])
+            
+            if hasattr(self.config, 'use_moe') and self.config.use_moe:
+                config_info.extend([
+                    f"MoE experts: {getattr(self.config, 'num_experts', 8)}",
+                    f"MoE top-k: {getattr(self.config, 'moe_top_k', 2)}"
+                ])
+        
+        logging.info("Training Configuration:")
+        for info in config_info:
+            logging.info(f"  {info}")
+    
     def _log_training_step(self, epoch: int, batch_idx: int, total_batches: int,
                           metrics, opt_metrics, tokens_per_sec: float):
         """Log training step with comprehensive information."""
@@ -998,20 +1335,14 @@ class EnhancedConversationTrainer:
             memory_cached = torch.cuda.memory_reserved() / 1e9
             memory_info = f" | GPU: {memory_allocated:.1f}GB/{memory_cached:.1f}GB"
         
-        # Health status
-        health_status = self.health_monitor.get_status()
-        health_info = f" | Health: {health_status}"
+        # Training mode info
+        mode_info = " | DeepSpeed" if self.use_deepspeed else " | Standard"
         
-        # Precision info
-        precision_info = f" | Train: {self.training_precision} | Infer: {self.inference_precision}"
-
+        # Perplexity calculation
         try:
-            raw_loss_clamped = min(metrics['raw_loss'], 50)  # Higher clamp
+            raw_loss_clamped = min(metrics['raw_loss'], 50)
             perplexity = math.exp(raw_loss_clamped)
-            if perplexity > 10000:  # Use scientific notation for large numbers
-                ppl_str = f"{perplexity:.2e}"
-            else:
-                ppl_str = f"{perplexity:.2f}"
+            ppl_str = f"{perplexity:.2e}" if perplexity > 10000 else f"{perplexity:.2f}"
         except (OverflowError, ValueError):
             ppl_str = "INF"
         
@@ -1023,137 +1354,8 @@ class EnhancedConversationTrainer:
             f"LR: {opt_metrics['lr']:.2e} | "
             f"GradNorm: {opt_metrics['grad_norm']:.4f} | "
             f"Tokens/s: {tokens_per_sec:.0f}"
-            f"{precision_info}{memory_info}{health_info}"
+            f"{mode_info}{memory_info}"
         )
-    
-    def _periodic_evaluation(self):
-        """Perform periodic evaluation during training."""
-        if hasattr(self, 'eval_dataset') and self.eval_dataset is not None:
-            eval_metrics = self.evaluate(self.eval_dataset, max_batches=50)
-            
-            # Log evaluation metrics
-            try:
-                self.logger.log_metrics(eval_metrics, self.global_step, "eval")
-            except Exception as e:
-                logging.debug(f"Failed to log eval metrics: {e}")
-            
-            logging.info(f"Eval | Step {self.global_step} | "
-                        f"Loss: {eval_metrics['eval_loss']:.6f} | "
-                        f"PPL: {eval_metrics['eval_perplexity']:.2f} | "
-                        f"Precision: {eval_metrics['eval_precision']}")
-            
-            # Early stopping check
-            if getattr(self.config, 'early_stopping_patience', None):
-                self._check_early_stopping(eval_metrics['eval_loss'])
-    
-    def _check_early_stopping(self, eval_loss: float):
-        """Check early stopping condition."""
-        if eval_loss < self.best_eval_loss:
-            self.best_eval_loss = eval_loss
-            self.patience_counter = 0
-            # Save best model
-            self.checkpoint_manager.save_checkpoint(
-                self.model, self.optimizer, self.scheduler,
-                self.global_step, self.current_epoch, self.metrics,
-                "best_model"
-            )
-        else:
-            self.patience_counter += 1
-            
-        if self.patience_counter >= self.config.early_stopping_patience:
-            logging.info(f"Early stopping triggered after {self.patience_counter} steps without improvement")
-            self.should_stop = True
-    
-    def _log_training_config(self, batches_per_epoch: int, total_steps: int):
-        """Log comprehensive training configuration."""
-        try:
-            model_params = self._count_parameters()
-        except:
-            model_params = "Unknown"
-        
-        config_info = [
-            f"Model Parameters: {model_params:,}" if isinstance(model_params, int) else f"Model Parameters: {model_params}",
-            f"Epochs: {self.config.num_epochs}",
-            f"Batches per epoch: {batches_per_epoch:,}",
-            f"Total steps: {total_steps:,}",
-            f"Effective batch size: {getattr(self.config, 'effective_batch_size', self.config.batch_size)}",
-            f"Learning rate: {self.config.learning_rate:.2e}",
-            f"Weight decay: {getattr(self.config, 'weight_decay', 0.01)}",
-            f"Warmup ratio: {getattr(self.config, 'warmup_ratio', 0.1)}",
-            f"Max grad norm: {getattr(self.config, 'max_grad_norm', 1.0)}",
-            f"Training precision: {self.training_precision}",
-            f"Inference precision: {self.inference_precision}",
-            f"Supported precisions: {', '.join(self.precision_stats['supported_precisions'])}",
-            f"Device: {self.device}"
-        ]
-        
-        logging.info("Training Configuration:")
-        for info in config_info:
-            logging.info(f"  {info}")
-    
-    def _create_backup(self):
-        """Create backup of current training state."""
-        backup_dir = Path("backups") / getattr(self.config, 'experiment_name', 'default')
-        backup_dir.mkdir(parents=True, exist_ok=True)
-        
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        try:
-            self.checkpoint_manager.save_checkpoint(
-                self.model, self.optimizer, self.scheduler,
-                self.global_step, self.current_epoch, self.metrics,
-                f"backup_{timestamp}"
-            )
-            logging.info(f"Backup created at step {self.global_step}")
-        except Exception as e:
-            logging.error(f"Failed to create backup: {e}")
-    
-    def _save_training_summary(self, total_time: float):
-        """Save comprehensive training summary."""
-        try:
-            # Try to convert config to dict
-            try:
-                model_config = asdict(self.config)
-            except:
-                # Fallback to manual conversion
-                model_config = {
-                    attr: getattr(self.config, attr) 
-                    for attr in dir(self.config) 
-                    if not attr.startswith('_') and not callable(getattr(self.config, attr))
-                }
-            
-            summary = {
-                'experiment_name': getattr(self.config, 'experiment_name', 'unknown'),
-                'total_training_time_hours': total_time / 3600,
-                'total_epochs': self.current_epoch,
-                'total_steps': self.global_step,
-                'final_metrics': {
-                    'best_eval_loss': self.best_eval_loss,
-                    'final_train_loss': self.metrics['train_losses'][-1] if self.metrics['train_losses'] else None,
-                    'avg_throughput': np.mean(self.metrics['throughput']) if self.metrics['throughput'] else 0
-                },
-                'precision_settings': {
-                    'training_precision': self.training_precision,
-                    'inference_precision': self.inference_precision,
-                    'supported_precisions': self.precision_stats['supported_precisions'],
-                    'precision_switches': self.precision_stats['precision_switches']
-                },
-                'precision_performance': self.metrics['precision_performance'],
-                'model_config': model_config,
-                'health_summary': self.health_monitor.get_summary()
-            }
-            
-            summary_path = Path(f"experiments/{getattr(self.config, 'experiment_name', 'default')}/training_summary.json")
-            summary_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            with open(summary_path, 'w') as f:
-                import json
-                json.dump(summary, f, indent=2, default=str)  # default=str handles non-serializable objects
-            
-            logging.info(f"Training summary saved: {summary_path}")
-        
-        except Exception as e:
-            logging.error(f"Failed to save training summary: {e}")
     
     def _log_memory_usage(self, context: str):
         """Log memory usage information."""
@@ -1173,61 +1375,101 @@ class EnhancedConversationTrainer:
         except ImportError:
             pass
     
-    def save_checkpoint(self, epoch_or_step: int, emergency: bool = False, final: bool = False):
-        """Save checkpoint (delegated to checkpoint manager)."""
-        suffix = "emergency" if emergency else ("final" if final else f"manual_{epoch_or_step}")
-        return self.checkpoint_manager.save_checkpoint(
-            self.model, self.optimizer, self.scheduler,
-            self.global_step, self.current_epoch, self.metrics,
-            suffix
-        )
+    def get_moe_diagnostics(self) -> Dict[str, Any]:
+        """Get MoE routing and performance diagnostics."""
+        if not (hasattr(self.config, 'use_moe') and self.config.use_moe):
+            return {"error": "MoE not enabled"}
+        
+        return self.moe_optimizer.get_routing_diagnostics()
     
-    def load_checkpoint(self, checkpoint_path: str) -> int:
-        """Load checkpoint and return current epoch."""
-        return self.checkpoint_manager.load_checkpoint(
-            checkpoint_path, self.model, self.optimizer, self.scheduler
-        )
+    def get_memory_stats(self) -> Dict[str, Any]:
+        """Get comprehensive memory usage statistics."""
+        stats = {}
+        
+        # GPU memory
+        if torch.cuda.is_available():
+            stats['gpu'] = {
+                'allocated_gb': torch.cuda.memory_allocated() / 1e9,
+                'reserved_gb': torch.cuda.memory_reserved() / 1e9,
+                'max_allocated_gb': torch.cuda.max_memory_allocated() / 1e9
+            }
+        
+        # CPU memory
+        try:
+            import psutil
+            memory = psutil.virtual_memory()
+            stats['cpu'] = {
+                'usage_percent': memory.percent,
+                'available_gb': memory.available / 1e9,
+                'total_gb': memory.total / 1e9
+            }
+        except ImportError:
+            stats['cpu'] = {'error': 'psutil not available'}
+        
+        # CPU offload stats
+        stats['offload'] = self.cpu_offload_manager.offload_stats
+        
+        return stats
+    
+    def optimize_for_sequence_length(self, sequence_length: int):
+        """Optimize training configuration for specific sequence length."""
+        if not self.use_deepspeed:
+            logging.warning("Sequence length optimization requires DeepSpeed")
+            return
+        
+        # Calculate optimal batch size for long sequences
+        if sequence_length > 50000:  # Very long sequences
+            # Reduce batch size, increase gradient accumulation
+            optimal_micro_batch = max(1, self.config.batch_size // 4)
+            optimal_grad_accum = self.config.batch_size * 4
+            
+            logging.info(f"Optimizing for very long sequences ({sequence_length})")
+            logging.info(f"Reducing micro batch size to {optimal_micro_batch}")
+            logging.info(f"Increasing gradient accumulation to {optimal_grad_accum}")
+            
+            # Update DeepSpeed configuration if possible
+            try:
+                self.deepspeed_engine.train_micro_batch_size_per_gpu = optimal_micro_batch
+                self.deepspeed_engine.gradient_accumulation_steps = optimal_grad_accum
+            except AttributeError:
+                logging.warning("Could not update DeepSpeed batch sizes dynamically")
+    
+    def benchmark_moe_routing(self, num_batches: int = 100) -> Dict[str, Any]:
+        """Benchmark MoE routing performance and balance."""
+        if not (hasattr(self.config, 'use_moe') and self.config.use_moe):
+            return {"error": "MoE not enabled"}
+        
+        if not self.use_deepspeed:
+            return {"error": "MoE benchmarking requires DeepSpeed"}
+        
+        logging.info(f"Benchmarking MoE routing over {num_batches} batches...")
+        
+        routing_stats = {
+            'expert_utilization': {},
+            'communication_times': [],
+            'load_balance_losses': [],
+            'throughput_comparison': {}
+        }
+        
+        # This would require integration with the actual training loop
+        # and access to MoE internal metrics
+        logging.warning("MoE benchmarking requires integration with training data")
+        
+        return routing_stats
     
     @torch.no_grad()
     def generate(self, prompt: str, max_new_tokens: Optional[int] = None, 
-                 precision_override: Optional[str] = None,
-                 temperature: Optional[float] = None,
-                 top_k: Optional[int] = None,
-                 top_p: Optional[float] = None,
                  **kwargs) -> str:
-        """
-        Generate response with enhanced error handling and comprehensive precision control.
-        
-        Args:
-            prompt: Input prompt
-            max_new_tokens: Maximum tokens to generate
-            precision_override: Override inference precision for this generation
-            temperature: Sampling temperature
-            top_k: Top-k filtering
-            top_p: Top-p (nucleus) filtering
-            **kwargs: Additional generation parameters
-        """
-        self.model.eval()
-        
-        # Determine generation precision
-        gen_precision = precision_override or self.inference_precision
-        if gen_precision == "dynamic":
-            gen_precision = self.precision_manager.auto_select_precision(self.device, priority="speed")
-        
-        # Validate precision
-        if gen_precision not in self.precision_manager.get_supported_precisions(self.device):
-            logging.warning(f"Precision {gen_precision} not supported, falling back to fp32")
-            gen_precision = "fp32"
+        """Generate response with DeepSpeed support."""
+        if self.use_deepspeed:
+            self.deepspeed_engine.eval()
+            model = self.deepspeed_engine
+        else:
+            self.model.eval()
+            model = self.model
         
         if max_new_tokens is None:
             max_new_tokens = getattr(self.config, 'max_new_tokens', 512)
-        
-        # Use provided or default generation parameters
-        temperature = temperature if temperature is not None else getattr(self.config, 'temperature', 0.7)
-        top_k = top_k if top_k is not None else getattr(self.config, 'top_k', 50)
-        top_p = top_p if top_p is not None else getattr(self.config, 'top_p', 0.9)
-        
-        generation_start_time = time.time()
         
         try:
             # Create conversation format
@@ -1237,8 +1479,6 @@ class EnhancedConversationTrainer:
             
             # Encode input
             input_tokens = self.tokenizer.encode_conversation(conversation)
-            
-            # Add assistant start tokens
             input_tokens.extend([
                 self.tokenizer.special_tokens["<|im_start|>"],
                 self.tokenizer.special_tokens["<|assistant|>"]
@@ -1250,22 +1490,29 @@ class EnhancedConversationTrainer:
             
             input_ids = torch.tensor([input_tokens], device=self.device, dtype=torch.long)
             
-            # Generation loop with safety checks and specified precision
+            # Generation parameters
+            temperature = kwargs.get('temperature', 0.7)
+            top_k = kwargs.get('top_k', 50)
+            top_p = kwargs.get('top_p', 0.9)
+            
+            # Generation loop
             generated_tokens = []
-            
-            logging.debug(f"Starting generation with precision: {gen_precision}")
-            
-            if torch.cuda.is_available():
-                torch.cuda.reset_peak_memory_stats()
             
             for step in range(max_new_tokens):
                 # Check sequence length
                 if input_ids.size(1) >= self.config.seq_length:
                     input_ids = input_ids[:, -self.config.seq_length//2:]
                 
-                # Forward pass with specified precision
-                with self._get_autocast_context(precision=gen_precision, for_inference=True):
-                    logits = self.model(input_ids)
+                # Forward pass
+                if self.use_deepspeed:
+                    logits = model(input_ids)
+                else:
+                    with self._get_autocast_context(for_inference=True):
+                        logits = model(input_ids)
+                
+                # Handle MoE outputs
+                if isinstance(logits, tuple):
+                    logits = logits[0]  # Take only the logits
                 
                 # Get next token logits
                 next_token_logits = logits[0, -1, :] / temperature
@@ -1298,516 +1545,207 @@ class EnhancedConversationTrainer:
                 
                 generated_tokens.append(next_token.item())
                 input_ids = torch.cat([input_ids, next_token.unsqueeze(0)], dim=1)
-                
-                # Safety check for infinite loops
-                if step > 0 and step % 100 == 0:
-                    logging.debug(f"Generation step {step}/{max_new_tokens}")
             
             # Decode response
             response = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
-            
-            generation_time = time.time() - generation_start_time
-            tokens_per_second = len(generated_tokens) / generation_time if generation_time > 0 else 0
-            peak_memory = torch.cuda.max_memory_allocated() / 1e6 if torch.cuda.is_available() else 0
-            
-            logging.debug(f"Generation completed: {len(generated_tokens)} tokens in {generation_time:.2f}s "
-                         f"({tokens_per_second:.1f} tok/s) using {gen_precision} precision, "
-                         f"peak memory: {peak_memory:.1f}MB")
-            
-            # Record performance metrics
-            if gen_precision not in self.precision_stats['performance_metrics']:
-                self.precision_stats['performance_metrics'][gen_precision] = []
-            
-            self.precision_stats['performance_metrics'][gen_precision].append({
-                'tokens_per_second': tokens_per_second,
-                'peak_memory_mb': peak_memory,
-                'generation_time': generation_time,
-                'tokens_generated': len(generated_tokens),
-                'timestamp': time.time()
-            })
-            
             return response.strip()
             
         except Exception as e:
-            logging.error(f"Generation failed with {gen_precision} precision: {e}")
+            logging.error(f"Generation failed: {e}")
             return "I apologize, but I encountered an error while generating a response."
-    
-    def benchmark_inference_precision(self, test_prompts: Optional[List[str]] = None, 
-                                    max_new_tokens: int = 100) -> Dict[str, Dict[str, Any]]:
-        """
-        Benchmark different inference precisions with comprehensive metrics.
-        
-        Args:
-            test_prompts: List of test prompts (uses default if None)
-            max_new_tokens: Maximum tokens to generate per prompt
-            
-        Returns:
-            Dictionary with benchmark results for each precision
-        """
-        if test_prompts is None:
-            test_prompts = [
-                "What is machine learning?",
-                "Explain quantum computing in simple terms.",
-                "Write a short story about a robot.",
-                "How does neural attention work?",
-                "Compare different sorting algorithms."
-            ]
-        
-        # Get all supported precisions
-        supported_precisions = self.precision_manager.get_supported_precisions(self.device)
-        
-        # Add some additional precisions to test if they're supported
-        test_precisions = ["fp32", "fp16", "bf16", "mixed_fp16", "mixed_bf16", "tf32"]
-        precisions_to_test = [p for p in test_precisions if p in supported_precisions]
-        
-        results = {}
-        original_precision = self.inference_precision
-        
-        logging.info(f"Benchmarking precisions: {', '.join(precisions_to_test)}")
-        
-        for precision in precisions_to_test:
-            logging.info(f"Benchmarking {precision} precision...")
-            
-            # Get precision info
-            precision_info = self.precision_manager.get_precision_info(precision)
-            
-            # Warm up
-            try:
-                _ = self.generate("Hello", max_new_tokens=5, precision_override=precision, temperature=0.1)
-            except Exception as e:
-                logging.warning(f"Warmup failed for {precision}: {e}, skipping...")
-                continue
-            
-            # Clear cache
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                torch.cuda.synchronize()
-            
-            # Benchmark
-            total_time = 0
-            total_tokens = 0
-            memory_measurements = []
-            generations = []
-            generation_times = []
-            
-            for i, prompt in enumerate(test_prompts):
-                if torch.cuda.is_available():
-                    torch.cuda.reset_peak_memory_stats()
-                
-                start_time = time.time()
-                
-                try:
-                    response = self.generate(
-                        prompt, 
-                        max_new_tokens=max_new_tokens,
-                        precision_override=precision,
-                        temperature=0.7,
-                        top_k=50,
-                        top_p=0.9
-                    )
-                    generations.append(response)
-                    
-                    # Count tokens (approximate)
-                    token_count = len(self.tokenizer.tokenizer.encode(response))
-                    total_tokens += token_count
-                    
-                except Exception as e:
-                    logging.error(f"Generation failed for {precision} on prompt {i+1}: {e}")
-                    generations.append(f"ERROR: {str(e)}")
-                    token_count = 0
-                
-                end_time = time.time()
-                generation_time = end_time - start_time
-                total_time += generation_time
-                generation_times.append(generation_time)
-                
-                if torch.cuda.is_available():
-                    peak_memory = torch.cuda.max_memory_allocated() / 1024 / 1024  # MB
-                    memory_measurements.append(peak_memory)
-            
-            # Calculate comprehensive metrics
-            successful_generations = len([g for g in generations if not g.startswith("ERROR:")])
-            success_rate = successful_generations / len(test_prompts) if test_prompts else 0
-            avg_time_per_prompt = total_time / len(test_prompts) if test_prompts else 0
-            tokens_per_second = total_tokens / total_time if total_time > 0 else 0
-            avg_memory = np.mean(memory_measurements) if memory_measurements else 0
-            max_memory = max(memory_measurements) if memory_measurements else 0
-            
-            # Calculate generation time statistics
-            if generation_times:
-                min_time = min(generation_times)
-                max_time = max(generation_times)
-                std_time = np.std(generation_times)
+        finally:
+            if self.use_deepspeed:
+                self.deepspeed_engine.train()
             else:
-                min_time = max_time = std_time = 0
-            
-            results[precision] = {
-                'precision_info': precision_info,
-                'success_rate': success_rate,
-                'successful_generations': successful_generations,
-                'total_time_seconds': total_time,
-                'avg_time_per_prompt': avg_time_per_prompt,
-                'min_time_per_prompt': min_time,
-                'max_time_per_prompt': max_time,
-                'std_time_per_prompt': std_time,
-                'total_tokens_generated': total_tokens,
-                'tokens_per_second': tokens_per_second,
-                'avg_memory_mb': avg_memory,
-                'peak_memory_mb': max_memory,
-                'memory_efficiency_score': precision_info.get('memory_efficiency', 1.0) if precision_info else 1.0,
-                'speed_multiplier': precision_info.get('speed_multiplier', 1.0) if precision_info else 1.0,
-                'numerical_stability': precision_info.get('numerical_stability', 'unknown') if precision_info else 'unknown',
-                'generations': generations,
-                'generation_times': generation_times
-            }
-            
-            logging.info(f"{precision} results: {tokens_per_second:.1f} tokens/s, "
-                        f"{avg_time_per_prompt:.2f}s/prompt (±{std_time:.2f}s), "
-                        f"{avg_memory:.1f}MB avg memory, {success_rate:.1%} success rate")
-        
-        # Restore original precision
-        self.set_inference_precision(original_precision)
-        
-        return results
+                self.model.train()
+
+
+class DeepSpeedConfigGenerator:
+    """Helper class to generate optimized DeepSpeed configurations."""
     
-    def generate_with_multiple_precisions(self, prompt: str, 
-                                        precisions: Optional[List[str]] = None,
-                                        **generation_kwargs) -> Dict[str, str]:
-        """
-        Generate the same response with different precisions for comparison.
+    @staticmethod
+    def create_moe_config_with_expert_parallelism(
+        num_gpus: int, 
+        num_experts: int, 
+        model_size_gb: float,
+        sequence_length: int
+    ) -> Dict[str, Any]:
+        """Create MoE configuration optimized for expert parallelism."""
         
-        Args:
-            prompt: Input prompt
-            precisions: List of precisions to test (default: auto-detect supported)
-            **generation_kwargs: Additional generation parameters
-            
-        Returns:
-            Dictionary mapping precision to generated response
-        """
-        if precisions is None:
-            # Use all supported precisions
-            precisions = self.precision_manager.get_supported_precisions(self.device)[:4]  # Limit to 4 for speed
-        
-        results = {}
-        original_precision = self.inference_precision
-        
-        # Use fixed random seed for consistency
-        generation_kwargs.setdefault('temperature', 0.7)
-        generation_kwargs.setdefault('top_k', 50)
-        generation_kwargs.setdefault('top_p', 0.9)
-        
-        for precision in precisions:
-            try:
-                start_time = time.time()
-                response = self.generate(
-                    prompt,
-                    precision_override=precision,
-                    **generation_kwargs
-                )
-                generation_time = time.time() - start_time
-                
-                results[precision] = {
-                    'response': response,
-                    'generation_time': generation_time,
-                    'tokens_generated': len(self.tokenizer.tokenizer.encode(response)),
-                    'tokens_per_second': len(self.tokenizer.tokenizer.encode(response)) / generation_time if generation_time > 0 else 0
-                }
-                logging.debug(f"Generated with {precision}: {len(response)} chars in {generation_time:.2f}s")
-                
-            except Exception as e:
-                results[precision] = {
-                    'response': f"ERROR with {precision}: {str(e)}",
-                    'generation_time': 0,
-                    'tokens_generated': 0,
-                    'tokens_per_second': 0
-                }
-                logging.error(f"Generation failed with {precision}: {e}")
-        
-        # Restore original precision
-        self.inference_precision = original_precision
-        
-        return results
-    
-    def compare_precision_performance(self, precision_a: str, precision_b: str,
-                                    test_prompts: Optional[List[str]] = None,
-                                    num_runs: int = 3) -> Dict[str, Any]:
-        """
-        Compare performance between two specific precisions with statistical analysis.
-        
-        Args:
-            precision_a: First precision to compare
-            precision_b: Second precision to compare
-            test_prompts: Test prompts (uses default if None)
-            num_runs: Number of runs for statistical significance
-            
-        Returns:
-            Detailed comparison results
-        """
-        if test_prompts is None:
-            test_prompts = [
-                "Explain machine learning briefly.",
-                "What are the benefits of renewable energy?",
-                "How do neural networks learn?"
-            ]
-        
-        # Validate precisions
-        supported = self.precision_manager.get_supported_precisions(self.device)
-        if precision_a not in supported:
-            return {'error': f'Precision {precision_a} not supported'}
-        if precision_b not in supported:
-            return {'error': f'Precision {precision_b} not supported'}
-        
-        results = {
-            'precision_a': precision_a,
-            'precision_b': precision_b,
-            'num_runs': num_runs,
-            'test_prompts': len(test_prompts),
-            'performance_a': {'times': [], 'tokens_per_second': [], 'memory_usage': []},
-            'performance_b': {'times': [], 'tokens_per_second': [], 'memory_usage': []}
-        }
-        
-        original_precision = self.inference_precision
-        
-        # Run benchmarks
-        for run in range(num_runs):
-            logging.info(f"Comparison run {run + 1}/{num_runs}")
-            
-            for precision, perf_key in [(precision_a, 'performance_a'), (precision_b, 'performance_b')]:
-                run_times = []
-                run_tokens_per_sec = []
-                run_memory = []
-                
-                for prompt in test_prompts:
-                    if torch.cuda.is_available():
-                        torch.cuda.reset_peak_memory_stats()
-                    
-                    start_time = time.time()
-                    try:
-                        response = self.generate(
-                            prompt,
-                            precision_override=precision,
-                            max_new_tokens=50,  # Shorter for comparison
-                            temperature=0.7
-                        )
-                        generation_time = time.time() - start_time
-                        tokens = len(self.tokenizer.tokenizer.encode(response))
-                        tokens_per_sec = tokens / generation_time if generation_time > 0 else 0
-                        
-                        run_times.append(generation_time)
-                        run_tokens_per_sec.append(tokens_per_sec)
-                        
-                        if torch.cuda.is_available():
-                            run_memory.append(torch.cuda.max_memory_allocated() / 1e6)
-                        
-                    except Exception as e:
-                        logging.warning(f"Failed generation in comparison: {e}")
-                        continue
-                
-                # Aggregate run results
-                if run_times:
-                    results['performance_a' if precision == precision_a else 'performance_b']['times'].extend(run_times)
-                    results['performance_a' if precision == precision_a else 'performance_b']['tokens_per_second'].extend(run_tokens_per_sec)
-                    results['performance_a' if precision == precision_a else 'performance_b']['memory_usage'].extend(run_memory)
-        
-        # Calculate statistics
-        for perf_key in ['performance_a', 'performance_b']:
-            perf_data = results[perf_key]
-            
-            if perf_data['times']:
-                perf_data['avg_time'] = np.mean(perf_data['times'])
-                perf_data['std_time'] = np.std(perf_data['times'])
-                perf_data['avg_tokens_per_second'] = np.mean(perf_data['tokens_per_second'])
-                perf_data['std_tokens_per_second'] = np.std(perf_data['tokens_per_second'])
-                
-                if perf_data['memory_usage']:
-                    perf_data['avg_memory'] = np.mean(perf_data['memory_usage'])
-                    perf_data['std_memory'] = np.std(perf_data['memory_usage'])
-        
-        # Calculate comparison metrics
-        if (results['performance_a']['times'] and results['performance_b']['times']):
-            speed_improvement = (results['performance_b']['avg_time'] - results['performance_a']['avg_time']) / results['performance_b']['avg_time'] * 100
-            throughput_improvement = (results['performance_a']['avg_tokens_per_second'] - results['performance_b']['avg_tokens_per_second']) / results['performance_b']['avg_tokens_per_second'] * 100
-            
-            results['comparison'] = {
-                'speed_improvement_percent': speed_improvement,  # Positive means A is faster
-                'throughput_improvement_percent': throughput_improvement,  # Positive means A has higher throughput
-                'recommended': precision_a if speed_improvement > 5 else (precision_b if speed_improvement < -5 else 'similar')
-            }
-        
-        # Restore original precision
-        self.inference_precision = original_precision
-        
-        return results
-    
-    def get_precision_recommendations(self, use_case: str = "balanced") -> Dict[str, Any]:
-        """
-        Get precision recommendations based on use case.
-        
-        Args:
-            use_case: "speed", "memory", "quality", "balanced", or "production"
-            
-        Returns:
-            Precision recommendations with rationale
-        """
-        supported = self.precision_manager.get_supported_precisions(self.device)
-        
-        recommendations = {
-            'use_case': use_case,
-            'device': str(self.device),
-            'supported_precisions': supported,
-            'recommendations': {}
-        }
-        
-        if use_case == "speed":
-            priority_order = ["fp16", "mixed_fp16", "bf16", "tf32", "mixed_bf16", "fp32"]
-            rationale = "Optimized for maximum inference speed"
-            
-        elif use_case == "memory":
-            priority_order = ["fp16", "bf16", "mixed_fp16", "mixed_bf16", "fp32"]
-            rationale = "Optimized for minimal memory usage"
-            
-        elif use_case == "quality":
-            priority_order = ["bf16", "mixed_bf16", "fp32", "mixed_fp16", "fp16"]
-            rationale = "Optimized for numerical stability and output quality"
-            
-        elif use_case == "production":
-            priority_order = ["mixed_bf16", "bf16", "mixed_fp16", "tf32", "fp32", "fp16"]
-            rationale = "Balanced for production workloads with reliability"
-            
-        else:  # balanced
-            priority_order = ["mixed_bf16", "bf16", "mixed_fp16", "fp16", "tf32", "fp32"]
-            rationale = "Balanced performance, memory, and quality"
-        
-        # Find best available precision
-        recommended = None
-        for precision in priority_order:
-            if precision in supported:
-                recommended = precision
-                break
-        
-        recommendations['primary_recommendation'] = {
-            'precision': recommended or 'fp32',
-            'rationale': rationale,
-            'info': self.precision_manager.get_precision_info(recommended or 'fp32')
-        }
-        
-        # Alternative recommendations
-        alternatives = []
-        for precision in priority_order[1:4]:  # Next 3 options
-            if precision in supported and precision != recommended:
-                alternatives.append({
-                    'precision': precision,
-                    'info': self.precision_manager.get_precision_info(precision)
-                })
-        
-        recommendations['alternatives'] = alternatives
-        
-        # Specific use case advice
-        if use_case == "speed" and "fp16" in supported:
-            recommendations['speed_note'] = "fp16 offers best speed but may have numerical instability in some cases"
-        elif use_case == "quality" and "bf16" in supported:
-            recommendations['quality_note'] = "bf16 provides excellent numerical range while maintaining efficiency"
-        elif use_case == "production" and "mixed_bf16" in supported:
-            recommendations['production_note'] = "mixed_bf16 offers the best balance of speed, memory, and stability for production"
-        
-        return recommendations
-    
-    def auto_tune_precision(self, test_prompts: Optional[List[str]] = None,
-                          target_metric: str = "balanced") -> str:
-        """
-        Automatically tune and select the best precision based on actual performance.
-        
-        Args:
-            test_prompts: Prompts to use for testing
-            target_metric: "speed", "memory", "quality", "balanced"
-            
-        Returns:
-            Selected precision
-        """
-        logging.info(f"Auto-tuning precision for {target_metric} performance...")
-        
-        # Run comprehensive benchmark
-        benchmark_results = self.benchmark_inference_precision(
-            test_prompts=test_prompts,
-            max_new_tokens=50  # Shorter for tuning
+        # Calculate optimal expert parallel size
+        # Rule: minimize all-to-all communication while balancing expert load
+        optimal_ep_size = DeepSpeedConfigGenerator._calculate_expert_parallel_size(
+            num_gpus, num_experts
         )
         
-        if not benchmark_results:
-            logging.warning("No benchmark results available, using default precision")
-            return self.inference_precision
+        # Calculate capacity factor based on sequence length
+        # Longer sequences need higher capacity to avoid dropping tokens
+        if sequence_length > 100000:
+            capacity_factor = 3.5
+        elif sequence_length > 50000:
+            capacity_factor = 3.0  
+        elif sequence_length > 20000:
+            capacity_factor = 2.8
+        else:
+            capacity_factor = 2.5
         
-        # Score each precision based on target metric
-        precision_scores = {}
+        config = {
+            "moe": {
+                "enabled": True,
+                "num_experts": num_experts,
+                "expert_parallel_size": optimal_ep_size,
+                "top_k": 2,
+                
+                # Routing optimizations
+                "capacity_factor": capacity_factor,
+                "eval_capacity_factor": capacity_factor + 0.4,
+                "min_capacity": max(16, sequence_length // 10000),
+                "use_residual": True,
+                
+                # Load balancing
+                "load_balance_loss_coef": 0.02,
+                "load_balance_type": "aux_loss",
+                "router_jitter_noise": 0.01,
+                
+                # Communication optimizations
+                "enable_expert_tensor_parallelism": True,
+                "all_to_all_dispatch": True,
+                "overlap_alltoall": True,
+                "comm_dtype": "bf16",
+                
+                # Memory optimizations
+                "pad_expert_input_to_capacity": True,
+                "enable_expert_weight_parallelism": True,
+                "moe_param_group": True,
+                "expert_placement_policy": "balanced"
+            }
+        }
         
-        for precision, results in benchmark_results.items():
-            if results['success_rate'] < 0.8:  # Require at least 80% success rate
+        logging.info(f"Generated MoE config:")
+        logging.info(f"  Expert parallel size: {optimal_ep_size} (from {num_gpus} GPUs)")
+        logging.info(f"  Capacity factor: {capacity_factor} (for seq_len {sequence_length})")
+        logging.info(f"  Experts per parallel group: {num_experts // optimal_ep_size}")
+        
+        return config
+    
+    @staticmethod
+    def _calculate_expert_parallel_size(num_gpus: int, num_experts: int) -> int:
+        """Calculate optimal expert parallel size."""
+        # Find all divisors of num_gpus
+        divisors = []
+        for i in range(1, num_gpus + 1):
+            if num_gpus % i == 0:
+                divisors.append(i)
+        
+        # Score each divisor based on:
+        # 1. Communication efficiency (smaller groups = less all-to-all overhead)
+        # 2. Expert utilization (more experts per group = better load balancing)
+        # 3. Memory efficiency
+        
+        best_ep_size = 1
+        best_score = 0
+        
+        for ep_size in divisors:
+            experts_per_group = num_experts / ep_size
+            
+            # Skip if we can't distribute experts evenly
+            if experts_per_group < 1:
                 continue
             
-            score = 0.0
+            # Communication score: prefer smaller groups (less all-to-all)
+            comm_score = 1.0 / ep_size
             
-            if target_metric == "speed":
-                # Higher tokens/second is better
-                score = results['tokens_per_second']
-                
-            elif target_metric == "memory":
-                # Lower memory usage is better (invert score)
-                if results['avg_memory_mb'] > 0:
-                    score = 1000.0 / results['avg_memory_mb']
-                
-            elif target_metric == "quality":
-                # Prefer higher numerical stability (manual scoring)
-                stability_scores = {
-                    'excellent': 100, 'very good': 80, 'good': 60, 
-                    'fair': 40, 'poor': 20, 'unknown': 30
-                }
-                stability_score = stability_scores.get(results['numerical_stability'], 30)
-                
-                # Also consider success rate
-                score = stability_score * results['success_rate']
-                
-            else:  # balanced
-                # Composite score: speed * memory_efficiency * stability * success_rate
-                memory_score = 1000.0 / max(results['avg_memory_mb'], 1.0)
-                stability_scores = {
-                    'excellent': 1.0, 'very good': 0.9, 'good': 0.8, 
-                    'fair': 0.6, 'poor': 0.4, 'unknown': 0.7
-                }
-                stability_score = stability_scores.get(results['numerical_stability'], 0.7)
-                
-                score = (results['tokens_per_second'] * 
-                        memory_score * 
-                        stability_score * 
-                        results['success_rate'] * 100)
+            # Expert utilization score: prefer 2-8 experts per group
+            if 2 <= experts_per_group <= 8:
+                util_score = 1.0
+            elif experts_per_group > 8:
+                util_score = 8.0 / experts_per_group
+            else:
+                util_score = experts_per_group / 2.0
             
-            precision_scores[precision] = score
+            # Memory score: prefer configurations that allow for good memory distribution
+            memory_score = min(1.0, experts_per_group / 4.0)
             
-            logging.debug(f"{precision}: score={score:.2f}, "
-                         f"speed={results['tokens_per_second']:.1f}, "
-                         f"memory={results['avg_memory_mb']:.1f}MB, "
-                         f"stability={results['numerical_stability']}")
+            total_score = comm_score * util_score * memory_score
+            
+            if total_score > best_score:
+                best_score = total_score
+                best_ep_size = ep_size
         
-        # Select best precision
-        if precision_scores:
-            best_precision = max(precision_scores.keys(), key=lambda k: precision_scores[k])
-            best_score = precision_scores[best_precision]
-            
-            logging.info(f"Auto-tuned precision: {best_precision} (score: {best_score:.2f})")
-            
-            # Set the selected precision
-            self.set_inference_precision(best_precision)
-            
-            return best_precision
-        else:
-            logging.warning("No suitable precision found during auto-tuning, keeping current")
-            return self.inference_precision
+        return best_ep_size
     
-    def get_precision_stats(self) -> Dict[str, Any]:
-        """Get comprehensive statistics about precision usage and performance."""
-        return {
-            'current_training_precision': self.training_precision,
-            'current_inference_precision': self.inference_precision,
-            'supported_precisions': self.precision_stats['supported_precisions'],
-            'precision_switches': self.precision_stats['precision_switches'],
-            'performance_metrics': self.precision_stats['performance_metrics'],
-            'precision_info': self.get_all_precision_info()
+    @staticmethod
+    def create_cpu_offload_config(
+        model_size_gb: float,
+        available_gpu_memory_gb: float,
+        available_cpu_memory_gb: float,
+        nvme_path: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Create CPU offload configuration based on available resources."""
+        
+        config = {
+            "zero_optimization": {
+                "stage": 3,
+                "allgather_partitions": True,
+                "allgather_bucket_size": 5e8,
+                "overlap_comm": True,
+                "reduce_scatter": True,
+                "reduce_bucket_size": 5e8,
+                "contiguous_gradients": True,
+            }
         }
+        
+        # Determine what to offload based on memory constraints
+        gpu_memory_needed = model_size_gb * 1.5  # Model + optimizer states + activations
+        
+        if gpu_memory_needed > available_gpu_memory_gb * 0.8:
+            # Need aggressive offloading
+            config["zero_optimization"]["offload_param"] = {
+                "device": "cpu",
+                "nvme_path": nvme_path,
+                "buffer_count": 5,
+                "buffer_size": int(1e8),
+                "max_in_cpu": min(int(available_cpu_memory_gb * 0.5 * 1e9), int(5e9)),
+                "pin_memory": True
+            }
+            
+            config["zero_optimization"]["offload_optimizer"] = {
+                "device": "cpu",
+                "nvme_path": nvme_path,
+                "buffer_count": 4,
+                "pin_memory": True,
+                "pipeline_read": True,
+                "pipeline_write": True,
+                "fast_init": False
+            }
+            
+            # More aggressive ZeRO-3 settings
+            config["zero_optimization"].update({
+                "stage3_param_persistence_threshold": 1e3,
+                "stage3_max_live_parameters": int(available_gpu_memory_gb * 0.3 * 1e9),
+                "stage3_prefetch_bucket_size": int(2e7),
+                "memory_efficient_linear": True,
+                "stage3_max_reuse_distance": 500,
+            })
+            
+            logging.info("Aggressive CPU offloading enabled")
+            
+        elif gpu_memory_needed > available_gpu_memory_gb * 0.6:
+            # Moderate offloading
+            config["zero_optimization"]["offload_optimizer"] = {
+                "device": "cpu",
+                "nvme_path": nvme_path,
+                "buffer_count": 4,
+                "pin_memory": True,
+                "pipeline_read": True,
+                "pipeline_write": True,
+                "fast_init": False
+            }
+            
+            logging.info("Moderate CPU offloading enabled (optimizer only)")
+            
+        else:
+            # No offloading needed
+            logging.info("No CPU offloading needed")
+        
+        return config

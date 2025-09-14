@@ -4,7 +4,7 @@
 import yaml
 from dataclasses import dataclass, asdict
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 
 @dataclass
@@ -22,13 +22,13 @@ class Config:
     rope_theta: float = 10000.0
     dropout: float = 0.0
     
-    # Training parameters - FIXED: Reduced learning rate and adjusted warmup
+    # Training parameters
     batch_size: int = 2
     gradient_accumulation_steps: int = 8
-    learning_rate: float = 1e-4  # Reduced from 5e-4 to prevent high loss/PPL
+    learning_rate: float = 1e-4
     weight_decay: float = 0.01
     num_epochs: int = 3
-    warmup_ratio: float = 0.15  # Increased from 0.1 for better stability
+    warmup_ratio: float = 0.15
     eval_every_n_batches: int = 500
     save_every_n_batches: int = 1000
     max_grad_norm: float = 1.0
@@ -53,23 +53,32 @@ class Config:
     init_std: float = 0.02
     layer_norm_eps: float = 1e-5
     use_stable_embedding: bool = True
-    gradient_checkpointing: bool = True  # Changed to True by default
+    gradient_checkpointing: bool = True
+    tie_word_embeddings: bool = True
     
-    # MoE parameters - ADDED FOR YOUR MODEL
+    # MoE parameters
     use_moe: bool = False
     num_experts: int = 8
     moe_top_k: int = 2
     capacity_factor: float = 1.25
     load_balancing_weight: float = 0.01
     
+    # DeepSpeed parameters - ADDED
+    use_deepspeed: bool = True
+    zero_stage: int = 3
+    cpu_offload: bool = False
+    cpu_offload_optimizer: bool = False
+    aggressive_cpu_offload: bool = False
+    nvme_path: Optional[str] = None
+    
     # Production settings
-    experiment_name: str = None
+    experiment_name: Optional[str] = None
     seed: int = 42
     log_level: str = "INFO"
     save_total_limit: int = 5
-    early_stopping_patience: int = None
+    early_stopping_patience: Optional[int] = None
     min_lr: float = 1e-6
-    lr_scheduler: str = "cosine"  # Changed back to cosine for better convergence
+    lr_scheduler: str = "cosine"
     
     # Monitoring and fault tolerance
     health_check_interval: int = 100
@@ -81,7 +90,7 @@ class Config:
     auto_tune_precision: bool = False
     precision_target: str = "balanced"
     dynamic_precision: bool = False
-    tf32_enabled: bool = None
+    tf32_enabled: Optional[bool] = None
     
     def __post_init__(self):
         self.validate()
@@ -93,6 +102,10 @@ class Config:
             self.vocab_size = ((self.vocab_size + 63) // 64) * 64
         
         self.effective_batch_size = self.batch_size * self.gradient_accumulation_steps
+        
+        # Set intermediate_size if not specified
+        if self.intermediate_size is None:
+            self.intermediate_size = int(self.hidden_size * 8 / 3)
     
     def validate(self):
         """Validate configuration parameters."""
@@ -119,6 +132,10 @@ class Config:
             assert self.moe_top_k <= self.num_experts, "moe_top_k cannot exceed num_experts"
             assert self.capacity_factor >= 1.0, "capacity_factor must be at least 1.0"
             assert self.load_balancing_weight >= 0, "load_balancing_weight must be non-negative"
+        
+        # DeepSpeed validation
+        if self.use_deepspeed:
+            assert self.zero_stage in [1, 2, 3], "zero_stage must be 1, 2, or 3"
         
         valid_targets = ["speed", "memory", "quality", "balanced", "production"]
         assert self.precision_target in valid_targets, f"Invalid precision target: {self.precision_target}. Valid options: {valid_targets}"
@@ -153,11 +170,11 @@ class ConfigPresets:
             seq_length=256,
             intermediate_size=256,
             
-            # Fast training settings - FIXED: Reduced learning rate
+            # Fast training settings
             batch_size=2,
             gradient_accumulation_steps=2,
             num_epochs=1,
-            learning_rate=5e-5,  # Reduced from 1e-3
+            learning_rate=5e-5,
             weight_decay=0.01,
             eval_every_n_batches=50,
             save_every_n_batches=100,
@@ -168,10 +185,15 @@ class ConfigPresets:
             
             # MoE settings - small for debugging
             use_moe=True,
-            num_experts=4,  # Small number for debugging
+            num_experts=4,
             moe_top_k=2,
             capacity_factor=1.1,
             load_balancing_weight=0.005,
+            
+            # DeepSpeed settings
+            use_deepspeed=True,
+            zero_stage=2,
+            cpu_offload=False,
             
             # Monitoring and stability
             experiment_name="debug_run",
@@ -181,7 +203,7 @@ class ConfigPresets:
             early_stopping_patience=None,
             max_retries=1,
             lr_scheduler="cosine",
-            gradient_checkpointing=True,  # Enabled
+            gradient_checkpointing=True,
             
             # Precision settings
             auto_tune_precision=False,
@@ -221,6 +243,11 @@ class ConfigPresets:
             capacity_factor=1.25,
             load_balancing_weight=0.01,
             
+            # DeepSpeed settings
+            use_deepspeed=True,
+            zero_stage=2,
+            cpu_offload=False,
+            
             # Production settings
             experiment_name="b1",
             log_level="INFO",
@@ -229,7 +256,7 @@ class ConfigPresets:
             early_stopping_patience=5,
             backup_every_n_hours=12,
             lr_scheduler="cosine",
-            gradient_checkpointing=True,  # Enabled
+            gradient_checkpointing=True,
             
             # Precision settings
             auto_tune_precision=True,
@@ -269,6 +296,11 @@ class ConfigPresets:
             capacity_factor=1.5,
             load_balancing_weight=0.01,
             
+            # DeepSpeed settings
+            use_deepspeed=True,
+            zero_stage=3,
+            cpu_offload=True,
+            
             # Production monitoring
             experiment_name="b7",
             log_level="INFO",
@@ -276,7 +308,7 @@ class ConfigPresets:
             save_total_limit=10,
             early_stopping_patience=10,
             backup_every_n_hours=6,
-            gradient_checkpointing=True,  # Already enabled
+            gradient_checkpointing=True,
             lr_scheduler="cosine",
             
             # Precision settings
@@ -317,6 +349,11 @@ class ConfigPresets:
             capacity_factor=1.8,
             load_balancing_weight=0.015,
             
+            # DeepSpeed settings
+            use_deepspeed=True,
+            zero_stage=3,
+            cpu_offload=True,
+            
             # Enterprise monitoring
             experiment_name="b14",
             log_level="INFO",
@@ -324,7 +361,7 @@ class ConfigPresets:
             save_total_limit=15,
             early_stopping_patience=15,
             backup_every_n_hours=4,
-            gradient_checkpointing=True,  # Already enabled
+            gradient_checkpointing=True,
             lr_scheduler="cosine",
             warmup_ratio=0.05,
             
@@ -344,7 +381,7 @@ class ConfigPresets:
             num_layers=40,
             num_heads=40,
             num_kv_heads=10,
-            seq_length=128000,  # Production context length like Claude
+            seq_length=128000,
             intermediate_size=13824,
             
             # Massive-scale training
@@ -367,6 +404,12 @@ class ConfigPresets:
             capacity_factor=2.0,
             load_balancing_weight=0.02,
             
+            # DeepSpeed settings
+            use_deepspeed=True,
+            zero_stage=3,
+            cpu_offload=True,
+            aggressive_cpu_offload=True,
+            
             # Enterprise monitoring
             experiment_name="b50",
             log_level="INFO",
@@ -374,7 +417,7 @@ class ConfigPresets:
             save_total_limit=18,
             early_stopping_patience=18,
             backup_every_n_hours=3,
-            gradient_checkpointing=True,  # Already enabled
+            gradient_checkpointing=True,
             lr_scheduler="cosine",
             warmup_ratio=0.08,
             
@@ -394,7 +437,7 @@ class ConfigPresets:
             num_layers=48,
             num_heads=56,
             num_kv_heads=14,
-            seq_length=200000,  # Extended context length like GPT-4
+            seq_length=200000,
             intermediate_size=18432,
             
             # Extreme-scale training
@@ -417,6 +460,12 @@ class ConfigPresets:
             capacity_factor=2.2,
             load_balancing_weight=0.025,
             
+            # DeepSpeed settings
+            use_deepspeed=True,
+            zero_stage=3,
+            cpu_offload=True,
+            aggressive_cpu_offload=True,
+            
             # Enterprise monitoring
             experiment_name="b100",
             log_level="INFO",
@@ -424,7 +473,7 @@ class ConfigPresets:
             save_total_limit=20,
             early_stopping_patience=20,
             backup_every_n_hours=2,
-            gradient_checkpointing=True,  # Already enabled
+            gradient_checkpointing=True,
             lr_scheduler="cosine",
             warmup_ratio=0.1,
             
@@ -444,7 +493,7 @@ class ConfigPresets:
             num_layers=56,
             num_heads=64,
             num_kv_heads=16,
-            seq_length=1000000,  # Production context within training budget
+            seq_length=1000000,
             intermediate_size=22016,
             
             # Production-scale training
@@ -467,6 +516,12 @@ class ConfigPresets:
             capacity_factor=2.5,
             load_balancing_weight=0.03,
             
+            # DeepSpeed settings
+            use_deepspeed=True,
+            zero_stage=3,
+            cpu_offload=True,
+            aggressive_cpu_offload=True,
+            
             # Enterprise monitoring
             experiment_name="b200",
             log_level="INFO",
@@ -474,7 +529,7 @@ class ConfigPresets:
             save_total_limit=20,
             early_stopping_patience=20,
             backup_every_n_hours=2,
-            gradient_checkpointing=True,  # Already enabled
+            gradient_checkpointing=True,
             lr_scheduler="cosine",
             warmup_ratio=0.1,
             
@@ -494,7 +549,7 @@ class ConfigPresets:
             num_layers=64,
             num_heads=72,
             num_kv_heads=18,
-            seq_length=204800,  # 200K context for 300B model
+            seq_length=204800,
             intermediate_size=24576,
             
             # Research-scale training
@@ -517,6 +572,12 @@ class ConfigPresets:
             capacity_factor=2.8,
             load_balancing_weight=0.035,
             
+            # DeepSpeed settings
+            use_deepspeed=True,
+            zero_stage=3,
+            cpu_offload=True,
+            aggressive_cpu_offload=True,
+            
             # Research monitoring
             experiment_name="b300",
             log_level="INFO",
@@ -524,7 +585,7 @@ class ConfigPresets:
             save_total_limit=20,
             early_stopping_patience=20,
             backup_every_n_hours=2,
-            gradient_checkpointing=True,  # Already enabled
+            gradient_checkpointing=True,
             lr_scheduler="cosine",
             warmup_ratio=0.1,
             
@@ -533,216 +594,6 @@ class ConfigPresets:
             precision_target="quality",
             dynamic_precision=False,
             tf32_enabled=True
-        )
-    
-    @staticmethod
-    def b3_inference() -> Config:
-        """3B parameter model optimized for inference performance."""
-        return Config(
-            # 3B parameter model optimized for inference
-            hidden_size=2560,
-            num_layers=24,
-            num_heads=20,
-            num_kv_heads=10,
-            seq_length=2048,
-            intermediate_size=6912,
-            
-            # Training settings
-            batch_size=1,
-            gradient_accumulation_steps=32,
-            num_epochs=1,
-            learning_rate=8e-6,
-            weight_decay=0.01,
-            precision="fp16",
-            inference_precision="fp16",
-            compile=True,
-            num_workers=4,
-            
-            # MoE settings for inference
-            use_moe=True,
-            num_experts=16,
-            moe_top_k=2,
-            capacity_factor=1.3,
-            load_balancing_weight=0.008,
-            
-            # Generation parameters optimized for quality and speed
-            max_new_tokens=256,
-            temperature=0.7,
-            top_p=0.9,
-            top_k=40,
-            
-            # Fast inference settings
-            experiment_name="b3_inference",
-            log_level="INFO",
-            gradient_checkpointing=True,  # Enabled (was False)
-            use_stable_embedding=True,
-            lr_scheduler="cosine",
-            
-            # Precision settings optimized for speed
-            auto_tune_precision=True,
-            precision_target="speed",
-            dynamic_precision=False,
-            tf32_enabled=True
-        )
-    
-    @staticmethod
-    def b6_quality() -> Config:
-        """6B parameter model focused on generation quality."""
-        return Config(
-            # 6B parameter model focused on quality
-            hidden_size=3200,
-            num_layers=32,
-            num_heads=25,
-            num_kv_heads=10,
-            seq_length=4096,
-            intermediate_size=8640,
-            
-            # Training for quality
-            batch_size=1,
-            gradient_accumulation_steps=32,
-            num_epochs=4,
-            learning_rate=1e-4,
-            weight_decay=0.01,
-            precision="mixed_bf16",
-            inference_precision="bf16",
-            compile=True,
-            num_workers=6,
-            
-            # MoE settings for quality
-            use_moe=True,
-            num_experts=32,
-            moe_top_k=2,
-            capacity_factor=1.8,
-            load_balancing_weight=0.015,
-            
-            # Generation parameters for quality
-            max_new_tokens=1024,
-            temperature=0.8,
-            top_p=0.95,
-            top_k=100,
-            
-            # Quality settings
-            experiment_name="b6_quality",
-            log_level="INFO",
-            gradient_checkpointing=True,  # Already enabled
-            use_stable_embedding=True,
-            init_std=0.015,
-            dropout=0.1,
-            early_stopping_patience=20,
-            lr_scheduler="cosine",
-            
-            # Precision settings optimized for quality
-            auto_tune_precision=False,
-            precision_target="quality",
-            dynamic_precision=False,
-            tf32_enabled=False
-        )
-    
-    @staticmethod
-    def m120_speed() -> Config:
-        """120M parameter model optimized for maximum speed."""
-        return Config(
-            # 120M parameter model for speed
-            hidden_size=768,
-            num_layers=16,
-            num_heads=12,
-            num_kv_heads=4,
-            seq_length=1024,
-            intermediate_size=2048,
-            
-            # Speed-focused training
-            batch_size=8,
-            gradient_accumulation_steps=2,
-            num_epochs=2,
-            learning_rate=5e-4,
-            weight_decay=0.01,
-            eval_every_n_batches=200,
-            save_every_n_batches=500,
-            precision="fp16",
-            inference_precision="fp16",
-            compile=True,
-            num_workers=8,
-            
-            # MoE settings for speed
-            use_moe=True,
-            num_experts=8,
-            moe_top_k=2,
-            capacity_factor=1.2,
-            load_balancing_weight=0.008,
-            
-            # Speed generation parameters
-            max_new_tokens=128,
-            temperature=0.7,
-            top_p=0.9,
-            top_k=40,
-            
-            # Speed optimization settings
-            experiment_name="m120_speed",
-            log_level="INFO",
-            gradient_checkpointing=True,  # Enabled (was False)
-            use_stable_embedding=False,
-            health_check_interval=50,
-            save_total_limit=3,
-            lr_scheduler="cosine",
-            
-            # Precision settings for maximum speed
-            auto_tune_precision=True,
-            precision_target="speed",
-            dynamic_precision=False,
-            tf32_enabled=True
-        )
-    
-    @staticmethod
-    def m70_memory() -> Config:
-        """70M parameter model optimized for minimal memory usage."""
-        return Config(
-            # 70M parameter model for memory efficiency
-            hidden_size=768,
-            num_layers=12,
-            num_heads=12,
-            num_kv_heads=4,
-            seq_length=1024,
-            intermediate_size=2048,
-            
-            # Memory-conscious training
-            batch_size=1,
-            gradient_accumulation_steps=32,
-            num_epochs=3,
-            learning_rate=2e-4,
-            weight_decay=0.01,
-            eval_every_n_batches=1000,
-            save_every_n_batches=2000,
-            precision="fp16",
-            inference_precision="fp16",
-            compile=True,
-            num_workers=2,
-            
-            # MoE settings for memory optimization
-            use_moe=True,
-            num_experts=8,
-            moe_top_k=2,
-            capacity_factor=1.2,
-            load_balancing_weight=0.008,
-            
-            # Memory-conscious generation
-            max_new_tokens=256,
-            temperature=0.8,
-            top_p=0.9,
-            top_k=50,
-            
-            # Memory optimization settings
-            experiment_name="m70_memory",
-            log_level="INFO",
-            gradient_checkpointing=True,  # Already enabled
-            use_stable_embedding=True,
-            save_total_limit=2,
-            lr_scheduler="cosine",
-            
-            # Precision settings for memory efficiency
-            auto_tune_precision=True,
-            precision_target="memory",
-            dynamic_precision=False,
-            tf32_enabled=False
         )
     
     @staticmethod
@@ -757,7 +608,8 @@ class ConfigPresets:
                 "training_speed": "Very Fast",
                 "precision": "fp32 (debugging clarity)",
                 "moe_experts": 4,
-                "gradient_checkpointing": True
+                "gradient_checkpointing": True,
+                "deepspeed": "ZeRO-2"
             },
             "b1": {
                 "description": "1B parameter model for limited resources",
@@ -767,7 +619,8 @@ class ConfigPresets:
                 "training_speed": "Fast",
                 "precision": "fp16 with auto-tuning",
                 "moe_experts": 8,
-                "gradient_checkpointing": True
+                "gradient_checkpointing": True,
+                "deepspeed": "ZeRO-2"
             },
             "b7": {
                 "description": "7B parameter model for serious training",
@@ -777,7 +630,8 @@ class ConfigPresets:
                 "training_speed": "Medium",
                 "precision": "mixed_bf16",
                 "moe_experts": 16,
-                "gradient_checkpointing": True
+                "gradient_checkpointing": True,
+                "deepspeed": "ZeRO-3 with CPU offload"
             },
             "b14": {
                 "description": "14B parameter model for high-end training",
@@ -787,7 +641,8 @@ class ConfigPresets:
                 "training_speed": "Slow",
                 "precision": "mixed_bf16 with TF32",
                 "moe_experts": 32,
-                "gradient_checkpointing": True
+                "gradient_checkpointing": True,
+                "deepspeed": "ZeRO-3 with CPU offload"
             },
             "b50": {
                 "description": "50B parameter model for massive training",
@@ -797,7 +652,8 @@ class ConfigPresets:
                 "training_speed": "Slow",
                 "precision": "mixed_bf16 with TF32",
                 "moe_experts": 64,
-                "gradient_checkpointing": True
+                "gradient_checkpointing": True,
+                "deepspeed": "ZeRO-3 with aggressive CPU offload"
             },
             "b100": {
                 "description": "100B parameter model for extreme training",
@@ -807,7 +663,8 @@ class ConfigPresets:
                 "training_speed": "Very Slow",
                 "precision": "mixed_bf16 with TF32",
                 "moe_experts": 96,
-                "gradient_checkpointing": True
+                "gradient_checkpointing": True,
+                "deepspeed": "ZeRO-3 with aggressive CPU offload"
             },
             "b200": {
                 "description": "200B parameter model for production deployment",
@@ -817,7 +674,8 @@ class ConfigPresets:
                 "training_speed": "Very Slow",
                 "precision": "mixed_bf16 with TF32",
                 "moe_experts": 128,
-                "gradient_checkpointing": True
+                "gradient_checkpointing": True,
+                "deepspeed": "ZeRO-3 with aggressive CPU offload"
             },
             "b300": {
                 "description": "300B parameter model for research",
@@ -827,47 +685,8 @@ class ConfigPresets:
                 "training_speed": "Very Slow",
                 "precision": "mixed_bf16 with TF32",
                 "moe_experts": 144,
-                "gradient_checkpointing": True
-            },
-            "b3_inference": {
-                "description": "Optimized for inference performance",
-                "use_case": "Production inference",
-                "model_size": "Medium (~3B parameters)",
-                "memory_usage": "Medium",
-                "training_speed": "Fast",
-                "precision": "fp16 for speed",
-                "moe_experts": 16,
-                "gradient_checkpointing": True
-            },
-            "b6_quality": {
-                "description": "Optimized for generation quality",
-                "use_case": "High-quality text generation",
-                "model_size": "Large (~6B parameters)",
-                "memory_usage": "High",
-                "training_speed": "Slow",
-                "precision": "mixed_bf16 for stability",
-                "moe_experts": 32,
-                "gradient_checkpointing": True
-            },
-            "m120_speed": {
-                "description": "Optimized for maximum speed",
-                "use_case": "Real-time applications",
-                "model_size": "Small (~120M parameters)",
-                "memory_usage": "Low",
-                "training_speed": "Very Fast",
-                "precision": "fp16 with TF32",
-                "moe_experts": 8,
-                "gradient_checkpointing": True
-            },
-            "m70_memory": {
-                "description": "Optimized for minimal memory usage",
-                "use_case": "Memory-constrained environments",
-                "model_size": "Small (~70M parameters)",
-                "memory_usage": "Very Low",
-                "training_speed": "Medium",
-                "precision": "fp16 with gradient checkpointing",
-                "moe_experts": 8,
-                "gradient_checkpointing": True
+                "gradient_checkpointing": True,
+                "deepspeed": "ZeRO-3 with aggressive CPU offload"
             }
         }
     
@@ -882,11 +701,7 @@ class ConfigPresets:
             'b50': ConfigPresets.b50(),
             'b100': ConfigPresets.b100(),
             'b200': ConfigPresets.b200(),
-            'b300': ConfigPresets.b300(),
-            'b3_inference': ConfigPresets.b3_inference(),
-            'b6_quality': ConfigPresets.b6_quality(),
-            'm120_speed': ConfigPresets.m120_speed(),
-            'm70_memory': ConfigPresets.m70_memory()
+            'b300': ConfigPresets.b300()
         }
         
         comparison = {}
@@ -899,6 +714,12 @@ class ConfigPresets:
                 2 * config.hidden_size * config.intermediate_size
             )
             total_params = embed_params + attention_params
+            
+            # Account for MoE if enabled
+            if config.use_moe:
+                # MoE adds parameters for expert layers
+                moe_params = config.num_layers * config.num_experts * config.hidden_size * config.intermediate_size
+                total_params += moe_params
             
             comparison[name] = {
                 'estimated_parameters': total_params,
@@ -917,7 +738,11 @@ class ConfigPresets:
                 'compile': config.compile,
                 'use_moe': config.use_moe,
                 'num_experts': config.num_experts,
-                'moe_top_k': config.moe_top_k
+                'moe_top_k': config.moe_top_k,
+                'use_deepspeed': config.use_deepspeed,
+                'zero_stage': config.zero_stage,
+                'cpu_offload': config.cpu_offload,
+                'aggressive_cpu_offload': config.aggressive_cpu_offload
             }
         
         return comparison
