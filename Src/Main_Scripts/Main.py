@@ -34,7 +34,7 @@ try:
     from core.tokenizer import ConversationTokenizer
     from core.model import estimate_parameters, DeepSeekTransformer, DeepSeekConfig
     from core.dataset import ConversationDataset, StreamingConversationDataset, create_memory_efficient_dataloader
-    from trainer import EnhancedConversationTrainer, DeepSpeedConfigGenerator
+    from training.trainer import EnhancedConversationTrainer, DeepSpeedConfigGenerator
 except ImportError as e:
     print(f"Import error: {e}")
     print("Make sure all required modules are present in the correct directory structure.")
@@ -126,7 +126,7 @@ class EnhancedResourceManager:
                     'name': gpu_props.name,
                     'memory_gb': gpu_props.total_memory / 1e9,
                     'compute_capability': f"{gpu_props.major}.{gpu_props.minor}",
-                    'multiprocessor_count': gpu_props.multiprocessor_count
+                    'multiprocessor_count': gpu_props.multi_processor_count
                 })
         
         # Storage information
@@ -440,7 +440,6 @@ def main():
         'learning_rate': 1e-4, # Learning rate
         'batch_size': 1,       # Micro batch size
         'gradient_accumulation_steps': 64,  # High gradient accumulation
-        'seq_length': 200000,  # Ultra-long sequences
         'train_data_path': 'oasst1_data/oasst1_train.jsonl',
         'eval_data_path': 'data/eval.jsonl',
     }
@@ -727,11 +726,11 @@ def main():
                     print(f"   CPU offload: {'Enabled' if getattr(config, 'cpu_offload', False) else 'Disabled'}")
                     print(f"   ZeRO stage: {getattr(config, 'zero_stage', 'Not set')}")
             
-            # Load datasets
+            # Load datasets - FIXED: Use correct parameter name
             train_dataset = ConversationDataset(
                 data_path=config.train_data_path,
                 tokenizer=tokenizer,
-                max_length=config.seq_length,
+                max_length=config.seq_length,  # Fixed: use max_length instead of max_seq_length
                 streaming=True  # Use streaming for large datasets
             )
             
@@ -740,7 +739,7 @@ def main():
                 eval_dataset = ConversationDataset(
                     data_path=config.eval_data_path,
                     tokenizer=tokenizer,
-                    max_length=config.seq_length,
+                    max_length=config.seq_length,  # Fixed: use max_length consistently
                     streaming=False
                 )
             
