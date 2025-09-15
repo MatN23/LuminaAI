@@ -492,11 +492,16 @@ class EnhancedConversationTrainer:
         self._setup_training()
         
     def _setup_training(self):
-        """Setup training with DeepSpeed or fallback to standard training."""
         if self.use_deepspeed:
-            self._setup_deepspeed_training()
+            self.model, self.optimizer, _, _ = deepspeed.initialize(
+                model=self.model,
+                model_parameters=self.model.parameters(),
+                config=self.config.deepspeed_config_dict  # or path to JSON
+            )
+            self.deepspeed_engine = self.model
         else:
-            self._setup_standard_training()
+            self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.config.learning_rate)
+
     
     def _setup_deepspeed_training(self):
         """Setup DeepSpeed training with MoE and CPU offloading optimizations."""
@@ -1059,6 +1064,12 @@ class EnhancedConversationTrainer:
         
         # Setup data loaders
         train_dataloader = create_dataloader(train_dataset, self.config, shuffle=True)
+        print(">>> train dataloader created")
+        if len(train_dataloader) == 0:
+            print("ERROR: Train dataloader is empty!")
+        return
+
+        train_dataloader = self._create_dataloader(train_dataset)
         
         # Calculate total steps (DeepSpeed handles this internally)
         if not self.use_deepspeed:
@@ -1181,7 +1192,9 @@ class EnhancedConversationTrainer:
                     epoch_metrics['total_raw_loss'] += accumulation_metrics['raw_loss']
                     epoch_metrics['total_tokens'] += accumulation_metrics['tokens']
                     epoch_metrics['num_batches'] += 1
-                    epoch_metrics['grad_norm_sum'] += opt_metrics['grad_norm']
+                    if opt_metrics['grad_norm'] is not None:
+                        epoch_metrics['grad_norm_sum'] += opt_metrics['grad_norm']
+
                 
                 # Calculate throughput
                 step_time = time.time() - step_start_time

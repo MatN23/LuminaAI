@@ -429,17 +429,15 @@ def main():
     # =================================================
     
     # Base model configuration - select from ConfigPresets
-    config_choice = 'b7'  # Options: 'debug', 'b1', 'b7', 'b14', 'b50', 'b100', 'b200', 'b300'
+    config_choice = 'debug'  # Options: 'debug', 'b1', 'b7', 'b14', 'b50', 'b100', 'b200', 'b300'
     
     # Override specific parameters (set to None to use preset defaults)
     override_params = {
         'use_moe': True,        # Enable MoE
-        'num_experts': 144,     # Number of experts
-        'moe_top_k': 2,        # Top-k routing
-        'num_epochs': 3,       # Training epochs
+        'num_epochs': 10,       # Training epochs
         'learning_rate': 1e-4, # Learning rate
         'batch_size': 1,       # Micro batch size
-        'gradient_accumulation_steps': 64,  # High gradient accumulation
+        'gradient_accumulation_steps': 4,
         'train_data_path': 'oasst1_data/oasst1_train.jsonl',
         'eval_data_path': 'data/eval.jsonl',
     }
@@ -540,9 +538,68 @@ def main():
                     logging.error(f"Data processing failed: {e}")
                 return 1
         
-        # Initialize tokenizer
+        # Load and configure base model
+        try:
+            # Get base configuration from preset
+            config_map = {
+                'debug': ConfigPresets.debug,
+                'b1': ConfigPresets.b1,
+                'b7': ConfigPresets.b7,
+                'b14': ConfigPresets.b14,
+                'b50': ConfigPresets.b50,
+                'b100': ConfigPresets.b100,
+                'b200': ConfigPresets.b200,
+                'b300': ConfigPresets.b300,
+            }
+            
+            if config_choice not in config_map:
+                raise ValueError(f"Invalid config choice: {config_choice}")
+            
+            config = config_map[config_choice]()
+
+            # Apply parameter overrides
+            if override_params:
+                for param, value in override_params.items():
+                    if value is not None and hasattr(config, param):
+                        setattr(config, param, value)
+                        if should_log:
+                            logging.info(f"Override: {param} = {value}")
+            
+            # Set experiment name
+            config.experiment_name = experiment_name
+            
+            # Add DeepSpeed-specific attributes if not present
+            if not hasattr(config, 'use_deepspeed'):
+                config.use_deepspeed = enable_deepspeed
+            if not hasattr(config, 'zero_stage'):
+                config.zero_stage = zero_stage
+            if not hasattr(config, 'cpu_offload'):
+                config.cpu_offload = enable_cpu_offload
+            if nvme_path and not hasattr(config, 'nvme_path'):
+                config.nvme_path = nvme_path
+            
+            # Enhanced DeepSpeed configuration
+            if enable_deepspeed and config.use_deepspeed:
+                wizard = AdaptiveDeepSpeedWizard(resource_manager)
+                config = wizard.auto_configure_deepspeed(config)
+                
+                if should_log:
+                    logging.info(f"DeepSpeed optimization applied")
+            
+            config.validate()
+            if should_log:
+                logging.info(f"Configuration loaded and optimized: {config_choice}")
+            
+        except Exception as e:
+            if should_log:
+                logging.error(f"Configuration error: {e}")
+                logging.error(traceback.format_exc())
+            return 1
+        
+        # Initialize tokenizer - FIXED: Moved after config initialization
         try:
             tokenizer = ConversationTokenizer(model_name="gpt-4")
+            config.vocab_size = tokenizer.get_vocab_size()  # Ensure targets are in range
             if should_log:
                 logging.info("Tokenizer initialized successfully")
         except Exception as e:
@@ -586,64 +643,6 @@ def main():
                 if should_log:
                     logging.error(f"Data validation failed: {e}")
                 return 1
-        
-        # Load and configure base model
-        try:
-            # Get base configuration from preset
-            config_map = {
-                'debug': ConfigPresets.debug,
-                'b1': ConfigPresets.b1,
-                'b7': ConfigPresets.b7,
-                'b14': ConfigPresets.b14,
-                'b50': ConfigPresets.b50,
-                'b100': ConfigPresets.b100,
-                'b200': ConfigPresets.b200,
-                'b300': ConfigPresets.b300,
-            }
-            
-            if config_choice not in config_map:
-                raise ValueError(f"Invalid config choice: {config_choice}")
-            
-            config = config_map[config_choice]()
-            
-            # Apply parameter overrides
-            if override_params:
-                for param, value in override_params.items():
-                    if value is not None and hasattr(config, param):
-                        setattr(config, param, value)
-                        if should_log:
-                            logging.info(f"Override: {param} = {value}")
-            
-            # Set experiment name
-            config.experiment_name = experiment_name
-            
-            # Add DeepSpeed-specific attributes if not present
-            if not hasattr(config, 'use_deepspeed'):
-                config.use_deepspeed = enable_deepspeed
-            if not hasattr(config, 'zero_stage'):
-                config.zero_stage = zero_stage
-            if not hasattr(config, 'cpu_offload'):
-                config.cpu_offload = enable_cpu_offload
-            if nvme_path and not hasattr(config, 'nvme_path'):
-                config.nvme_path = nvme_path
-            
-            # Enhanced DeepSpeed configuration
-            if enable_deepspeed and config.use_deepspeed:
-                wizard = AdaptiveDeepSpeedWizard(resource_manager)
-                config = wizard.auto_configure_deepspeed(config)
-                
-                if should_log:
-                    logging.info(f"DeepSpeed optimization applied")
-            
-            config.validate()
-            if should_log:
-                logging.info(f"Configuration loaded and optimized: {config_choice}")
-            
-        except Exception as e:
-            if should_log:
-                logging.error(f"Configuration error: {e}")
-                logging.error(traceback.format_exc())
-            return 1
         
         # Time estimation
         if estimate_time and should_log:
@@ -728,19 +727,17 @@ def main():
             
             # Load datasets - FIXED: Use correct parameter name
             train_dataset = ConversationDataset(
-                data_path=config.train_data_path,
-                tokenizer=tokenizer,
-                max_length=config.seq_length,  # Fixed: use max_length instead of max_seq_length
-                streaming=True  # Use streaming for large datasets
+                config.train_data_path,
+                tokenizer,
+                config,
             )
             
             eval_dataset = None
             if Path(config.eval_data_path).exists():
                 eval_dataset = ConversationDataset(
-                    data_path=config.eval_data_path,
-                    tokenizer=tokenizer,
-                    max_length=config.seq_length,  # Fixed: use max_length consistently
-                    streaming=False
+                    config.eval_data_path,
+                    tokenizer,
+                    config,
                 )
             
             # Run training
