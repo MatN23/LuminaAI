@@ -422,6 +422,52 @@ def config_to_deepseek_config(config: Config):
     )
 
 
+def debug_data_loading(config: Config, tokenizer):
+    """Debug data loading issues."""
+    print(f"\nDEBUGGING DATA LOADING:")
+    print(f"  Train data path: {config.train_data_path}")
+    print(f"  Eval data path: {config.eval_data_path}")
+    
+    # Check train data
+    train_path = Path(config.train_data_path)
+    if not train_path.exists():
+        print(f"  ERROR: Train data file not found: {train_path}")
+        
+        # Look for alternatives
+        possible_files = [
+            'data/train.jsonl',
+            'oasst1_train.jsonl', 
+            'train.jsonl',
+            'data/oasst1_train.jsonl'
+        ]
+        
+        for alt_file in possible_files:
+            if Path(alt_file).exists():
+                print(f"  FOUND ALTERNATIVE: {alt_file}")
+                config.train_data_path = alt_file
+                break
+        else:
+            raise FileNotFoundError(f"No training data found. Tried: {[config.train_data_path] + possible_files}")
+    
+    # Test loading a few samples
+    try:
+        dataset = ConversationDataset(config.train_data_path, tokenizer, config)
+        print(f"  Dataset loaded successfully: {len(dataset)} samples")
+        
+        # Test first sample
+        if len(dataset) > 0:
+            sample = dataset[0]
+            print(f"  First sample keys: {list(sample.keys())}")
+            print(f"  Input length: {sample['input_ids'].shape}")
+            print(f"  Training will start with {len(dataset)} samples")
+        else:
+            raise ValueError("Dataset is empty")
+            
+    except Exception as e:
+        print(f"  ERROR loading dataset: {e}")
+        raise
+
+
 def main():
     """Enhanced main function with comprehensive DeepSpeed integration."""
     
@@ -434,9 +480,9 @@ def main():
     # Override specific parameters (set to None to use preset defaults)
     override_params = {
         'use_moe': True,        # Enable MoE
-        'num_epochs': 10,       # Training epochs
-        'learning_rate': 1e-4, # Learning rate
-        'batch_size': 1,       # Micro batch size
+        'num_epochs': 3,        # Training epochs - REDUCED FOR TESTING
+        'learning_rate': 1e-4,  # Learning rate
+        'batch_size': 1,        # Micro batch size
         'gradient_accumulation_steps': 4,
         'train_data_path': 'oasst1_data/oasst1_train.jsonl',
         'eval_data_path': 'data/eval.jsonl',
@@ -596,7 +642,7 @@ def main():
                 logging.error(traceback.format_exc())
             return 1
         
-        # Initialize tokenizer - FIXED: Moved after config initialization
+        # Initialize tokenizer
         try:
             tokenizer = ConversationTokenizer(model_name="gpt-4")
             config.vocab_size = tokenizer.get_vocab_size()  # Ensure targets are in range
@@ -689,6 +735,11 @@ def main():
                 print(f"\nDry run completed - ready for training!")
             return 0
         
+        # Debug data loading before model initialization
+        if should_log:
+            print(f"\nDEBUGGING DATA FILES:")
+            debug_data_loading(config, tokenizer)
+        
         # Initialize model and trainer
         try:
             if should_log:
@@ -725,20 +776,30 @@ def main():
                     print(f"   CPU offload: {'Enabled' if getattr(config, 'cpu_offload', False) else 'Disabled'}")
                     print(f"   ZeRO stage: {getattr(config, 'zero_stage', 'Not set')}")
             
-            # Load datasets - FIXED: Use correct parameter name
+            # Load datasets
+            print(f"Loading training dataset from: {config.train_data_path}")
             train_dataset = ConversationDataset(
                 config.train_data_path,
                 tokenizer,
                 config,
             )
+            print(f"Training dataset loaded: {len(train_dataset)} samples")
             
             eval_dataset = None
             if Path(config.eval_data_path).exists():
+                print(f"Loading evaluation dataset from: {config.eval_data_path}")
                 eval_dataset = ConversationDataset(
-                        config.eval_data_path,
+                    config.eval_data_path,
                     tokenizer,
                     config,
                 )
+                print(f"Evaluation dataset loaded: {len(eval_dataset)} samples")
+            else:
+                print(f"Evaluation dataset not found at {config.eval_data_path}, using training data subset for validation")
+            
+            # Verify datasets are not empty
+            if len(train_dataset) == 0:
+                raise ValueError("Training dataset is empty! Check your data file format and path.")
             
             # Run training
             if should_log:
@@ -752,6 +813,8 @@ def main():
             if optimize_for_long_sequences and getattr(trainer, 'use_deepspeed', False):
                 trainer.optimize_for_sequence_length(config.seq_length)
             
+            # START TRAINING
+            print(f"TRAINING STARTING NOW with {len(train_dataset)} samples...")
             trainer.train(train_dataset, eval_dataset)
             
             end_time = datetime.now()
