@@ -223,7 +223,7 @@ class MoEOptimizationManager:
             recent_losses = self.routing_stats['load_balance_losses'][-100:]  # Last 100 steps
             diagnostics['load_balance_trend'] = {
                 'recent_avg': np.mean(recent_losses),
-                'trend': 'improving' if len(recent_losses) > 10 and recent_losses[-5:] < recent_losses[-10:-5] else 'stable'
+                'trend': 'improving' if len(recent_losses) > 10 and np.mean(recent_losses[-5:]) < np.mean(recent_losses[-10:-5]) else 'stable'
             }
         
         # Analyze expert usage balance
@@ -341,7 +341,7 @@ class CPUOffloadManager:
 class PrecisionManager:
     """Manages different precision types and their configurations."""
     
-    # Comprehensive precision definitions (keeping your existing implementation)
+    # Comprehensive precision definitions
     PRECISION_CONFIGS = {
         "fp32": {
             "dtype": torch.float32,
@@ -492,17 +492,16 @@ class EnhancedConversationTrainer:
         self._setup_training()
         
     def _setup_training(self):
+        """Setup training components based on DeepSpeed availability."""
         if self.use_deepspeed:
-            self.model, self.optimizer, _, _ = deepspeed.initialize(
-                model=self.model,
-                model_parameters=self.model.parameters(),
-                config=self.config.deepspeed_config_dict  # or path to JSON
-            )
-            self.deepspeed_engine = self.model
+            self._setup_deepspeed_training()
         else:
-            self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.config.learning_rate)
+            self._setup_standard_training()
 
-    
+    def _create_dataloader(self, dataset):
+        """Create dataloader for training."""
+        return create_dataloader(dataset, self.config, shuffle=True)
+
     def _setup_deepspeed_training(self):
         """Setup DeepSpeed training with MoE and CPU offloading optimizations."""
         logging.info("Initializing DeepSpeed training...")
@@ -758,7 +757,7 @@ class EnhancedConversationTrainer:
             return nullcontext()  # DeepSpeed handles precision internally
         
         # Use existing precision logic for standard training
-        target_precision = precision or (self.inference_precision if for_inference else self.training_precision)
+        target_precision = precision or (getattr(self, 'inference_precision', self.training_precision) if for_inference else self.training_precision)
         
         if target_precision == "dynamic":
             target_precision = self.precision_manager.auto_select_precision(
@@ -1064,12 +1063,10 @@ class EnhancedConversationTrainer:
         
         # Setup data loaders
         train_dataloader = create_dataloader(train_dataset, self.config, shuffle=True)
-        print(">>> train dataloader created")
+        
         if len(train_dataloader) == 0:
-            print("ERROR: Train dataloader is empty!")
-        return
-
-        train_dataloader = self._create_dataloader(train_dataset)
+            logging.error("ERROR: Train dataloader is empty!")
+            return
         
         # Calculate total steps (DeepSpeed handles this internally)
         if not self.use_deepspeed:
@@ -1141,7 +1138,7 @@ class EnhancedConversationTrainer:
                 self._save_deepspeed_checkpoint(self.current_epoch, final=True)
             else:
                 self._save_standard_checkpoint(self.current_epoch, final=True)
-    
+
     def train_epoch(self, train_dataloader, epoch: int):
         """Train one epoch with enhanced monitoring."""
         if self.use_deepspeed:
@@ -1192,7 +1189,7 @@ class EnhancedConversationTrainer:
                     epoch_metrics['total_raw_loss'] += accumulation_metrics['raw_loss']
                     epoch_metrics['total_tokens'] += accumulation_metrics['tokens']
                     epoch_metrics['num_batches'] += 1
-                    if opt_metrics['grad_norm'] is not None:
+                    if 'grad_norm' in opt_metrics and opt_metrics['grad_norm'] is not None:
                         epoch_metrics['grad_norm_sum'] += opt_metrics['grad_norm']
 
                 
