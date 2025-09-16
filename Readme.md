@@ -782,14 +782,6 @@ LuminaAI/
 │   ├── visualizations/              # Generated charts and plots
 │   └── routing/                     # MoE routing analysis
 ├── requirements.txt                  # Python dependencies
-├── requirements-deepspeed.txt        # DeepSpeed-specific dependencies
-├── pyproject.toml                   # Project configuration
-├── hostfile                         # Multi-node configuration template
-├── launch_scripts/                  # Training launch scripts
-│   ├── single_gpu.sh               # Single GPU training
-│   ├── multi_gpu.sh                # Multi-GPU training
-│   ├── multi_node.sh               # Multi-node training
-│   └── inference.sh                # Optimized inference
 ├── .gitignore                       # Git ignore rules
 ├── LICENSE                          # License file
 └── README.md                        # This documentation
