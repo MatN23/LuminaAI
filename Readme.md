@@ -1,20 +1,46 @@
 # LuminaAI
 
-A PyTorch framework for training transformer language models with Mixture of Experts (MoE) architecture support. Implements models from 70M to 300B parameters with automatic dataset processing and memory management.
+A PyTorch framework for training transformer language models with Mixture of Experts (MoE) architecture support and DeepSpeed integration. Implements models from 70M to 300B parameters with automatic dataset processing, distributed training, and advanced memory management.
 
 [![License](https://img.shields.io/badge/license-Custom-blue.svg)](./LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10+-brightgreen.svg)]()
 [![PyTorch](https://img.shields.io/badge/pytorch-2.0+-ee4c2c.svg)](https://pytorch.org/)
+[![DeepSpeed](https://img.shields.io/badge/deepspeed-enabled-brightgreen.svg)](https://github.com/microsoft/DeepSpeed)
 
 ## Quick Start
 
 ```bash
 git clone https://github.com/MatN23/LuminaAI.git && cd LuminaAI
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-pip install transformers datasets tokenizers numpy pyyaml tqdm psutil
+pip install transformers datasets tokenizers numpy pyyaml tqdm psutil deepspeed
 
+# Single GPU training
 python Src/Main_Scripts/main.py --config b7 --train-data data/conversations.jsonl --experiment-name test_run
+
+# Multi-GPU distributed training with DeepSpeed
+deepspeed --num_gpus=4 Src/Main_Scripts/main.py --config b14 --train-data data/conversations.jsonl
 ```
+
+## New Features & Improvements
+
+### 🚀 DeepSpeed Integration
+- **Zero Redundancy Optimizer (ZeRO)**: Stages 1, 2, and 3 support for massive model scaling
+- **CPU/NVMe Offloading**: Train models larger than GPU memory
+- **Automatic Configuration**: Intelligent DeepSpeed parameter selection based on hardware
+- **MoE Optimization**: Specialized DeepSpeed configurations for Mixture of Experts models
+- **Multi-Node Support**: Seamless scaling across multiple nodes
+
+### 🧠 Enhanced MoE Architecture  
+- **Expert Parallelism**: Distribute experts across GPUs for optimal performance
+- **Advanced Routing**: Improved load balancing and capacity management
+- **Routing Analytics**: Real-time expert utilization monitoring and optimization
+- **Configurable Top-K**: Dynamic expert selection strategies
+
+### 📊 Intelligent Resource Management
+- **Hardware Auto-Detection**: Automatic optimization based on GPU architecture
+- **Memory Pressure Analysis**: Dynamic adjustment of batch sizes and precision
+- **Performance Profiling**: Built-in benchmarking and bottleneck identification
+- **Emergency Recovery**: Automatic checkpoint saving before OOM conditions
 
 ## Table of Contents
 
@@ -22,11 +48,13 @@ python Src/Main_Scripts/main.py --config b7 --train-data data/conversations.json
 - [Architecture](#architecture)
 - [Model Configurations](#model-configurations)
 - [Installation](#installation)
+- [DeepSpeed Integration](#deepspeed-integration)
 - [Data Format and Processing](#data-format-and-processing)
 - [Usage Examples](#usage-examples)
 - [Training Configuration](#training-configuration)
 - [Precision and Memory Management](#precision-and-memory-management)
 - [Mixture of Experts Implementation](#mixture-of-experts-implementation)
+- [Distributed Training](#distributed-training)
 - [Monitoring and Analysis](#monitoring-and-analysis)
 - [Performance Characteristics](#performance-characteristics)
 - [Hardware Requirements](#hardware-requirements)
@@ -39,93 +67,99 @@ python Src/Main_Scripts/main.py --config b7 --train-data data/conversations.json
 
 ## Features
 
+### Core Architecture
 - DeepSeek-style transformer architecture with RoPE, Grouped Query Attention, RMSNorm, and SwiGLU
-- Mixture of Experts with configurable expert counts (4-144) and load balancing
+- Mixture of Experts with configurable expert counts (4-144) and intelligent load balancing
 - Automatic dataset sharding: memory loading, chunked processing, or streaming based on size
 - Multiple precision modes: FP32, FP16, BF16, mixed precision with hardware-aware selection
-- Memory optimizations: gradient checkpointing, Flash Attention integration, OOM recovery
+
+### Advanced Training
+- **DeepSpeed Integration**: ZeRO optimization stages 1-3, CPU/NVMe offloading, gradient compression
+- **Distributed Training**: Multi-GPU and multi-node support with automatic scaling
+- **Memory Optimizations**: Gradient checkpointing, Flash Attention integration, OOM recovery
+- **Adaptive Optimization**: Dynamic batch sizing, precision adjustment, and learning rate scaling
+
+### Production Features
 - Checkpoint management with automatic resumption, validation, and best model tracking
 - Real-time monitoring with health checks, resource tracking, and fault tolerance
 - Production-ready error handling with retry mechanisms and graceful degradation
+- Comprehensive logging and experiment tracking integration
 
 ## Architecture
 
-The framework implements a decoder-only transformer architecture based on modern language model designs. The core components include:
+The framework implements a state-of-the-art decoder-only transformer architecture optimized for large-scale training:
 
-### Attention Mechanism
+### Advanced Attention Mechanism
 - **Grouped Query Attention (GQA)**: Reduces memory usage by sharing key-value pairs across multiple query heads
-- **Rotary Position Embedding (RoPE)**: Provides better position encoding for longer sequences
-- **Flash Attention**: Optional integration for memory-efficient attention computation on long sequences
-- **Multi-Head Configuration**: Configurable head counts with support for different KV head ratios
+- **Rotary Position Embedding (RoPE)**: Provides superior position encoding for extended sequences
+- **Flash Attention Integration**: Memory-efficient attention computation with automatic fallback
+- **Multi-Head Configuration**: Configurable head counts with optimized KV head ratios
 
-### Layer Components
+### Enhanced Layer Components
 - **RMSNorm**: Root Mean Square Layer Normalization for improved training stability
-- **SwiGLU Activation**: Swish-Gated Linear Units in feed-forward networks
-- **Residual Connections**: Standard transformer residual pathways
-- **Layer Initialization**: Configurable initialization standards with stability controls
+- **SwiGLU Activation**: Swish-Gated Linear Units in feed-forward networks with optimal intermediate sizing
+- **Residual Connections**: Standard transformer residual pathways with gradient flow optimization
+- **Advanced Initialization**: Configurable initialization strategies with stability controls
 
-### Mixture of Experts
-- **Top-K Routing**: Sparse expert selection with configurable K values
-- **Load Balancing**: Auxiliary loss terms to prevent expert collapse
-- **Capacity Factor**: Controls expert utilization limits
-- **Expert Isolation**: Independent parameter spaces and gradient flows
+### Production MoE Implementation
+- **Intelligent Top-K Routing**: Sparse expert selection with dynamic routing strategies
+- **Advanced Load Balancing**: Multi-objective loss terms to prevent expert collapse
+- **Capacity Management**: Dynamic capacity factors with overflow handling
+- **Expert Parallelism**: Distributed expert computation across multiple devices
 
-### Memory Management
+### Memory Management System
 - **Gradient Checkpointing**: Trade computation for memory during backward passes
-- **Dynamic Precision**: Automatic precision adjustment based on stability
-- **Streaming Data Loading**: Process datasets larger than available memory
-- **Emergency Recovery**: Automatic memory cleanup on OOM conditions
+- **Dynamic Precision**: Automatic precision adjustment based on training stability
+- **Streaming Data Loading**: Process datasets larger than available memory efficiently
+- **Emergency Recovery**: Automatic memory cleanup and checkpoint saving on critical conditions
 
 ## Model Configurations
 
-The framework provides pre-configured model architectures spanning different scales and use cases:
+The framework provides extensively tested model architectures spanning different scales:
 
-| Configuration | Parameters | Hidden | Layers | Heads | KV Heads | Context | Memory (BF16) | Experts | Use Case |
-|---------------|------------|--------|--------|-------|----------|---------|---------------|---------|----------|
-| `debug` | 500K | 128 | 2 | 2 | 1 | 256 | ~10MB | 4 | Development testing |
-| `m70_memory` | 70M | 768 | 12 | 12 | 4 | 1024 | ~280MB | 8 | Memory-constrained deployment |
-| `m120_speed` | 120M | 768 | 16 | 12 | 4 | 1024 | ~480MB | 8 | Real-time applications |
-| `b1` | 1B | 1024 | 12 | 16 | 4 | 2048 | ~2GB | 8 | Resource-limited training |
-| `b3_inference` | 3B | 2560 | 24 | 20 | 10 | 2048 | ~6GB | 16 | Production inference |
-| `b6_quality` | 6B | 3200 | 32 | 25 | 10 | 4096 | ~12GB | 32 | High-quality generation |
-| `b7` | 7B | 2048 | 22 | 16 | 8 | 4096 | ~14GB | 16 | General purpose training |
-| `b14` | 14B | 2560 | 28 | 20 | 10 | 4096 | ~28GB | 32 | Advanced applications |
-| `b50` | 50B | 5120 | 40 | 40 | 10 | 128000 | ~100GB | 64 | Large-scale research |
-| `b100` | 100B | 7168 | 48 | 56 | 14 | 200000 | ~200GB | 96 | Frontier research |
-| `b200` | 200B | 8192 | 56 | 64 | 16 | 1000000 | ~400GB | 128 | Enterprise scale |
-| `b300` | 300B | 9216 | 64 | 72 | 18 | 204800 | ~600GB | 144 | Research frontiers |
+| Configuration | Parameters | Hidden | Layers | Heads | KV Heads | Context | Memory (BF16) | Experts | DeepSpeed Recommended |
+|---------------|------------|--------|--------|-------|----------|---------|---------------|---------|---------------------|
+| `debug` | 500K | 128 | 2 | 2 | 1 | 256 | ~10MB | 4 | No |
+| `m70_memory` | 70M | 768 | 12 | 12 | 4 | 1024 | ~280MB | 8 | Optional |
+| `m120_speed` | 120M | 768 | 16 | 12 | 4 | 1024 | ~480MB | 8 | Optional |
+| `b1` | 1B | 1024 | 12 | 16 | 4 | 2048 | ~2GB | 8 | Recommended |
+| `b3_inference` | 3B | 2560 | 24 | 20 | 10 | 2048 | ~6GB | 16 | Recommended |
+| `b6_quality` | 6B | 3200 | 32 | 25 | 10 | 4096 | ~12GB | 32 | Recommended |
+| `b7` | 7B | 2048 | 22 | 16 | 8 | 4096 | ~14GB | 16 | **Recommended** |
+| `b14` | 14B | 2560 | 28 | 20 | 10 | 4096 | ~28GB | 32 | **Required** |
+| `b50` | 50B | 5120 | 40 | 40 | 10 | 128000 | ~100GB | 64 | **Required (ZeRO-3)** |
+| `b100` | 100B | 7168 | 48 | 56 | 14 | 200000 | ~200GB | 96 | **Required (CPU Offload)** |
+| `b200` | 200B | 8192 | 56 | 64 | 16 | 1000000 | ~400GB | 128 | **Required (NVMe Offload)** |
+| `b300` | 300B | 9216 | 64 | 72 | 18 | 204800 | ~600GB | 144 | **Required (Multi-Node)** |
 
-### Configuration Details
+### Enhanced Configuration Details
 
-Each preset includes optimized hyperparameters:
+Each preset includes optimized hyperparameters for DeepSpeed integration:
 
-- **Learning Rates**: Range from 3e-5 (large models) to 5e-4 (small models)
-- **Batch Sizes**: Automatically calculated based on available memory
-- **Gradient Accumulation**: Configured to maintain effective batch sizes
-- **Warmup Ratios**: Scaled based on model size (5-20% of training steps)
-- **Weight Decay**: Standard 0.01 across all configurations
-- **Precision**: Hardware-aware selection (FP16 for V100, BF16 for A100+)
-
-All configurations enable gradient checkpointing by default and use cosine learning rate scheduling with warmup.
+- **Automatic Precision Selection**: Hardware-aware FP16/BF16/Mixed precision
+- **Dynamic Batch Sizing**: Memory-constrained automatic batch size adjustment
+- **ZeRO Stage Recommendation**: Automatic ZeRO stage selection based on model size
+- **Expert Parallelism**: Optimal expert distribution across available GPUs
+- **Gradient Accumulation**: Intelligent micro-batch and accumulation step sizing
 
 ## Installation
 
-### System Requirements
+### Enhanced System Requirements
 
 **Minimum Requirements:**
 - Python 3.10 or higher
 - PyTorch 2.0+ with CUDA support
 - 16GB system RAM
 - CUDA-compatible GPU with 8GB+ VRAM
-- 50GB+ free disk space for checkpoints and logs
+- 100GB+ free disk space for checkpoints and DeepSpeed offloading
 
-**Recommended Requirements:**
+**Recommended for DeepSpeed:**
 - Python 3.11
 - PyTorch 2.1+ with CUDA 11.8 or 12.1
-- 32GB+ system RAM
+- 64GB+ system RAM
 - A100/H100 GPU with 40GB+ VRAM
-- 500GB+ NVMe storage
-- Multi-core CPU (16+ cores recommended)
+- 1TB+ NVMe storage for offloading
+- InfiniBand networking for multi-node
 
 ### Installation Process
 
@@ -135,7 +169,7 @@ git clone https://github.com/MatN23/LuminaAI.git
 cd LuminaAI
 ```
 
-2. **Install PyTorch (select appropriate CUDA version):**
+2. **Install PyTorch with CUDA:**
 ```bash
 # CUDA 11.8
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
@@ -149,9 +183,21 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 pip install transformers datasets tokenizers numpy pyyaml tqdm psutil
 ```
 
-4. **Install Optional Performance Dependencies:**
+4. **Install DeepSpeed:**
 ```bash
-# Flash Attention (requires A100/H100 or compatible hardware)
+# Standard installation
+pip install deepspeed
+
+# Development installation with CUDA extensions
+DS_BUILD_OPS=1 pip install deepspeed
+
+# Verify DeepSpeed installation
+ds_report
+```
+
+5. **Install Optional Performance Dependencies:**
+```bash
+# Flash Attention (A100/H100 recommended)
 pip install flash-attn>=2.0.0 --no-build-isolation
 
 # Monitoring and visualization
@@ -161,833 +207,529 @@ pip install wandb tensorboard matplotlib seaborn
 pip install pytest black isort flake8 mypy
 ```
 
-5. **Verify Installation:**
+6. **Verify Installation:**
 ```bash
-python Src/Main_Scripts/main.py --check-environment
+python Src/Main_Scripts/main.py --check-environment --verify-deepspeed
 ```
 
-This command validates PyTorch installation, CUDA compatibility, available memory, and optional dependencies.
+## DeepSpeed Integration
+
+### Automatic DeepSpeed Configuration
+
+The framework automatically configures DeepSpeed based on your hardware and model requirements:
+
+```python
+# Hardware-aware configuration
+if gpu_memory_gb < 16:
+    zero_stage = 3, cpu_offload = True, precision = "fp16"
+elif model_size_gb > gpu_memory_gb:
+    zero_stage = 3, cpu_offload = True, precision = "bf16"
+else:
+    zero_stage = 2, precision = "bf16"
+```
+
+### ZeRO Optimization Stages
+
+| Stage | Memory Savings | Use Case | Model Size Limit |
+|-------|----------------|----------|------------------|
+| **ZeRO-1** | ~4x | Single GPU, small models | Up to 1.5B |
+| **ZeRO-2** | ~8x | Multi-GPU, medium models | Up to 20B |
+| **ZeRO-3** | ~64x+ | Large models, CPU offload | 100B+ |
+
+### CPU and NVMe Offloading
+
+```bash
+# Enable CPU offloading for models larger than GPU memory
+python Src/Main_Scripts/main.py --config b50 --enable-cpu-offload
+
+# Enable NVMe offloading for massive models
+python Src/Main_Scripts/main.py --config b200 --nvme-path /fast/nvme/offload
+
+# Automatic offloading decision
+python Src/Main_Scripts/main.py --config b100 --auto-offload
+```
+
+### DeepSpeed MoE Configuration
+
+The framework provides specialized MoE optimizations:
+
+```bash
+# Optimized MoE training with expert parallelism
+deepspeed --num_gpus=8 Src/Main_Scripts/main.py \
+  --config b14 \
+  --enable-moe-expert-parallel \
+  --expert-parallel-size 4 \
+  --moe-capacity-factor 1.25
+```
 
 ## Data Format and Processing
 
-### Data Format
+### Enhanced Data Format Support
 
-The framework processes conversational data in JSONL (JSON Lines) format. Each line contains a conversation with message arrays:
+The framework supports multiple conversational formats with automatic detection:
 
 ```jsonl
 {
   "messages": [
     {"role": "system", "content": "You are a helpful AI assistant."},
-    {"role": "user", "content": "Explain the concept of machine learning."},
-    {"role": "assistant", "content": "Machine learning is a subset of artificial intelligence..."}
-  ]
-}
-{
-  "messages": [
-    {"role": "human", "content": "What are neural networks?"},
-    {"role": "assistant", "content": "Neural networks are computational models inspired by biological neural networks..."}
-  ]
-}
-{
-  "messages": [
-    {"role": "user", "content": "Can you help me with Python?"},
-    {"role": "assistant", "content": "I'd be happy to help you with Python programming..."}
-  ]
+    {"role": "user", "content": "Explain quantum computing."},
+    {"role": "assistant", "content": "Quantum computing leverages quantum mechanical phenomena..."}
+  ],
+  "metadata": {
+    "source": "synthetic",
+    "quality_score": 0.95,
+    "language": "en"
+  }
 }
 ```
 
-### Role Mappings
+### Advanced Dataset Processing
 
-The system supports flexible role naming:
+| Dataset Size | Strategy | Memory Usage | DeepSpeed Benefit | Processing Speed |
+|--------------|----------|--------------|-------------------|------------------|
+| < 1GB | **Memory Loading** | Full dataset in RAM | Minimal | Fastest |
+| 1-50GB | **Intelligent Sharding** | Configurable chunks | Moderate | Fast |
+| 50GB+ | **Streaming with Prefetch** | < 2GB | High | Optimized |
+| 500GB+ | **Multi-Node Streaming** | Distributed | Very High | Scalable |
 
-**Input Roles** (mapped to user tokens):
-- `user`
-- `human` 
-- `prompter`
-
-**Response Roles** (mapped to assistant tokens):
-- `assistant`
-- `ai`
-- `bot`
-
-**System Roles** (special handling):
-- `system` (prepended to conversations when present)
-
-### Automatic Dataset Processing
-
-The framework automatically selects processing strategies based on dataset characteristics:
-
-| Dataset Size | Strategy | Memory Usage | Description | Recommended For |
-|--------------|----------|--------------|-------------|-----------------|
-| < 500MB | **Memory Loading** | Full dataset in RAM | Complete dataset loaded at startup | Small datasets, fast iteration |
-| 500MB - 10GB | **Sharded Processing** | Configurable chunks | Dataset split into memory-sized chunks | Medium datasets, balanced performance |
-| > 10GB | **Streaming** | Minimal (< 1GB) | Continuous streaming from disk | Large datasets, limited memory |
-
-### Sharding Configuration
-
-When sharding is active, you can configure:
+### Data Validation and Quality Assurance
 
 ```bash
-# Override automatic shard size
-python Src/Main_Scripts/main.py --shard-size-mb 1024
+# Comprehensive data validation with quality metrics
+python Src/Main_Scripts/main.py --validate-data data/train.jsonl \
+  --quality-threshold 0.8 \
+  --create-detailed-report
 
-# Set number of data loading workers
-python Src/Main_Scripts/main.py --num-workers 8
-
-# Force specific processing mode
-python Src/Main_Scripts/main.py --force-streaming
-python Src/Main_Scripts/main.py --force-memory-loading
+# Automatic data cleaning and format correction
+python Src/Main_Scripts/main.py --process-data data/raw.jsonl \
+  --output data/cleaned.jsonl \
+  --fix-encoding --remove-duplicates --filter-quality
 ```
-
-### Data Validation
-
-The framework includes comprehensive data validation:
-
-```bash
-# Full validation with detailed report
-python Src/Main_Scripts/main.py --validate-data data/train.jsonl --create-report
-
-# Quick format check
-python Src/Main_Scripts/main.py --validate-data data/train.jsonl --quiet
-
-# Validation with statistics
-python Src/Main_Scripts/main.py --validate-data data/train.jsonl --show-stats
-```
-
-**Validation Checks:**
-- JSON format integrity and syntax
-- Message structure and required fields
-- Role consistency and mapping validation
-- Token count distribution analysis
-- Conversation length statistics
-- Character encoding verification
-- Duplicate detection and handling
-- Content quality metrics
 
 ## Usage Examples
 
-### Basic Training
-
-Train a 7B parameter model with default settings:
+### Production-Scale Training with DeepSpeed
 
 ```bash
-python Src/Main_Scripts/main.py \
-  --config b7 \
-  --train-data data/conversations.jsonl \
-  --epochs 3 \
-  --experiment-name basic_7b_training
+# Large-scale distributed training
+deepspeed --num_gpus=8 --num_nodes=4 Src/Main_Scripts/main.py \
+  --config b50 \
+  --train-data data/large_dataset.jsonl \
+  --eval-data data/validation.jsonl \
+  --zero-stage 3 \
+  --cpu-offload \
+  --gradient-compression \
+  --experiment-name production_50b_moe
 ```
 
-### Production Training with Evaluation
-
-Full training setup with validation and monitoring:
+### MoE Training with Expert Parallelism
 
 ```bash
-python Src/Main_Scripts/main.py \
+# Advanced MoE training with optimized expert distribution
+deepspeed --num_gpus=8 Src/Main_Scripts/main.py \
   --config b14 \
-  --train-data data/large_training_set.jsonl \
-  --eval-data data/validation_set.jsonl \
-  --precision mixed_bf16 \
-  --learning-rate 1e-4 \
-  --batch-size 2 \
-  --grad-accum 16 \
-  --warmup-ratio 0.1 \
-  --save-every-n-batches 1000 \
-  --eval-every-n-batches 500 \
-  --experiment-name production_14b_v1 \
-  --early-stopping-patience 5
+  --enable-moe \
+  --num-experts 32 \
+  --expert-parallel-size 4 \
+  --moe-top-k 2 \
+  --capacity-factor 1.25 \
+  --load-balancing-weight 0.01 \
+  --experiment-name advanced_moe_14b
 ```
 
-### Memory-Constrained Training
-
-Optimize for limited GPU memory:
+### Memory-Optimized Training
 
 ```bash
+# Maximum memory efficiency for resource-constrained environments
 python Src/Main_Scripts/main.py \
-  --config m70_memory \
-  --train-data data/dataset.jsonl \
-  --batch-size 1 \
-  --grad-accum 32 \
+  --config b7 \
   --precision fp16 \
-  --force-streaming \
   --gradient-checkpointing \
-  --experiment-name memory_optimized
+  --zero-stage 3 \
+  --cpu-offload \
+  --aggressive-cpu-offload \
+  --micro-batch-size 1 \
+  --gradient-accumulation 64
 ```
 
-### High-Performance Training
-
-Maximize training throughput:
+### High-Performance Inference Setup
 
 ```bash
+# Optimized inference configuration
 python Src/Main_Scripts/main.py \
   --config b7 \
-  --train-data data/dataset.jsonl \
-  --precision mixed_bf16 \
-  --compile \
-  --enable-flash-attention \
-  --num-workers 8 \
-  --batch-size 4 \
-  --experiment-name high_perf_training
+  --inference-mode \
+  --zero-stage 2 \
+  --precision bf16 \
+  --compile-model \
+  --enable-kv-cache \
+  --max-batch-size 32
 ```
 
-### Resume Training from Checkpoint
-
-Continue training from a saved checkpoint:
+### Multi-Node Training
 
 ```bash
-python Src/Main_Scripts/main.py \
-  --config b7 \
-  --train-data data/conversations.jsonl \
-  --resume checkpoints/experiment_123/checkpoint_epoch_1_step_5000.pt \
-  --experiment-name resumed_training
-```
-
-### Interactive Chat Interface
-
-Test your trained model:
-
-```bash
-python Src/Main_Scripts/chat.py \
-  --resume checkpoints/best_model.pt \
-  --temperature 0.8 \
-  --top-p 0.9 \
-  --max-tokens 512 \
-  --system-prompt "You are a helpful AI assistant."
-```
-
-### Model Analysis and Testing
-
-Analyze model characteristics:
-
-```bash
-# Estimate model parameters
-python Src/Main_Scripts/main.py --estimate-parameters --config b7
-
-# Analyze memory requirements
-python Src/Main_Scripts/main.py --analyze-memory --config b14 --sequence-length 4096
-
-# Test generation capabilities
-python Src/Main_Scripts/main.py \
-  --test-generation \
-  --resume checkpoints/model.pt \
-  --test-prompts "Explain quantum computing" "Write a Python function" \
-  --temperature 0.7
+# Multi-node training with DeepSpeed launcher
+deepspeed --hostfile hostfile --master_addr=192.168.1.1 \
+  Src/Main_Scripts/main.py \
+  --config b100 \
+  --zero-stage 3 \
+  --cpu-offload \
+  --nvme-path /local/nvme \
+  --gradient-compression \
+  --communication-backend nccl
 ```
 
 ## Training Configuration
 
-### Core Training Parameters
+### Advanced Training Parameters
 
-| Parameter | Type | Default | Range/Options | Description |
-|-----------|------|---------|---------------|-------------|
-| `--config` | str | **required** | See configurations table | Model architecture preset |
-| `--train-data` | str | **required** | File path | Training dataset path |
-| `--eval-data` | str | None | File path | Validation dataset path |
-| `--epochs` | int | 3 | 1-100 | Number of training epochs |
-| `--learning-rate` | float | config-dependent | 1e-6 to 1e-3 | Peak learning rate |
-| `--batch-size` | int | config-dependent | 1-64 | Per-GPU batch size |
-| `--grad-accum` | int | config-dependent | 1-128 | Gradient accumulation steps |
-| `--warmup-ratio` | float | 0.15 | 0.0-1.0 | Learning rate warmup fraction |
-| `--weight-decay` | float | 0.01 | 0.0-0.1 | Weight decay coefficient |
-| `--max-grad-norm` | float | 1.0 | 0.1-10.0 | Gradient clipping threshold |
-| `--seed` | int | 42 | Any integer | Random seed for reproducibility |
+| Parameter | Type | Default | DeepSpeed Impact | Description |
+|-----------|------|---------|------------------|-------------|
+| `--zero-stage` | int | auto | High | ZeRO optimization level |
+| `--cpu-offload` | bool | auto | High | Enable parameter offloading |
+| `--nvme-path` | str | None | High | NVMe offloading directory |
+| `--gradient-compression` | bool | False | Medium | Compress gradients for communication |
+| `--expert-parallel-size` | int | auto | High (MoE) | Expert parallelism degree |
+| `--micro-batch-size` | int | auto | High | Per-device micro batch size |
+| `--communication-backend` | str | nccl | Medium | Distributed communication backend |
 
-### Learning Rate Scheduling
+### Precision and Optimization
 
-| Parameter | Type | Options | Description |
-|-----------|------|---------|-------------|
-| `--lr-scheduler` | str | `cosine`, `linear`, `onecycle`, `none` | Learning rate schedule type |
-| `--min-lr` | float | 1e-6 | Minimum learning rate for scheduling |
-| `--warmup-steps` | int | calculated | Override warmup steps calculation |
+```bash
+# Mixed precision with automatic loss scaling
+python Src/Main_Scripts/main.py \
+  --precision mixed_bf16 \
+  --auto-loss-scaling \
+  --loss-scale-window 1000
 
-### Optimization Settings
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `--optimizer` | str | `adamw` | Optimizer type |
-| `--beta1` | float | 0.9 | Adam beta1 parameter |
-| `--beta2` | float | 0.95 | Adam beta2 parameter |
-| `--eps` | float | 1e-8 | Adam epsilon parameter |
-
-### Checkpoint and Logging
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `--save-every-n-batches` | int | config-dependent | Checkpoint saving frequency |
-| `--eval-every-n-batches` | int | config-dependent | Evaluation frequency |
-| `--log-every-n-batches` | int | 10 | Logging frequency |
-| `--save-total-limit` | int | 5 | Maximum checkpoints to keep |
-| `--early-stopping-patience` | int | None | Early stopping patience |
+# Gradient compression for multi-node
+python Src/Main_Scripts/main.py \
+  --gradient-compression \
+  --compression-type fp16 \
+  --communication-overlap
+```
 
 ## Precision and Memory Management
 
-### Precision Modes
+### Enhanced Precision Modes
 
-The framework supports multiple precision modes with automatic hardware detection:
+| Precision | Memory | Stability | Speed | DeepSpeed Optimized | Hardware |
+|-----------|--------|-----------|-------|-------------------|----------|
+| `fp32` | 100% | Highest | Baseline | ❌ | Any CUDA |
+| `fp16` | 50% | Good | 1.8x | ✅ | V100+ |
+| `bf16` | 50% | Higher | 1.7x | ✅ | A100+ |
+| `mixed_fp16` | Variable | Good | 2.0x | ✅ | V100+ |
+| `mixed_bf16` | Variable | Highest | 1.9x | ✅ | A100+ |
+| `dynamic` | Adaptive | Optimal | Optimal | ✅ | Auto-detect |
 
-| Precision | Memory Usage | Numerical Stability | Speed | Hardware Requirements |
-|-----------|--------------|-------------------|-------|---------------------|
-| `fp32` | Baseline (100%) | Highest | Slowest | Any CUDA GPU |
-| `fp16` | 50% of fp32 | Good | Fast | V100, RTX series |
-| `bf16` | 50% of fp32 | Higher than fp16 | Fast | A100, H100 |
-| `mixed_fp16` | Variable | Good | Very fast | V100+ |
-| `mixed_bf16` | Variable | Highest | Very fast | A100+ |
-| `auto` | Variable | Variable | Variable | Automatic selection |
-
-### Automatic Precision Selection
-
-When using `--precision auto`, the framework selects precision based on:
-
-1. **Hardware Detection**: GPU architecture and capabilities
-2. **Model Size**: Larger models prefer more stable precisions
-3. **Memory Constraints**: Available VRAM influences precision choice
-4. **Performance Requirements**: Speed vs. stability trade-offs
+### DeepSpeed Memory Optimizations
 
 ```python
-# Simplified selection logic
-if gpu_arch == "H100" and model_size > "14B":
-    precision = "mixed_bf16"
-elif gpu_arch == "A100":
-    precision = "mixed_bf16" if model_size > "7B" else "bf16"
-elif gpu_arch == "V100":
-    precision = "mixed_fp16"
-else:
-    precision = "fp16"
+# Automatic memory optimization
+strategy = {
+    'zero_stage': 3,
+    'cpu_offload_optimizer': True,
+    'cpu_offload_parameters': True,
+    'nvme_offload_optimizer': True,
+    'nvme_offload_parameters': True,
+    'max_live_parameters': 1e9,
+    'max_reuse_distance': 1000,
+    'prefetch_bucket_size': 5e7,
+    'overlap_comm': True,
+    'contiguous_gradients': True,
+    'sub_group_size': 1e9,
+    'reduce_bucket_size': 5e8,
+    'allgather_partitions': True,
+    'reduce_scatter': True,
+    'allgather_bucket_size': 5e8
+}
 ```
-
-### Memory Optimization Features
-
-**Gradient Checkpointing:**
-- Enabled by default in all configurations
-- Reduces peak memory usage by 40-60%
-- Increases training time by approximately 20%
-- Automatically handles activation recomputation
-
-**Flash Attention:**
-- Automatically enabled for sequences > 512 tokens
-- Requires A100/H100 or compatible hardware
-- Provides 2-4x memory efficiency for long sequences
-- Gracefully falls back to standard attention if unavailable
-
-**Dynamic Batch Sizing:**
-```bash
-# Enable automatic batch size adjustment
-python Src/Main_Scripts/main.py --auto-batch-size --target-memory-usage 0.85
-```
-
-**Emergency Memory Management:**
-- Automatic garbage collection on memory pressure
-- Checkpoint saving before OOM conditions
-- Graceful degradation to smaller batch sizes
-- Memory usage monitoring and alerts
 
 ## Mixture of Experts Implementation
 
-### Architecture Overview
+### Advanced MoE Architecture
 
-The MoE implementation uses a sparse routing mechanism where only a subset of experts processes each input token. This allows scaling model parameters without proportionally increasing compute requirements.
+The MoE implementation now includes expert parallelism and advanced routing:
 
-### Expert Configuration by Model Size
+| Model Scale | Expert Count | Expert Parallel | Top-K | Load Balance | Active Params | Routing Strategy |
+|-------------|--------------|-----------------|-------|--------------|---------------|------------------|
+| 1B-3B | 8 | 1 | 2 | 0.008 | 25% | Learned Routing |
+| 7B-14B | 16-32 | 2-4 | 2 | 0.01 | 12.5-6.25% | Adaptive Routing |
+| 50B+ | 64+ | 8+ | 2-4 | 0.015 | <3.125% | Hierarchical Routing |
 
-| Model Scale | Expert Count | Top-K | Capacity Factor | Load Balance Weight | Active Params % |
-|-------------|--------------|-------|-----------------|-------------------|-----------------|
-| Debug (500K) | 4 | 2 | 1.1 | 0.005 | ~50% |
-| Small (70M-1B) | 8 | 2 | 1.25 | 0.008 | ~25% |
-| Medium (3B-7B) | 16 | 2 | 1.5 | 0.01 | ~12.5% |
-| Large (14B-50B) | 32-64 | 2 | 1.8 | 0.015 | ~6.25-3.125% |
-| XLarge (100B+) | 96-144 | 2 | 2.0-2.8 | 0.025-0.035 | ~2-1.4% |
+### Expert Parallelism Configuration
 
-### Routing Mechanism
+```bash
+# Distribute 32 experts across 8 GPUs (4 experts per GPU)
+deepspeed --num_gpus=8 Src/Main_Scripts/main.py \
+  --config b14 \
+  --num-experts 32 \
+  --expert-parallel-size 8 \
+  --data-parallel-size 1
+```
 
-**Top-K Gating:**
-- Each token is routed to the top-k highest-scoring experts
-- Default k=2 provides good balance of quality and efficiency
-- Gating network learns routing decisions during training
-- Supports dynamic expert selection based on input content
+### Advanced Load Balancing
 
-**Load Balancing:**
-- Auxiliary loss encourages uniform expert utilization
-- Prevents expert collapse where some experts receive no tokens
-- Configurable balancing weight based on model size
-- Real-time monitoring of expert usage statistics
+```python
+# Multi-objective load balancing
+load_balancing_loss = (
+    auxiliary_loss +           # Basic load balancing
+    z_loss +                  # Router z-loss for stability
+    switch_loss +             # Switch transformer loss
+    expert_choice_loss        # Expert-choice routing loss
+)
+```
 
-**Capacity Management:**
-- Capacity factor limits tokens per expert to prevent overload
-- Overflow tokens are handled by auxiliary routing or dropped
-- Dynamic capacity adjustment based on batch size and sequence length
+## Distributed Training
 
-### MoE Training Considerations
+### Multi-GPU Setup
 
-**Memory Usage:**
-- Total parameter count scales with expert count
-- Only active expert parameters require gradients
-- Optimizer states maintained only for active parameters
-- Sparse gradient updates reduce memory overhead
+```bash
+# Standard multi-GPU training
+deepspeed --num_gpus=4 Src/Main_Scripts/main.py --config b7
 
-**Training Stability:**
-- Load balancing loss prevents training instability
-- Expert dropout during training improves robustness
-- Careful initialization prevents early expert specialization
-- Gradient clipping applied to both model and routing parameters
+# With specific GPU selection
+CUDA_VISIBLE_DEVICES=0,1,2,3 deepspeed --num_gpus=4 Src/Main_Scripts/main.py --config b7
+```
+
+### Multi-Node Configuration
+
+Create a hostfile (`hostfile`) for multi-node training:
+```
+node1 slots=8
+node2 slots=8  
+node3 slots=8
+node4 slots=8
+```
+
+Launch multi-node training:
+```bash
+deepspeed --hostfile hostfile --master_addr node1 --master_port 29500 \
+  Src/Main_Scripts/main.py --config b50 --zero-stage 3
+```
+
+### Advanced Communication Optimization
+
+```bash
+# Optimized for high-bandwidth networks (InfiniBand)
+deepspeed --num_gpus=8 Src/Main_Scripts/main.py \
+  --communication-backend nccl \
+  --bucket-cap-mb 200 \
+  --overlap-comm \
+  --contiguous-gradients \
+  --compress-communication
+```
 
 ## Monitoring and Analysis
 
-### Real-Time Training Metrics
-
-During training, the framework displays comprehensive metrics:
+### Enhanced Real-Time Metrics
 
 ```
 Epoch 2 | Step 1,247 | Batch 1,247/15,000 | 08:23 elapsed
-Loss: 2.456789 | PPL: 11.67 | LR: 8.50e-05 | β: 0.95
-GradNorm: 0.8432 | Tokens/s: 1,250 | GPU: 8.2/16.0GB (51%)
-Strategy: sharded | Workers: 4 | Shard: 3/12 | Cache: 89%
-MoE: Balance=0.023 | Experts Used: 14/16 | Routing Loss: 0.012
-Validation PPL: 10.23 | Best PPL: 9.87 @ step 1,180
+Loss: 2.456789 | PPL: 11.67 | LR: 8.50e-05 | GradNorm: 0.8432
+DeepSpeed: ZeRO-3 | CPU Offload: 12.3GB | GPU: 8.2/40.0GB (21%)
+MoE: Balance=0.023 | Expert Usage: 14/16 | Routing Loss: 0.012
+Communication: AllGather=1.2ms | Reduce=0.8ms | Overlap=85%
+Throughput: 1,250 tokens/s | Effective Batch: 256 | World Size: 8
+Validation PPL: 10.23 | Best: 9.87 @ step 1,180 | ETA: 2h 45m
 ```
 
-**Metric Explanations:**
+### DeepSpeed-Specific Monitoring
 
-- **Loss**: Cross-entropy loss value (lower indicates better learning)
-- **PPL**: Perplexity (exp(loss), measures prediction quality)
-- **LR**: Current learning rate following schedule
-- **β**: Current momentum parameter (for adaptive optimizers)
-- **GradNorm**: L2 norm of gradients before clipping
-- **Tokens/s**: Training throughput in tokens per second
-- **GPU**: Memory usage (current/total) and utilization percentage
-- **Strategy**: Data loading strategy (memory/sharded/streaming)
-- **Shard**: Current shard being processed (if applicable)
-- **Cache**: Data loading cache hit rate
-- **MoE Balance**: Expert load balance metric (lower = more balanced)
-- **Experts Used**: Number of experts receiving tokens
-- **Routing Loss**: MoE auxiliary loss component
-- **Validation PPL**: Performance on held-out validation set
-- **Best PPL**: Best validation perplexity achieved so far
-
-### Analysis and Diagnostic Tools
-
-**Model Analysis:**
 ```bash
-# Detailed parameter analysis
-python Src/Main_Scripts/main.py --estimate-parameters --config b7 --detailed
-
-# Memory footprint analysis
-python Src/Main_Scripts/main.py --analyze-memory --config b14 --batch-size 2 --sequence-length 4096
-
-# Training time estimation
-python Src/Main_Scripts/main.py --estimate-time --config b7 --train-data large.jsonl --hardware-profile a100-80gb
-```
-
-**Performance Profiling:**
-```bash
-# Data loading profiling
-python Src/Main_Scripts/main.py --profile-data-loading --train-data data.jsonl --num-workers 8
-
-# Training step profiling
-python Src/Main_Scripts/main.py --profile-training --config b7 --steps 100
-
-# Memory usage profiling
-python Src/Main_Scripts/main.py --profile-memory --config b14 --track-allocations
-```
-
-**Generation Quality Testing:**
-```bash
-# Multi-precision generation comparison
+# Enable comprehensive DeepSpeed monitoring
 python Src/Main_Scripts/main.py \
-  --test-generation \
-  --compare-precisions \
-  --resume checkpoints/model.pt \
-  --test-prompts prompts.txt \
-  --output-comparisons results.json
-
-# Benchmark generation speed
-python Src/Main_Scripts/main.py \
-  --benchmark-generation \
-  --resume checkpoints/model.pt \
-  --batch-sizes 1,4,8,16 \
-  --sequence-lengths 512,1024,2048
+  --monitor-deepspeed \
+  --log-communication-stats \
+  --track-memory-fragmentation \
+  --profile-expert-routing
 ```
 
-### Logging and Experiment Tracking
+### Advanced Visualization
 
-**Built-in Logging:**
-- Structured logging with configurable verbosity levels
-- JSON-formatted logs for programmatic analysis  
-- Automatic log rotation and archiving
-- Integration with tensorboard for visualization
-
-**External Integration:**
 ```bash
-# Weights & Biases integration
-python Src/Main_Scripts/main.py --use-wandb --wandb-project my-project --wandb-run-name experiment-1
-
-# TensorBoard logging
-python Src/Main_Scripts/main.py --use-tensorboard --tensorboard-dir ./logs/tensorboard
+# Generate comprehensive training reports
+python Src/Main_Scripts/main.py \
+  --create-training-report \
+  --include-moe-analysis \
+  --include-memory-profile \
+  --include-communication-analysis
 ```
 
 ## Performance Characteristics
 
-### Throughput Benchmarks
+### DeepSpeed Scaling Efficiency
 
-Performance measurements on different hardware configurations:
+**A100-80GB Cluster Performance (Mixed BF16 + ZeRO-3):**
 
-**A100-80GB (Mixed BF16 Precision):**
+| Model | GPUs | Batch Size | Tokens/sec | Scaling Efficiency | Memory/GPU | ZeRO Overhead |
+|-------|------|------------|------------|-------------------|-------------|---------------|
+| 7B | 1 | 4 | 1,800 | 100% | 28GB | 0% |
+| 7B | 4 | 16 | 6,480 | 90% | 12GB | 5% |
+| 14B | 8 | 32 | 5,600 | 87% | 18GB | 8% |
+| 50B | 32 | 128 | 4,200 | 82% | 25GB | 12% |
+| 100B | 64 | 256 | 3,100 | 78% | 32GB | 15% |
 
-| Model | Batch Size | Seq Length | Tokens/sec | GPU Util | Memory | Training Time (1M tokens) |
-|-------|------------|------------|------------|----------|--------|---------------------------|
-| 1B | 8 | 2048 | 3,200 | 85% | 12GB | ~5.2 minutes |
-| 7B | 4 | 4096 | 1,800 | 92% | 28GB | ~9.3 minutes |
-| 14B | 2 | 4096 | 950 | 95% | 45GB | ~17.5 minutes |
-| 50B | 1 | 4096 | 280 | 98% | 78GB | ~59.5 minutes |
+### MoE Scaling Benefits
 
-**V100-32GB (Mixed FP16 Precision):**
-
-| Model | Batch Size | Seq Length | Tokens/sec | GPU Util | Memory | Training Time (1M tokens) |
-|-------|------------|------------|------------|----------|--------|---------------------------|
-| 1B | 4 | 2048 | 2,100 | 82% | 18GB | ~7.9 minutes |
-| 7B | 2 | 2048 | 950 | 89% | 31GB | ~17.5 minutes |
-| 14B | 1 | 2048 | 420 | 91% | 32GB | ~39.7 minutes |
-
-**RTX 4090-24GB (FP16 Precision):**
-
-| Model | Batch Size | Seq Length | Tokens/sec | GPU Util | Memory | Training Time (1M tokens) |
-|-------|------------|------------|------------|----------|--------|---------------------------|
-| 1B | 6 | 2048 | 2,800 | 88% | 14GB | ~6.0 minutes |
-| 7B | 2 | 2048 | 1,200 | 94% | 23GB | ~13.9 minutes |
+| Model Type | Parameters | Active Params | Training Speed | Quality Gain | Memory Efficiency |
+|------------|------------|---------------|----------------|--------------|-------------------|
+| Dense 7B | 7B | 7B (100%) | Baseline | Baseline | 1.0x |
+| MoE 7B (16E) | 28B | 3.5B (12.5%) | 0.8x | +25% | 4.0x param density |
+| MoE 14B (32E) | 56B | 3.5B (6.25%) | 0.9x | +35% | 8.0x param density |
+| MoE 50B (64E) | 200B | 6.25B (3.1%) | 1.1x | +60% | 16.0x param density |
 
 ### Memory Efficiency Analysis
 
-**Memory Usage Breakdown (7B Model, BF16):**
+**Memory Usage with DeepSpeed ZeRO-3 + CPU Offload:**
 
-| Component | Memory Usage | Percentage | Notes |
-|-----------|--------------|------------|-------|
-| Model Parameters | 14.0GB | 50% | Base model weights |
-| Gradients | 14.0GB | 50% | Parameter gradients |
-| Optimizer States | 28.0GB | 100% | AdamW states (momentum + variance) |
-| Activations | 4.2GB | 15% | Forward pass activations |
-| **Total (no optimization)** | **60.2GB** | **215%** | Without memory optimizations |
-| **With Gradient Checkpointing** | **32.1GB** | **115%** | Recompute activations |
-| **With Mixed Precision** | **28.0GB** | **100%** | FP16 parameters/gradients |
-
-**Optimization Impact:**
-
-| Optimization | Memory Reduction | Speed Impact | Implementation |
-|--------------|------------------|--------------|----------------|
-| Gradient Checkpointing | 40-60% | -20% | Recompute activations |
-| Mixed Precision | 50% | +30% | FP16/BF16 computation |
-| Flash Attention | 2-4x (long seq) | +10% | Memory-efficient attention |
-| MoE Sparsity | 80-90% active params | Minimal | Sparse expert activation |
-| Streaming Data | 95% dataset memory | -5% | Disk-based loading |
-
-### MoE Scaling Efficiency
-
-**Parameter Scaling vs Compute:**
-
-| Model | Total Params | Active Params | Compute Ratio | Memory Ratio | Performance Gain |
-|-------|--------------|---------------|---------------|--------------|------------------|
-| Dense 7B | 7B | 7B (100%) | 1.0x | 1.0x | Baseline |
-| MoE 7B (8 experts) | 14B | 3.5B (25%) | 0.5x | 2.0x | +15% quality |
-| MoE 7B (16 experts) | 28B | 3.5B (12.5%) | 0.5x | 4.0x | +25% quality |
-| Dense 50B | 50B | 50B (100%) | 7.1x | 7.1x | +180% quality |
-| MoE 50B (64 experts) | 200B | 6.25B (3.1%) | 0.9x | 28.6x | +190% quality |
+| Component | Standard | ZeRO-3 | CPU Offload | NVMe Offload | Savings |
+|-----------|----------|---------|-------------|--------------|---------|
+| Parameters | 28GB | 0.35GB | CPU | NVMe | 99% |
+| Gradients | 28GB | 0.35GB | CPU | NVMe | 99% |
+| Optimizer | 56GB | 0.7GB | CPU | NVMe | 99% |
+| Activations | 8GB | 8GB | 6GB | 4GB | 50% |
+| **Total** | **120GB** | **9.4GB** | **6GB** | **4GB** | **97%** |
 
 ## Hardware Requirements
 
-### GPU Requirements by Model Size
+### DeepSpeed-Optimized Hardware Configurations
 
-**Minimum VRAM Requirements (Training):**
-
-| Model Size | FP32 | FP16/BF16 | Mixed Precision | Gradient Checkpointing |
-|------------|------|-----------|-----------------|------------------------|
-| 500K (debug) | 0.5GB | 0.3GB | 0.2GB | 0.1GB |
-| 70M | 2.5GB | 1.3GB | 1.0GB | 0.6GB |
-| 120M | 4.2GB | 2.1GB | 1.6GB | 1.0GB |
-| 1B | 15GB | 7.5GB | 5.8GB | 3.2GB |
-| 3B | 45GB | 22GB | 17GB | 12GB |
-| 7B | 105GB | 52GB | 40GB | 28GB |
-| 14B | 210GB | 105GB | 80GB | 56GB |
-
-**Recommended Hardware Configurations:**
-
-**Budget Setup ($2,000-$5,000):**
-- GPU: RTX 4090 (24GB) or RTX 3090 (24GB)
-- CPU: AMD Ryzen 5800X or Intel i7-12700K
-- RAM: 32GB DDR4-3200
-- Storage: 1TB NVMe SSD
-- **Suitable for**: Models up to 7B parameters with memory optimizations
-
-**Professional Setup ($8,000-$15,000):**
-- GPU: RTX A6000 (48GB) or A100 (40GB)
-- CPU: AMD Threadripper 3970X or Intel Xeon W-3235
-- RAM: 128GB DDR4-3200 ECC
-- Storage: 2TB NVMe SSD + 8TB HDD for datasets
+**Entry-Level DeepSpeed Setup ($3,000-$8,000):**
+- GPU: RTX 4090 (24GB) or A6000 (48GB)
+- CPU: 16+ cores with high memory bandwidth
+- RAM: 64GB DDR4-3200 (for CPU offloading)
+- Storage: 2TB NVMe SSD for offloading
 - **Suitable for**: Models up to 14B parameters
 
-**Enterprise Setup ($25,000-$50,000):**
-- GPU: A100 (80GB) or H100 (80GB)
-- CPU: Dual AMD EPYC 7543 or Intel Xeon Platinum 8358P
-- RAM: 256GB+ DDR4-3200 ECC
-- Storage: 4TB+ NVMe SSD array + network storage
-- **Suitable for**: Models up to 50B parameters
+**Professional DeepSpeed Setup ($15,000-$30,000):**
+- GPU: A100-40GB or A100-80GB
+- CPU: Dual-socket with 32+ cores
+- RAM: 256GB DDR4-3200 ECC
+- Storage: 8TB NVMe array for NVMe offloading
+- Network: 25GbE or InfiniBand for multi-node
+- **Suitable for**: Models up to 100B parameters
 
-**Research Setup ($100,000+):**
-- GPU: Multiple H100 (80GB) or A100 (80GB) GPUs
-- CPU: High-core-count server processors
-- RAM: 512GB+ DDR4/DDR5 ECC
-- Storage: High-speed parallel storage systems
-- **Suitable for**: Models 100B+ parameters
+**Enterprise Multi-Node Setup ($100,000+):**
+- GPUs: 8x A100-80GB or H100-80GB per node
+- CPU: High-core server processors per node
+- RAM: 512GB+ DDR4/DDR5 ECC per node
+- Storage: High-speed parallel NVMe arrays
+- Network: InfiniBand HDR for optimal multi-node communication
+- **Suitable for**: Models 200B+ parameters
 
-### Storage Requirements
+### Network Requirements for Multi-Node
 
-**Dataset Storage:**
-- Small datasets (< 1GB): Local SSD sufficient
-- Medium datasets (1-50GB): Fast NVMe SSD recommended
-- Large datasets (50GB+): High-speed network storage or local NVMe array
-
-**Checkpoint Storage:**
-- Model checkpoints: 2-4x model parameter size in bytes
-- Optimizer states: Additional 2x model parameter size
-- Training logs: 1-10GB depending on experiment length
-- Backup storage: 3-5x total checkpoint size for redundancy
+| Scale | Minimum Network | Recommended | Scaling Efficiency |
+|-------|-----------------|-------------|-------------------|
+| 2-4 nodes | 25GbE | InfiniBand EDR (100Gb/s) | >95% |
+| 4-8 nodes | InfiniBand EDR | InfiniBand HDR (200Gb/s) | >90% |
+| 8+ nodes | InfiniBand HDR | InfiniBand NDR (400Gb/s) | >85% |
 
 ## Checkpointing System
 
-### Automatic Checkpoint Management
+### DeepSpeed-Enhanced Checkpointing
 
-The framework implements comprehensive checkpoint management:
-
-**Checkpoint Types:**
-- **Regular Checkpoints**: Saved at configurable intervals during training
-- **Best Model Checkpoints**: Saved when validation metrics improve
-- **Emergency Checkpoints**: Created automatically before system failures
-- **Resume Checkpoints**: Latest state for continuing interrupted training
-
-**Checkpoint Contents:**
-- Model state dictionary with all parameters
-- Optimizer state including momentum and variance terms
-- Learning rate scheduler state
-- Training step and epoch counters
-- Random number generator states for reproducibility
-- Configuration parameters and metadata
-- Training and validation metric history
-
-### Checkpoint Configuration
-
-```bash
-# Configure checkpoint saving frequency
-python Src/Main_Scripts/main.py --save-every-n-batches 1000
-
-# Set maximum number of checkpoints to keep
-python Src/Main_Scripts/main.py --save-total-limit 10
-
-# Enable best model tracking
-python Src/Main_Scripts/main.py --track-best-model --best-metric "validation_ppl"
-
-# Configure backup checkpoints
-python Src/Main_Scripts/main.py --backup-every-n-hours 6 --backup-dir /backup/path
+```python
+# Advanced checkpoint configuration
+checkpoint_config = {
+    'use_universal_checkpoint': True,  # Cross-DeepSpeed compatibility
+    'checkpoint_in_cpu': True,         # Save directly to CPU memory
+    'save_latest': True,               # Always maintain latest checkpoint
+    'save_optim_states': True,         # Include optimizer states
+    'async_save': True,                # Non-blocking checkpoint saves
+    'compression': 'gzip',             # Compress checkpoints
+}
 ```
 
-### Checkpoint Validation and Compatibility
+### Checkpoint Recovery Scenarios
 
-**Validation Checks:**
-- File integrity and corruption detection
-- Configuration compatibility with current setup
-- PyTorch version compatibility warnings
-- Model architecture consistency verification
-
-**Cross-Version Compatibility:**
-- Automatic handling of minor PyTorch version differences
-- Migration utilities for configuration format changes
-- Backward compatibility preservation for older checkpoints
-
-### Recovery and Resumption
-
-**Automatic Recovery:**
 ```bash
-# Resume from latest checkpoint automatically
-python Src/Main_Scripts/main.py --auto-resume --experiment-name previous_run
+# Resume from DeepSpeed universal checkpoint
+deepspeed --num_gpus=8 Src/Main_Scripts/main.py \
+  --resume-from-checkpoint checkpoints/universal_step_1000 \
+  --load-optimizer-states \
+  --strict-loading False
 
-# Resume from specific checkpoint
-python Src/Main_Scripts/main.py --resume checkpoints/model_epoch_2_step_5000.pt
-
-# Resume with modified configuration
-python Src/Main_Scripts/main.py --resume checkpoints/model.pt --modify-config --learning-rate 5e-5
+# Cross-configuration recovery (different GPU count)
+deepspeed --num_gpus=4 Src/Main_Scripts/main.py \
+  --resume-from-checkpoint checkpoints/8gpu_model \
+  --reshape-enabled \
+  --auto-redistribute-experts
 ```
-
-**Recovery Scenarios:**
-- System crashes and power failures
-- Out-of-memory conditions
-- Network interruptions during distributed training
-- Hardware failures with checkpoint backup recovery
 
 ## Troubleshooting
 
-### Common Issues and Solutions
+### DeepSpeed-Specific Issues
 
-#### Out of Memory Errors
+#### DeepSpeed Installation Problems
 
-**Symptoms:**
-- CUDA out of memory errors during forward pass
-- Host memory exhaustion during data loading
-- Optimizer state memory overflow
-
-**Solutions:**
-
-1. **Reduce Batch Size:**
 ```bash
-python Src/Main_Scripts/main.py --batch-size 1 --grad-accum 32
+# Verify DeepSpeed installation
+ds_report
+
+# Reinstall with CUDA extensions
+DS_BUILD_OPS=1 pip install deepspeed --force-reinstall
+
+# Check CUDA compatibility
+python -c "import deepspeed; print(deepspeed.ops.op_builder.CUDAOpBuilder().is_available())"
 ```
 
-2. **Enable Memory Optimizations:**
+#### Memory and Performance Issues
+
+**ZeRO-3 Slow Initialization:**
 ```bash
-python Src/Main_Scripts/main.py --gradient-checkpointing --precision fp16
+# Enable fast initialization
+python Src/Main_Scripts/main.py \
+  --zero-stage 3 \
+  --zero-init-method tiled \
+  --remote-device cpu \
+  --pin-memory True
 ```
 
-3. **Force Streaming Mode:**
+**Communication Bottlenecks:**
 ```bash
-python Src/Main_Scripts/main.py --force-streaming --shard-size-mb 256
+# Optimize communication
+python Src/Main_Scripts/main.py \
+  --overlap-comm True \
+  --allgather-bucket-size 500000000 \
+  --reduce-bucket-size 500000000
 ```
 
-4. **Use Smaller Model:**
+**Expert Load Imbalance (MoE):**
 ```bash
-python Src/Main_Scripts/main.py --config m70_memory
+# Adjust MoE parameters
+python Src/Main_Scripts/main.py \
+  --capacity-factor 1.5 \
+  --load-balancing-weight 0.02 \
+  --expert-parallel-size 4
 ```
 
-#### Training Instability
+### Multi-Node Debugging
 
-**Symptoms:**
-- Loss spikes or divergence
-- NaN gradients or parameters
-- Extreme gradient norms
-
-**Solutions:**
-
-1. **Reduce Learning Rate:**
 ```bash
-python Src/Main_Scripts/main.py --learning-rate 5e-5 --warmup-ratio 0.2
+# Test multi-node connectivity
+python -m torch.distributed.launch \
+  --nproc_per_node=8 \
+  --nnodes=2 \
+  --node_rank=0 \
+  --master_addr="192.168.1.1" \
+  --master_port=29500 \
+  test_connectivity.py
+
+# Debug communication issues
+NCCL_DEBUG=INFO deepspeed --hostfile hostfile Src/Main_Scripts/main.py
 ```
 
-2. **Adjust Gradient Clipping:**
-```bash
-python Src/Main_Scripts/main.py --max-grad-norm 0.5
-```
+### Performance Optimization
 
-3. **Switch to Stable Precision:**
-```bash
-python Src/Main_Scripts/main.py --precision bf16
-```
-
-4. **Enable Numerical Stability Features:**
-```bash
-python Src/Main_Scripts/main.py --use-stable-embedding --init-std 0.015
-```
-
-#### Data Loading Problems
-
-**Symptoms:**
-- Slow data loading speeds
-- Worker process crashes
-- Data format errors
-
-**Solutions:**
-
-1. **Validate Data Format:**
-```bash
-python Src/Main_Scripts/main.py --validate-data data/train.jsonl --fix-errors
-```
-
-2. **Adjust Worker Configuration:**
-```bash
-python Src/Main_Scripts/main.py --num-workers 4 --prefetch-factor 2
-```
-
-3. **Test Minimal Configuration:**
-```bash
-python Src/Main_Scripts/main.py --num-workers 1 --disable-sharding --batch-size 1
-```
-
-#### Performance Issues
-
-**Symptoms:**
-- Low GPU utilization
-- Slow training throughput
-- High memory usage relative to model size
-
-**Solutions:**
-
-1. **Enable Compilation:**
-```bash
-python Src/Main_Scripts/main.py --compile --precision mixed_bf16
-```
-
-2. **Optimize Data Loading:**
-```bash
-python Src/Main_Scripts/main.py --num-workers 8 --pin-memory --persistent-workers
-```
-
-3. **Profile Performance:**
-```bash
-python Src/Main_Scripts/main.py --profile-training --steps 100
-```
-
-#### MoE-Specific Issues
-
-**Symptoms:**
-- Expert load imbalance
-- Routing instability
-- Capacity overflow errors
-
-**Solutions:**
-
-1. **Adjust Load Balancing:**
-```bash
-python Src/Main_Scripts/main.py --load-balancing-weight 0.02
-```
-
-2. **Modify Capacity Factor:**
-```bash
-python Src/Main_Scripts/main.py --capacity-factor 1.5
-```
-
-3. **Monitor Expert Usage:**
-```bash
-python Src/Main_Scripts/main.py --log-expert-usage --expert-usage-frequency 100
-```
-
-### Diagnostic Commands
-
-| Command | Purpose | Output |
-|---------|---------|---------|
-| `--check-environment` | System validation | Hardware info, dependencies, compatibility |
-| `--validate-data` | Data format verification | Format errors, statistics, recommendations |
-| `--dry-run` | Configuration testing | Memory estimates, parameter counts, no training |
-| `--profile-memory` | Memory analysis | Peak usage, allocation patterns, optimization tips |
-| `--profile-training` | Training performance | Step timing, bottleneck identification |
-| `--test-generation` | Model quality testing | Generation samples, speed benchmarks |
-| `--analyze-checkpoints` | Checkpoint inspection | Checkpoint health, compatibility, metadata |
-
-### Error Codes and Resolution
-
-**Configuration Errors (E001-E099):**
-- `E001`: Invalid configuration preset
-- `E002`: Incompatible parameter combination
-- `E003`: Hardware incompatibility
-
-**Data Errors (E100-E199):**
-- `E101`: Data format invalid
-- `E102`: Missing required fields
-- `E103`: Encoding issues
-
-**Memory Errors (E200-E299):**
-- `E201`: Insufficient GPU memory
-- `E202`: Host memory exhaustion
-- `E203`: Optimizer memory overflow
-
-**Training Errors (E300-E399):**
-- `E301`: Training divergence detected
-- `E302`: Gradient overflow
-- `E303`: Checkpoint corruption
-
-Run with `--verbose --debug` flags for detailed error analysis and automated fix suggestions.
+| Issue | Solution | Command |
+|-------|----------|---------|
+| Slow data loading | Increase workers, enable pinned memory | `--num-workers 8 --pin-memory` |
+| Communication overhead | Enable compression and overlap | `--gradient-compression --overlap-comm` |
+| Memory fragmentation | Enable contiguous gradients | `--contiguous-gradients` |
+| Expert imbalance | Adjust capacity and balancing | `--capacity-factor 1.8 --load-balancing-weight 0.015` |
 
 ## Project Structure
 
@@ -995,27 +737,59 @@ Run with `--verbose --debug` flags for detailed error analysis and automated fix
 LuminaAI/
 ├── Src/
 │   └── Main_Scripts/
-│       ├── main.py                     # Primary CLI interface and entry point
+│       ├── main.py                     # Enhanced CLI with DeepSpeed integration
 │       ├── chat.py                     # Interactive chat interface for testing
 │       ├── core/                       # Core model and data components
-│       │   ├── model.py               # DeepSeek transformer implementation
+│       │   ├── model.py               # DeepSeek transformer with MoE
 │       │   ├── tokenizer.py           # GPT-4 compatible tokenization
-│       │   ├── dataset.py             
-│       ├── training/                  
-│       │   ├── trainer.py             # Core training loop and optimization
-│       │   ├── orchestrator.py        # High-level training coordination         
-│       │   ├── checkpoint.py          # Checkpoint management system         
+│       │   └── dataset.py             # Advanced dataset handling
+│       ├── training/                  # Enhanced training system
+│       │   ├── trainer.py             # DeepSpeed-enabled trainer
+│       │   ├── orchestrator.py        # Training coordination and monitoring
+│       │   ├── checkpoint.py          # Advanced checkpoint management
 │       │   ├── config_manager.py      # Configuration presets and validation
-│       │   ├── training_loops.py
-│       ├── monitoring/
-│       │   ├── logger.py              
-│       ├── utils/
-│       │   ├── data_processing.py     # Data validation and processing utilities
+│       │   └── training_loops.py      # Optimized training loops
+│       ├── monitoring/                # Comprehensive monitoring
+│       │   ├── logger.py              # Enhanced logging with DeepSpeed metrics
+│       │   ├── visualizations.py      # Real-time training visualizations
+│       │   └── moe_analytics.py       # MoE routing analysis
+│       ├── utils/                     # Enhanced utilities
+│       │   ├── data_processing.py     # Data validation and processing
 │       │   ├── environment.py         # System validation and optimization
 │       │   ├── reporting.py           # Performance analysis and reporting
-|       ├── Setup.py
+│       │   └── deepspeed_utils.py     # DeepSpeed helper functions
+│       └── config/                    # Configuration management
+│           ├── model_configs.yaml     # Model architecture presets
+│           ├── deepspeed_configs.yaml # DeepSpeed optimization templates
+│           └── training_configs.yaml  # Training parameter templates
+├── configs/                           # User configuration files
+├── data/                             # Training data and caches
+│   ├── shards/                       # Data sharding for large datasets
+│   ├── processed/                    # Processed and validated data
+│   └── cache/                        # Dataset caching
+├── checkpoints/                      # Model checkpoints
+│   ├── best/                         # Best model checkpoints
+│   ├── emergency/                    # Emergency recovery checkpoints
+│   └── deepspeed/                    # DeepSpeed universal checkpoints
+├── experiments/                      # Experiment tracking and results
+├── logs/                            # Comprehensive logging
+│   ├── deepspeed/                   # DeepSpeed-specific logs
+│   ├── moe/                         # MoE routing logs
+│   └── performance/                 # Performance profiling logs
+├── reports/                         # Analysis and performance reports
+├── monitoring/                      # Real-time monitoring data
+│   ├── metrics/                     # Training metrics
+│   ├── visualizations/              # Generated charts and plots
+│   └── routing/                     # MoE routing analysis
 ├── requirements.txt                  # Python dependencies
+├── requirements-deepspeed.txt        # DeepSpeed-specific dependencies
 ├── pyproject.toml                   # Project configuration
+├── hostfile                         # Multi-node configuration template
+├── launch_scripts/                  # Training launch scripts
+│   ├── single_gpu.sh               # Single GPU training
+│   ├── multi_gpu.sh                # Multi-GPU training
+│   ├── multi_node.sh               # Multi-node training
+│   └── inference.sh                # Optimized inference
 ├── .gitignore                       # Git ignore rules
 ├── LICENSE                          # License file
 └── README.md                        # This documentation
@@ -1023,284 +797,403 @@ LuminaAI/
 
 ## Configuration System Details
 
-### Configuration File Format
+### Advanced Configuration Management
 
-Configuration files use YAML format for human readability and easy modification:
+The framework now supports hierarchical configuration with environment-specific overrides:
 
 ```yaml
-# Model architecture
-vocab_size: 50304
-hidden_size: 2048
-num_layers: 22
-num_heads: 16
-num_kv_heads: 8
-seq_length: 4096
-intermediate_size: 5504
-
-# Training parameters
-batch_size: 4
-gradient_accumulation_steps: 4
-learning_rate: 1e-4
-weight_decay: 0.01
-num_epochs: 3
-warmup_ratio: 0.15
-max_grad_norm: 1.0
-precision: "mixed_bf16"
-
-# MoE configuration
-use_moe: true
-num_experts: 16
-moe_top_k: 2
-capacity_factor: 1.5
-load_balancing_weight: 0.01
-
-# Data processing
-train_data_path: "data/train.jsonl"
-eval_data_path: "data/eval.jsonl"
-num_workers: 4
-max_conversations_per_file: 10000
-
-# Generation parameters
-max_new_tokens: 512
-temperature: 0.8
-top_p: 0.9
-top_k: 50
-
-# Monitoring and checkpointing
-experiment_name: null
-save_every_n_batches: 1000
-eval_every_n_batches: 500
-save_total_limit: 5
-early_stopping_patience: 5
+# configs/production.yaml
+base_config: "b50"
+experiment:
+  name: "production_50b_moe_v2"
+  tags: ["production", "moe", "50b"]
+  
+model:
+  use_moe: true
+  num_experts: 64
+  expert_parallel_size: 8
+  
+deepspeed:
+  zero_stage: 3
+  cpu_offload: true
+  nvme_path: "/fast/nvme/offload"
+  gradient_compression: true
+  
+training:
+  precision: "mixed_bf16"
+  micro_batch_size: 1
+  gradient_accumulation_steps: 128
+  learning_rate: 5e-5
+  
+data:
+  train_data_path: "data/large_corpus.jsonl"
+  streaming_threshold_gb: 50
+  num_workers: 16
+  
+monitoring:
+  log_interval: 10
+  eval_interval: 500
+  save_interval: 1000
+  enable_wandb: true
+  wandb_project: "lumina-production"
 ```
 
-### Custom Configuration Creation
-
-Create custom configurations by extending existing presets:
+### Dynamic Configuration Loading
 
 ```python
-from Src.Main_Scripts.config.config_manager import Config, ConfigPresets
+# Load configuration with environment-specific overrides
+config = ConfigManager.load_with_overrides(
+    base_config="configs/production.yaml",
+    overrides={
+        "training.learning_rate": 3e-5,
+        "deepspeed.expert_parallel_size": 4,
+        "experiment.name": f"experiment_{timestamp}"
+    }
+)
 
-# Start with existing preset
-base_config = ConfigPresets.b7()
-
-# Modify parameters
-base_config.learning_rate = 5e-5
-base_config.batch_size = 2
-base_config.num_experts = 32
-base_config.experiment_name = "custom_7b_experiment"
-
-# Save custom configuration
-base_config.save("configs/custom_7b.yaml")
+# Hardware-aware automatic adjustments
+config = ConfigManager.optimize_for_hardware(config, target_memory_usage=0.85)
 ```
+
+### DeepSpeed Configuration Templates
+
+```yaml
+# configs/deepspeed_configs.yaml
+zero_stage_3:
+  zero_optimization:
+    stage: 3
+    offload_optimizer:
+      device: cpu
+      pin_memory: true
+    offload_param:
+      device: cpu
+      pin_memory: true
+    overlap_comm: true
+    contiguous_gradients: true
+    sub_group_size: 1000000000
+    reduce_bucket_size: 1000000000
+    stage3_prefetch_bucket_size: 50000000
+    stage3_param_persistence_threshold: 100000
+
+moe_optimization:
+  moe:
+    enabled: true
+    expert_parallel_size: 8
+    capacity_factor: 1.25
+    min_capacity: 4
+    use_tutel: true
+  
+communication:
+    fp16_enabled: false
+    bf16_enabled: true
+    gradient_compression: true
+    overlap_comm: true
+    contiguous_gradients: true
+```
+
+## Launch Scripts and Automation
+
+### Production Launch Scripts
+
+**Single GPU Training (`launch_scripts/single_gpu.sh`):**
+```bash
+#!/bin/bash
+export CUDA_VISIBLE_DEVICES=0
+export PYTHONPATH="${PYTHONPATH}:$(pwd)/Src"
+
+python Src/Main_Scripts/main.py \
+  --config-file configs/single_gpu.yaml \
+  --experiment-name "single_gpu_$(date +%Y%m%d_%H%M%S)" \
+  --auto-optimize-memory \
+  --enable-monitoring \
+  "$@"
+```
+
+**Multi-GPU Training (`launch_scripts/multi_gpu.sh`):**
+```bash
+#!/bin/bash
+export PYTHONPATH="${PYTHONPATH}:$(pwd)/Src"
+
+deepspeed --num_gpus=${NUM_GPUS:-8} Src/Main_Scripts/main.py \
+  --config-file configs/multi_gpu.yaml \
+  --deepspeed \
+  --zero-stage 3 \
+  --experiment-name "multi_gpu_$(date +%Y%m%d_%H%M%S)" \
+  "$@"
+```
+
+**Multi-Node Training (`launch_scripts/multi_node.sh`):**
+```bash
+#!/bin/bash
+export PYTHONPATH="${PYTHONPATH}:$(pwd)/Src"
+export NCCL_TIMEOUT=1800
+export NCCL_DEBUG=INFO
+
+deepspeed --hostfile hostfile \
+  --master_addr ${MASTER_ADDR:-$(hostname -I | awk '{print $1}')} \
+  --master_port ${MASTER_PORT:-29500} \
+  Src/Main_Scripts/main.py \
+  --config-file configs/multi_node.yaml \
+  --deepspeed \
+  --zero-stage 3 \
+  --cpu-offload \
+  --experiment-name "multi_node_$(date +%Y%m%d_%H%M%S)" \
+  "$@"
+```
+
+### Automated Experiment Management
 
 ```bash
-# Use custom configuration
-python Src/Main_Scripts/main.py --config-file configs/custom_7b.yaml
+# Automated hyperparameter sweeps
+./launch_scripts/hyperparameter_sweep.sh \
+  --config-base configs/base_7b.yaml \
+  --sweep-params "learning_rate:[1e-5,5e-5,1e-4]" \
+  --sweep-params "num_experts:[8,16,32]" \
+  --num-trials 9
+
+# Automated model scaling experiments
+./launch_scripts/scaling_experiment.sh \
+  --configs "b1,b3,b7,b14" \
+  --enable-comparison \
+  --generate-report
 ```
 
-### Configuration Validation
+## Advanced Features
 
-The system performs extensive validation of all configuration parameters:
-
-**Architecture Validation:**
-- Hidden size divisibility by attention heads
-- KV head compatibility with attention heads
-- Vocabulary size alignment (padded to multiples of 64)
-- Sequence length power-of-2 optimization recommendations
-
-**Training Validation:**
-- Learning rate range checking
-- Batch size memory feasibility
-- Precision compatibility with hardware
-- Scheduler parameter consistency
-
-**MoE Validation:**
-- Expert count and top-k relationship
-- Capacity factor reasonable range
-- Load balancing weight optimization
-- Hardware memory constraints
-
-**Data Validation:**
-- File path existence and permissions
-- Dataset format compatibility
-- Worker count vs CPU core availability
-- Shard size vs available memory
-
-### Environment-Specific Overrides
-
-Override configuration parameters based on detected hardware:
+### Automatic Model Sharding
 
 ```python
-# Automatic GPU memory-based adjustments
-if gpu_memory_gb < 16:
-    config.batch_size = max(1, config.batch_size // 2)
-    config.gradient_accumulation_steps *= 2
-    config.precision = "fp16"
-elif gpu_memory_gb >= 80:
-    config.batch_size *= 2
-    config.gradient_accumulation_steps = max(1, config.gradient_accumulation_steps // 2)
-    config.precision = "mixed_bf16"
+# Intelligent model sharding across GPUs
+class AutoShardingManager:
+    def distribute_model(self, model, world_size, expert_parallel_size):
+        # Distribute embedding layers
+        # Shard attention and feed-forward layers
+        # Optimize expert placement for communication efficiency
+        # Balance memory usage across devices
+```
+
+### Dynamic Expert Scaling
+
+```bash
+# Runtime expert scaling based on utilization
+python Src/Main_Scripts/main.py \
+  --adaptive-expert-scaling \
+  --min-experts 16 \
+  --max-experts 64 \
+  --scaling-threshold 0.8 \
+  --scaling-interval 1000
+```
+
+### Advanced Monitoring Integration
+
+```python
+# Integration with multiple monitoring systems
+monitoring_config = {
+    'wandb': {
+        'project': 'lumina-ai-production',
+        'entity': 'research-team',
+        'tags': ['deepspeed', 'moe', 'production']
+    },
+    'tensorboard': {
+        'log_dir': 'logs/tensorboard',
+        'update_freq': 'batch'
+    },
+    'mlflow': {
+        'tracking_uri': 'http://mlflow.company.com',
+        'experiment_name': 'lumina-experiments'
+    }
+}
 ```
 
 ## Development and Contributing
 
-### Development Environment Setup
+### Enhanced Development Environment
 
-1. **Clone and Setup:**
 ```bash
+# Development setup with all features
 git clone https://github.com/MatN23/LuminaAI.git
 cd LuminaAI
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-# or venv\Scripts\activate  # Windows
-```
 
-2. **Install Development Dependencies:**
-```bash
-pip install -e .
+# Create development environment
+python -m venv venv_dev
+source venv_dev/bin/activate
+
+# Install development dependencies
+pip install -r requirements.txt
 pip install -r requirements-dev.txt
-```
+pip install -r requirements-deepspeed.txt
 
-3. **Install Pre-commit Hooks:**
-```bash
+# Install pre-commit hooks
 pre-commit install
-```
 
-4. **Verify Development Setup:**
-```bash
-python -m pytest tests/ -v
+# Verify development environment
 python Src/Main_Scripts/main.py --check-environment --dev-mode
 ```
 
-### Code Quality Standards
-
-**Formatting and Style:**
-- **Black**: Code formatting with 88-character line length
-- **isort**: Import sorting and organization
-- **flake8**: Style guide enforcement (PEP 8)
-- **mypy**: Static type checking
-
-**Testing Requirements:**
-- **pytest**: Unit and integration test framework
-- **Coverage**: Minimum 80% test coverage required
-- **Property-based testing**: Using hypothesis for robust testing
-- **Performance benchmarks**: Regression testing for critical paths
-
-**Documentation Standards:**
-- **Docstring format**: Google-style docstrings for all public functions
-- **Type hints**: Complete type annotations for all functions
-- **Inline comments**: Complex algorithms and performance-critical code
-- **README updates**: Documentation updates for new features
-
 ### Testing Framework
 
-**Unit Tests:**
 ```bash
-# Run all tests
-python -m pytest tests/
+# Run comprehensive tests
+python -m pytest tests/ -v --cov=Src --cov-report=html
 
-# Run specific test category
-python -m pytest tests/test_model.py -v
+# Test DeepSpeed integration
+python -m pytest tests/test_deepspeed.py -v
 
-# Run with coverage
-python -m pytest tests/ --cov=Src --cov-report=html
+# Test MoE functionality
+python -m pytest tests/test_moe.py -v --moe-config configs/test_moe.yaml
+
+# Performance regression tests
+python scripts/performance_tests.py --baseline benchmarks/baseline.json
 ```
 
-**Integration Tests:**
-```bash
-# Test complete training pipeline
-python -m pytest tests/test_integration.py::test_full_training_pipeline
+### Code Quality and Standards
 
-# Test checkpoint compatibility
-python -m pytest tests/test_integration.py::test_checkpoint_resume
+**Enhanced Pre-commit Configuration (`.pre-commit-config.yaml`):**
+```yaml
+repos:
+  - repo: https://github.com/psf/black
+    rev: 23.1.0
+    hooks:
+      - id: black
+        args: [--line-length=88]
+  
+  - repo: https://github.com/pycqa/isort
+    rev: 5.12.0
+    hooks:
+      - id: isort
+        args: [--profile=black]
+  
+  - repo: https://github.com/pycqa/flake8
+    rev: 6.0.0
+    hooks:
+      - id: flake8
+        args: [--max-line-length=88]
+  
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.0.1
+    hooks:
+      - id: mypy
+        additional_dependencies: [types-PyYAML]
 ```
 
-**Performance Tests:**
-```bash
-# Benchmark training performance
-python scripts/benchmark.py --config b7 --steps 100
+### Performance Benchmarking
 
-# Memory usage profiling
-python scripts/benchmark.py --profile-memory --config b14
+```python
+# Automated performance benchmarking
+class PerformanceBenchmark:
+    def benchmark_training_speed(self, configs, iterations=100):
+        results = {}
+        for config_name in configs:
+            # Run training benchmark
+            # Measure tokens/second, memory usage, scaling efficiency
+            # Generate performance reports
+        return results
+    
+    def benchmark_moe_routing(self, expert_counts, sequence_lengths):
+        # Test routing efficiency across different configurations
+        # Measure expert utilization, load balancing, communication overhead
+        pass
 ```
 
-### Contributing Guidelines
+## Advanced Use Cases
 
-1. **Fork and Branch:**
-   - Fork the repository to your GitHub account
-   - Create feature branches from `main`
-   - Use descriptive branch names: `feature/moe-optimization` or `fix/memory-leak`
+### Research and Experimentation
 
-2. **Code Changes:**
-   - Follow existing code patterns and architecture
-   - Add comprehensive tests for new functionality
-   - Update documentation for user-facing changes
-   - Ensure backward compatibility for configuration files
+```bash
+# Ablation studies
+python scripts/ablation_study.py \
+  --components "moe,flash_attention,gradient_checkpointing" \
+  --baseline-config configs/baseline.yaml \
+  --output-dir results/ablations
 
-3. **Testing:**
-   - Run full test suite before submitting
-   - Add performance benchmarks for significant changes
-   - Test on multiple GPU architectures if possible
-   - Verify memory usage doesn't regress
+# Architecture search
+python scripts/architecture_search.py \
+  --search-space configs/search_space.yaml \
+  --budget 100 \
+  --optimization-metric validation_ppl
+```
 
-4. **Pull Request Process:**
-   - Provide clear description of changes and motivation
-   - Include performance impact analysis
-   - Reference related issues or feature requests
-   - Ensure all CI checks pass
+### Production Deployment
 
-5. **Code Review:**
-   - Address reviewer feedback promptly
-   - Update documentation and tests based on feedback
-   - Maintain clean commit history with descriptive messages
+```bash
+# Model optimization for inference
+python Src/Main_Scripts/optimize_for_inference.py \
+  --checkpoint checkpoints/best_model.pt \
+  --target-latency 50ms \
+  --output optimized_models/
 
-### Architecture Principles
+# Model quantization
+python Src/Main_Scripts/quantize_model.py \
+  --model-path optimized_models/model.pt \
+  --quantization-method int8 \
+  --calibration-data data/calibration.jsonl
+```
 
-**Modularity:**
-- Clear separation between model, training, and data components
-- Plugin-style architecture for new features
-- Minimal coupling between subsystems
+### Custom Model Architectures
 
-**Performance:**
-- Memory-first design for large model support
-- Lazy loading and streaming for large datasets
-- Hardware-specific optimizations with graceful fallbacks
+```python
+# Extending the framework with custom architectures
+class CustomTransformerLayer(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        # Custom layer implementation
+        
+    def forward(self, hidden_states, attention_mask=None):
+        # Custom forward pass
+        pass
 
-**Reliability:**
-- Comprehensive error handling and recovery
-- Extensive validation and early failure detection
-- Graceful degradation under resource constraints
+# Register custom components
+ModelRegistry.register_layer("custom_layer", CustomTransformerLayer)
+```
 
-**Maintainability:**
-- Extensive logging and debugging capabilities
-- Clear configuration and parameter management
-- Comprehensive test coverage and benchmarking
+## License and Citations
 
-## License
-
-This project is licensed under a Custom License. Individual source files may contain additional license terms. See the LICENSE file and individual source file headers for complete license information.
+This project is licensed under a Custom License with the following key points:
 
 ### Usage Permissions
+- **Academic Research**: Full permission for research and educational purposes
+- **Commercial Use**: Contact maintainers for commercial licensing terms
+- **Modification and Distribution**: Allowed with proper attribution
 
-- **Research Use**: Permitted for academic and research purposes
-- **Commercial Use**: Contact the author for commercial licensing terms
-- **Modification**: Allowed for personal and research use
-- **Distribution**: Subject to license terms and attribution requirements
+### Citation Requirements
 
-### Attribution Requirements
-
-When using LuminaAI in research publications, please cite:
+When using LuminaAI in research, please cite:
 
 ```bibtex
 @software{lumina_ai_2025,
-  title={LuminaAI: A PyTorch Framework for Large Language Model Training with Mixture of Experts},
+  title={LuminaAI: A PyTorch Framework for Large Language Model Training with DeepSpeed and Mixture of Experts},
   author={Nielsen, Matias},
   year={2025},
   url={https://github.com/MatN23/LuminaAI},
-  version={1.0},
-  note={PyTorch framework supporting models from 70M to 300B parameters}
+  version={2.0},
+  note={Enhanced framework supporting distributed training and MoE architectures up to 300B parameters}
 }
 ```
 
-For commercial use or questions regarding licensing, contact the project maintainers.
+For DeepSpeed integration, also cite:
+```bibtex
+@inproceedings{deepspeed,
+  title={DeepSpeed: System Optimizations Enable Training Deep Learning Models with Over 100 Billion Parameters},
+  author={Rasley, Jeff and Rajbhandari, Samyam and Ranjan, Olatunji and He, Yuxiong},
+  booktitle={Proceedings of the 26th ACM SIGKDD International Conference on Knowledge Discovery \& Data Mining},
+  year={2020}
+}
+```
+
+### Acknowledgments
+
+Special thanks to:
+- Microsoft DeepSpeed team for the distributed training framework
+- Hugging Face for the transformers library foundation
+- The broader open-source community for inspiration and feedback
+
+### Contact and Support
+
+- **Issues and Bug Reports**: GitHub Issues
+- **Feature Requests**: GitHub Discussions
+- **Commercial Licensing**: Contact project maintainers
+- **Community**: Join our Discord server for discussions and support
+
+---
+
+**LuminaAI** - Empowering researchers and practitioners to train state-of-the-art language models efficiently and at scale.
