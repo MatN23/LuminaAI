@@ -60,9 +60,6 @@ class ConversationTokenizer:
             thread_safe: Enable thread-safe operations
             validation_level: 'strict', 'moderate', or 'permissive'
         """
-        self.special_tokens["<|endoftext|>"] = self.base_vocab_size + len(self.special_tokens)
-        self.vocab_size += 1
-        self._reverse_special_tokens[self.special_tokens["<|endoftext|>"]] = "<|endoftext|>"
 
         self.model_name = model_name
         self.max_context_length = max_context_length
