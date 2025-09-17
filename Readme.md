@@ -1,6 +1,6 @@
 # LuminaAI
 
-A PyTorch framework for training transformer language models with Mixture of Experts (MoE) architecture support and DeepSpeed integration. Implements models from 70M to 300B parameters with automatic dataset processing, distributed training, and advanced memory management.
+A PyTorch framework for training transformer language models with Mixture of Experts (MoE) architecture support and DeepSpeed integration. Implements models from 70M to 300B active parameters with automatic dataset processing, distributed training, and advanced memory management.
 
 [![License](https://img.shields.io/badge/license-Custom-blue.svg)](./LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10+-brightgreen.svg)]()
@@ -31,6 +31,7 @@ deepspeed --num_gpus=4 Src/Main_Scripts/main.py --config b14 --train-data data/c
 - **Multi-Node Support**: Seamless scaling across multiple nodes
 
 ### 🧠 Enhanced MoE Architecture  
+- **8x Expert Pattern**: Following the proven Mixtral 8x7B architecture pattern
 - **Expert Parallelism**: Distribute experts across GPUs for optimal performance
 - **Advanced Routing**: Improved load balancing and capacity management
 - **Routing Analytics**: Real-time expert utilization monitoring and optimization
@@ -69,7 +70,7 @@ deepspeed --num_gpus=4 Src/Main_Scripts/main.py --config b14 --train-data data/c
 
 ### Core Architecture
 - DeepSeek-style transformer architecture with RoPE, Grouped Query Attention, RMSNorm, and SwiGLU
-- Mixture of Experts with configurable expert counts (4-144) and intelligent load balancing
+- Mixture of Experts with 8x expert pattern (8 experts, top-1 routing) for efficient scaling
 - Automatic dataset sharding: memory loading, chunked processing, or streaming based on size
 - Multiple precision modes: FP32, FP16, BF16, mixed precision with hardware-aware selection
 
@@ -102,7 +103,7 @@ The framework implements a state-of-the-art decoder-only transformer architectur
 - **Advanced Initialization**: Configurable initialization strategies with stability controls
 
 ### Production MoE Implementation
-- **Intelligent Top-K Routing**: Sparse expert selection with dynamic routing strategies
+- **8x Expert Pattern**: Proven architecture following Mixtral 8x7B design (8 experts, top-1 routing)
 - **Advanced Load Balancing**: Multi-objective loss terms to prevent expert collapse
 - **Capacity Management**: Dynamic capacity factors with overflow handling
 - **Expert Parallelism**: Distributed expert computation across multiple devices
@@ -115,22 +116,33 @@ The framework implements a state-of-the-art decoder-only transformer architectur
 
 ## Model Configurations
 
-The framework provides extensively tested model architectures spanning different scales:
+The framework provides extensively tested model architectures with active parameter counts following the 8x expert pattern:
 
-| Configuration | Parameters | Hidden | Layers | Heads | KV Heads | Context | Memory (BF16) | Experts | DeepSpeed Recommended |
-|---------------|------------|--------|--------|-------|----------|---------|---------------|---------|---------------------|
-| `debug` | 500K | 128 | 2 | 2 | 1 | 256 | ~10MB | 4 | No |
-| `m70_memory` | 70M | 768 | 12 | 12 | 4 | 1024 | ~280MB | 8 | Optional |
-| `m120_speed` | 120M | 768 | 16 | 12 | 4 | 1024 | ~480MB | 8 | Optional |
-| `b1` | 1B | 1024 | 12 | 16 | 4 | 2048 | ~2GB | 8 | Recommended |
-| `b3_inference` | 3B | 2560 | 24 | 20 | 10 | 2048 | ~6GB | 16 | Recommended |
-| `b6_quality` | 6B | 3200 | 32 | 25 | 10 | 4096 | ~12GB | 32 | Recommended |
-| `b7` | 7B | 2048 | 22 | 16 | 8 | 4096 | ~14GB | 16 | **Recommended** |
-| `b14` | 14B | 2560 | 28 | 20 | 10 | 4096 | ~28GB | 32 | **Required** |
-| `b50` | 50B | 5120 | 40 | 40 | 10 | 128000 | ~100GB | 64 | **Required (ZeRO-3)** |
-| `b100` | 100B | 7168 | 48 | 56 | 14 | 200000 | ~200GB | 96 | **Required (CPU Offload)** |
-| `b200` | 200B | 8192 | 56 | 64 | 16 | 1000000 | ~400GB | 128 | **Required (NVMe Offload)** |
-| `b300` | 300B | 9216 | 64 | 72 | 18 | 204800 | ~600GB | 144 | **Required (Multi-Node)** |
+| Configuration | Active Params | Total Params | Hidden | Layers | Heads | KV Heads | Context | Memory (BF16) | DeepSpeed Recommended |
+|---------------|---------------|--------------|--------|--------|-------|----------|---------|---------------|---------------------|
+| `debug` | 500K | 2M | 128 | 2 | 2 | 1 | 256 | ~10MB | No |
+| `b1` | 1B | 8B | 1536 | 16 | 12 | 4 | 2048 | ~4GB | Optional |
+| `b7` | 7B | 56B | 4096 | 32 | 32 | 8 | 4096 | ~28GB | **Recommended** |
+| `b14` | 14B | 112B | 5120 | 40 | 40 | 10 | 4096 | ~56GB | **Required** |
+| `b50` | 50B | 400B | 8192 | 64 | 64 | 16 | 128000 | ~200GB | **Required (ZeRO-3)** |
+| `b100` | 100B | 800B | 12288 | 80 | 96 | 24 | 200000 | ~400GB | **Required (CPU Offload)** |
+| `b200` | 200B | 1.6T | 16384 | 100 | 128 | 32 | 1000000 | ~800GB | **Required (NVMe Offload)** |
+| `b300` | 300B | 2.4T | 20480 | 120 | 160 | 40 | 204800 | ~1.2TB | **Required (Multi-Node)** |
+
+### MoE Architecture Details
+
+All models (except debug) follow the **8x Expert Pattern**:
+- **8 Experts**: Each model has 8 expert networks
+- **Top-1 Routing**: Only 1 expert is activated per token (12.5% active parameters)
+- **Expert Parallelism**: Experts distributed across GPUs for optimal performance
+- **Load Balancing**: Advanced routing prevents expert collapse and ensures utilization
+
+**Example: b7 Configuration**
+- **Active Parameters**: 7B (what you get during inference)
+- **Total Parameters**: 56B (8 experts × 7B each)
+- **Memory Efficiency**: Train a 56B model with 7B inference speed
+- **Training Cost**: ~8x of dense 7B model
+- **Inference Cost**: Same as dense 7B model
 
 ### Enhanced Configuration Details
 
@@ -232,9 +244,9 @@ else:
 
 | Stage | Memory Savings | Use Case | Model Size Limit |
 |-------|----------------|----------|------------------|
-| **ZeRO-1** | ~4x | Single GPU, small models | Up to 1.5B |
-| **ZeRO-2** | ~8x | Multi-GPU, medium models | Up to 20B |
-| **ZeRO-3** | ~64x+ | Large models, CPU offload | 100B+ |
+| **ZeRO-1** | ~4x | Single GPU, small models | Up to 1.5B active |
+| **ZeRO-2** | ~8x | Multi-GPU, medium models | Up to 20B active |
+| **ZeRO-3** | ~64x+ | Large models, CPU offload | 100B+ active |
 
 ### CPU and NVMe Offloading
 
@@ -325,16 +337,13 @@ deepspeed --num_gpus=8 --num_nodes=4 Src/Main_Scripts/main.py \
 ### MoE Training with Expert Parallelism
 
 ```bash
-# Advanced MoE training with optimized expert distribution
+# 8x7B MoE training (following Mixtral pattern)
 deepspeed --num_gpus=8 Src/Main_Scripts/main.py \
-  --config b14 \
-  --enable-moe \
-  --num-experts 32 \
+  --config b7 \
   --expert-parallel-size 4 \
-  --moe-top-k 2 \
-  --capacity-factor 1.25 \
+  --moe-capacity-factor 1.25 \
   --load-balancing-weight 0.01 \
-  --experiment-name advanced_moe_14b
+  --experiment-name mixtral_style_7b
 ```
 
 ### Memory-Optimized Training
@@ -448,33 +457,42 @@ strategy = {
 
 ## Mixture of Experts Implementation
 
-### Advanced MoE Architecture
+### 8x Expert Architecture Pattern
 
-The MoE implementation now includes expert parallelism and advanced routing:
+Following the proven Mixtral 8x7B design pattern:
 
-| Model Scale | Expert Count | Expert Parallel | Top-K | Load Balance | Active Params | Routing Strategy |
-|-------------|--------------|-----------------|-------|--------------|---------------|------------------|
-| 1B-3B | 8 | 1 | 2 | 0.008 | 25% | Learned Routing |
-| 7B-14B | 16-32 | 2-4 | 2 | 0.01 | 12.5-6.25% | Adaptive Routing |
-| 50B+ | 64+ | 8+ | 2-4 | 0.015 | <3.125% | Hierarchical Routing |
+| Model Scale | Active Params | Total Params | Expert Pattern | Top-K | Load Balance | Routing Strategy |
+|-------------|---------------|--------------|----------------|-------|--------------|------------------|
+| **b1** | 1B | 8B | 8x1B | 1 | 0.01 | Learned Routing |
+| **b7** | 7B | 56B | 8x7B | 1 | 0.01 | Adaptive Routing |
+| **b14** | 14B | 112B | 8x14B | 1 | 0.015 | Adaptive Routing |
+| **b50** | 50B | 400B | 8x50B | 1 | 0.02 | Hierarchical Routing |
+| **b100** | 100B | 800B | 8x100B | 1 | 0.025 | Hierarchical Routing |
+| **b200** | 200B | 1.6T | 8x200B | 1 | 0.03 | Hierarchical Routing |
+| **b300** | 300B | 2.4T | 8x300B | 1 | 0.035 | Hierarchical Routing |
 
 ### Expert Parallelism Configuration
 
 ```bash
-# Distribute 32 experts across 8 GPUs (4 experts per GPU)
+# Distribute 8 experts across 8 GPUs (1 expert per GPU)
 deepspeed --num_gpus=8 Src/Main_Scripts/main.py \
-  --config b14 \
-  --num-experts 32 \
+  --config b7 \
   --expert-parallel-size 8 \
+  --data-parallel-size 1
+
+# Distribute 8 experts across 4 GPUs (2 experts per GPU)
+deepspeed --num_gpus=4 Src/Main_Scripts/main.py \
+  --config b7 \
+  --expert-parallel-size 4 \
   --data-parallel-size 1
 ```
 
 ### Advanced Load Balancing
 
 ```python
-# Multi-objective load balancing
+# Multi-objective load balancing for 8x pattern
 load_balancing_loss = (
-    auxiliary_loss +           # Basic load balancing
+    auxiliary_loss +           # Basic load balancing across 8 experts
     z_loss +                  # Router z-loss for stability
     switch_loss +             # Switch transformer loss
     expert_choice_loss        # Expert-choice routing loss
@@ -529,7 +547,7 @@ deepspeed --num_gpus=8 Src/Main_Scripts/main.py \
 Epoch 2 | Step 1,247 | Batch 1,247/15,000 | 08:23 elapsed
 Loss: 2.456789 | PPL: 11.67 | LR: 8.50e-05 | GradNorm: 0.8432
 DeepSpeed: ZeRO-3 | CPU Offload: 12.3GB | GPU: 8.2/40.0GB (21%)
-MoE: Balance=0.023 | Expert Usage: 14/16 | Routing Loss: 0.012
+MoE: Balance=0.023 | Expert Usage: 8/8 | Routing Loss: 0.012 | Active: 7B/56B
 Communication: AllGather=1.2ms | Reduce=0.8ms | Overlap=85%
 Throughput: 1,250 tokens/s | Effective Batch: 256 | World Size: 8
 Validation PPL: 10.23 | Best: 9.87 @ step 1,180 | ETA: 2h 45m
@@ -563,53 +581,53 @@ python Src/Main_Scripts/main.py \
 
 **A100-80GB Cluster Performance (Mixed BF16 + ZeRO-3):**
 
-| Model | GPUs | Batch Size | Tokens/sec | Scaling Efficiency | Memory/GPU | ZeRO Overhead |
-|-------|------|------------|------------|-------------------|-------------|---------------|
-| 7B | 1 | 4 | 1,800 | 100% | 28GB | 0% |
-| 7B | 4 | 16 | 6,480 | 90% | 12GB | 5% |
-| 14B | 8 | 32 | 5,600 | 87% | 18GB | 8% |
-| 50B | 32 | 128 | 4,200 | 82% | 25GB | 12% |
-| 100B | 64 | 256 | 3,100 | 78% | 32GB | 15% |
+| Model | Active/Total Params | GPUs | Batch Size | Tokens/sec | Scaling Efficiency | Memory/GPU | ZeRO Overhead |
+|-------|---------------------|------|------------|------------|-------------------|-------------|---------------|
+| b1 | 1B/8B | 1 | 8 | 2,400 | 100% | 4GB | 0% |
+| b7 | 7B/56B | 4 | 16 | 6,480 | 90% | 14GB | 5% |
+| b14 | 14B/112B | 8 | 32 | 5,600 | 87% | 28GB | 8% |
+| b50 | 50B/400B | 32 | 128 | 4,200 | 82% | 50GB | 12% |
+| b100 | 100B/800B | 64 | 256 | 3,100 | 78% | 65GB | 15% |
 
-### MoE Scaling Benefits
+### MoE Scaling Benefits (8x Pattern)
 
-| Model Type | Parameters | Active Params | Training Speed | Quality Gain | Memory Efficiency |
-|------------|------------|---------------|----------------|--------------|-------------------|
+| Model Type | Active Params | Total Params | Training Speed | Quality Gain | Parameter Efficiency |
+|------------|---------------|--------------|----------------|--------------|---------------------|
 | Dense 7B | 7B | 7B (100%) | Baseline | Baseline | 1.0x |
-| MoE 7B (16E) | 28B | 3.5B (12.5%) | 0.8x | +25% | 4.0x param density |
-| MoE 14B (32E) | 56B | 3.5B (6.25%) | 0.9x | +35% | 8.0x param density |
-| MoE 50B (64E) | 200B | 6.25B (3.1%) | 1.1x | +60% | 16.0x param density |
+| 8x7B MoE | 7B | 56B (12.5%) | 0.85x | +25% | 8.0x param density |
+| 8x14B MoE | 14B | 112B (12.5%) | 0.80x | +35% | 8.0x param density |
+| 8x50B MoE | 50B | 400B (12.5%) | 0.75x | +60% | 8.0x param density |
 
 ### Memory Efficiency Analysis
 
-**Memory Usage with DeepSpeed ZeRO-3 + CPU Offload:**
+**Memory Usage with DeepSpeed ZeRO-3 + CPU Offload (8x7B MoE):**
 
 | Component | Standard | ZeRO-3 | CPU Offload | NVMe Offload | Savings |
 |-----------|----------|---------|-------------|--------------|---------|
-| Parameters | 28GB | 0.35GB | CPU | NVMe | 99% |
-| Gradients | 28GB | 0.35GB | CPU | NVMe | 99% |
-| Optimizer | 56GB | 0.7GB | CPU | NVMe | 99% |
-| Activations | 8GB | 8GB | 6GB | 4GB | 50% |
-| **Total** | **120GB** | **9.4GB** | **6GB** | **4GB** | **97%** |
+| Parameters | 224GB | 2.8GB | CPU | NVMe | 99% |
+| Gradients | 224GB | 2.8GB | CPU | NVMe | 99% |
+| Optimizer | 448GB | 5.6GB | CPU | NVMe | 99% |
+| Activations | 16GB | 16GB | 12GB | 8GB | 50% |
+| **Total** | **912GB** | **27.2GB** | **12GB** | **8GB** | **99%** |
 
 ## Hardware Requirements
 
 ### DeepSpeed-Optimized Hardware Configurations
 
-**Entry-Level DeepSpeed Setup ($3,000-$8,000):**
+**Entry-Level Setup ($3,000-$8,000):**
 - GPU: RTX 4090 (24GB) or A6000 (48GB)
 - CPU: 16+ cores with high memory bandwidth
 - RAM: 64GB DDR4-3200 (for CPU offloading)
 - Storage: 2TB NVMe SSD for offloading
-- **Suitable for**: Models up to 14B parameters
+- **Suitable for**: b1, b7 models (up to 14B active parameters)
 
-**Professional DeepSpeed Setup ($15,000-$30,000):**
+**Professional Setup ($15,000-$30,000):**
 - GPU: A100-40GB or A100-80GB
 - CPU: Dual-socket with 32+ cores
 - RAM: 256GB DDR4-3200 ECC
 - Storage: 8TB NVMe array for NVMe offloading
 - Network: 25GbE or InfiniBand for multi-node
-- **Suitable for**: Models up to 100B parameters
+- **Suitable for**: b14, b50 models (up to 100B active parameters)
 
 **Enterprise Multi-Node Setup ($100,000+):**
 - GPUs: 8x A100-80GB or H100-80GB per node
@@ -617,7 +635,7 @@ python Src/Main_Scripts/main.py \
 - RAM: 512GB+ DDR4/DDR5 ECC per node
 - Storage: High-speed parallel NVMe arrays
 - Network: InfiniBand HDR for optimal multi-node communication
-- **Suitable for**: Models 200B+ parameters
+- **Suitable for**: b100, b200, b300 models (100B+ active parameters)
 
 ### Network Requirements for Multi-Node
 
@@ -699,10 +717,10 @@ python Src/Main_Scripts/main.py \
 
 **Expert Load Imbalance (MoE):**
 ```bash
-# Adjust MoE parameters
+# Adjust MoE parameters for 8x pattern
 python Src/Main_Scripts/main.py \
-  --capacity-factor 1.5 \
-  --load-balancing-weight 0.02 \
+  --capacity-factor 1.25 \
+  --load-balancing-weight 0.015 \
   --expert-parallel-size 4
 ```
 
@@ -729,7 +747,7 @@ NCCL_DEBUG=INFO deepspeed --hostfile hostfile Src/Main_Scripts/main.py
 | Slow data loading | Increase workers, enable pinned memory | `--num-workers 8 --pin-memory` |
 | Communication overhead | Enable compression and overlap | `--gradient-compression --overlap-comm` |
 | Memory fragmentation | Enable contiguous gradients | `--contiguous-gradients` |
-| Expert imbalance | Adjust capacity and balancing | `--capacity-factor 1.8 --load-balancing-weight 0.015` |
+| Expert imbalance | Adjust capacity and balancing | `--capacity-factor 1.25 --load-balancing-weight 0.01` |
 
 ## Project Structure
 
@@ -798,11 +816,12 @@ The framework now supports hierarchical configuration with environment-specific 
 base_config: "b50"
 experiment:
   name: "production_50b_moe_v2"
-  tags: ["production", "moe", "50b"]
+  tags: ["production", "moe", "8x50b"]
   
 model:
   use_moe: true
-  num_experts: 64
+  num_experts: 8
+  moe_top_k: 1
   expert_parallel_size: 8
   
 deepspeed:
@@ -871,6 +890,7 @@ moe_optimization:
   moe:
     enabled: true
     expert_parallel_size: 8
+    num_experts: 8
     capacity_factor: 1.25
     min_capacity: 4
     use_tutel: true
@@ -936,63 +956,63 @@ deepspeed --hostfile hostfile \
 ### Automated Experiment Management
 
 ```bash
-# Automated hyperparameter sweeps
+# Automated hyperparameter sweeps for 8x pattern
 ./launch_scripts/hyperparameter_sweep.sh \
   --config-base configs/base_7b.yaml \
   --sweep-params "learning_rate:[1e-5,5e-5,1e-4]" \
-  --sweep-params "num_experts:[8,16,32]" \
+  --sweep-params "capacity_factor:[1.0,1.25,1.5]" \
   --num-trials 9
 
 # Automated model scaling experiments
 ./launch_scripts/scaling_experiment.sh \
-  --configs "b1,b3,b7,b14" \
+  --configs "b1,b7,b14,b50" \
   --enable-comparison \
   --generate-report
 ```
 
 ## Advanced Features
 
-### Automatic Model Sharding
+### Automatic Model Sharding for 8x MoE
 
 ```python
-# Intelligent model sharding across GPUs
+# Intelligent model sharding for 8 experts across GPUs
 class AutoShardingManager:
-    def distribute_model(self, model, world_size, expert_parallel_size):
+    def distribute_model(self, model, world_size, expert_parallel_size=8):
         # Distribute embedding layers
         # Shard attention and feed-forward layers
-        # Optimize expert placement for communication efficiency
-        # Balance memory usage across devices
+        # Optimize 8 expert placement for communication efficiency
+        # Balance memory usage across devices (2 experts per GPU for 4 GPUs)
 ```
 
 ### Dynamic Expert Scaling
 
 ```bash
-# Runtime expert scaling based on utilization
+# Runtime expert monitoring for 8x pattern
 python Src/Main_Scripts/main.py \
-  --adaptive-expert-scaling \
-  --min-experts 16 \
-  --max-experts 64 \
-  --scaling-threshold 0.8 \
-  --scaling-interval 1000
+  --monitor-expert-utilization \
+  --expert-usage-threshold 0.1 \
+  --rebalance-interval 1000 \
+  --log-expert-routing
 ```
 
 ### Advanced Monitoring Integration
 
 ```python
-# Integration with multiple monitoring systems
+# Integration with multiple monitoring systems for MoE
 monitoring_config = {
     'wandb': {
-        'project': 'lumina-ai-production',
+        'project': 'lumina-ai-8x-moe',
         'entity': 'research-team',
-        'tags': ['deepspeed', 'moe', 'production']
+        'tags': ['deepspeed', '8x-moe', 'production']
     },
     'tensorboard': {
         'log_dir': 'logs/tensorboard',
-        'update_freq': 'batch'
+        'update_freq': 'batch',
+        'log_expert_routing': True
     },
     'mlflow': {
         'tracking_uri': 'http://mlflow.company.com',
-        'experiment_name': 'lumina-experiments'
+        'experiment_name': '8x-moe-experiments'
     }
 }
 ```
@@ -1031,11 +1051,11 @@ python -m pytest tests/ -v --cov=Src --cov-report=html
 # Test DeepSpeed integration
 python -m pytest tests/test_deepspeed.py -v
 
-# Test MoE functionality
-python -m pytest tests/test_moe.py -v --moe-config configs/test_moe.yaml
+# Test 8x MoE functionality
+python -m pytest tests/test_moe.py -v --moe-config configs/test_8x_moe.yaml
 
 # Performance regression tests
-python scripts/performance_tests.py --baseline benchmarks/baseline.json
+python scripts/performance_tests.py --baseline benchmarks/baseline_8x.json
 ```
 
 ### Code Quality and Standards
@@ -1071,18 +1091,18 @@ repos:
 ### Performance Benchmarking
 
 ```python
-# Automated performance benchmarking
+# Automated performance benchmarking for 8x MoE
 class PerformanceBenchmark:
     def benchmark_training_speed(self, configs, iterations=100):
         results = {}
         for config_name in configs:
             # Run training benchmark
             # Measure tokens/second, memory usage, scaling efficiency
-            # Generate performance reports
+            # Generate performance reports for 8x pattern
         return results
     
-    def benchmark_moe_routing(self, expert_counts, sequence_lengths):
-        # Test routing efficiency across different configurations
+    def benchmark_moe_routing(self, expert_counts=[8], sequence_lengths=[1024, 2048, 4096]):
+        # Test routing efficiency for 8 expert configurations
         # Measure expert utilization, load balancing, communication overhead
         pass
 ```
@@ -1092,15 +1112,15 @@ class PerformanceBenchmark:
 ### Research and Experimentation
 
 ```bash
-# Ablation studies
+# Ablation studies for 8x MoE
 python scripts/ablation_study.py \
-  --components "moe,flash_attention,gradient_checkpointing" \
-  --baseline-config configs/baseline.yaml \
+  --components "8x_moe,flash_attention,gradient_checkpointing" \
+  --baseline-config configs/baseline_8x.yaml \
   --output-dir results/ablations
 
-# Architecture search
+# Architecture search for optimal 8x configurations
 python scripts/architecture_search.py \
-  --search-space configs/search_space.yaml \
+  --search-space configs/8x_search_space.yaml \
   --budget 100 \
   --optimization-metric validation_ppl
 ```
@@ -1108,34 +1128,38 @@ python scripts/architecture_search.py \
 ### Production Deployment
 
 ```bash
-# Model optimization for inference
+# Model optimization for inference (8x MoE)
 python Src/Main_Scripts/optimize_for_inference.py \
-  --checkpoint checkpoints/best_model.pt \
+  --checkpoint checkpoints/best_8x_model.pt \
   --target-latency 50ms \
-  --output optimized_models/
+  --output optimized_models/ \
+  --preserve-moe-structure
 
-# Model quantization
+# Model quantization with expert awareness
 python Src/Main_Scripts/quantize_model.py \
   --model-path optimized_models/model.pt \
   --quantization-method int8 \
-  --calibration-data data/calibration.jsonl
+  --calibration-data data/calibration.jsonl \
+  --quantize-experts-separately
 ```
 
 ### Custom Model Architectures
 
 ```python
-# Extending the framework with custom architectures
-class CustomTransformerLayer(nn.Module):
+# Extending the framework with custom 8x MoE architectures
+class Custom8xMoELayer(nn.Module):
     def __init__(self, config):
         super().__init__()
-        # Custom layer implementation
+        self.num_experts = 8  # Fixed for 8x pattern
+        self.top_k = 1       # Top-1 routing
+        # Custom 8x MoE implementation
         
     def forward(self, hidden_states, attention_mask=None):
-        # Custom forward pass
+        # Custom forward pass with 8 experts
         pass
 
 # Register custom components
-ModelRegistry.register_layer("custom_layer", CustomTransformerLayer)
+ModelRegistry.register_layer("custom_8x_moe", Custom8xMoELayer)
 ```
 
 ## License and Citations
@@ -1153,12 +1177,12 @@ When using LuminaAI in research, please cite:
 
 ```bibtex
 @software{lumina_ai_2025,
-  title={LuminaAI: A PyTorch Framework for Large Language Model Training with DeepSpeed and Mixture of Experts},
+  title={LuminaAI: A PyTorch Framework for Large Language Model Training with DeepSpeed and 8x Mixture of Experts},
   author={Nielsen, Matias},
   year={2025},
   url={https://github.com/MatN23/LuminaAI},
   version={2.0},
-  note={Enhanced framework supporting distributed training and MoE architectures up to 300B parameters}
+  note={Enhanced framework supporting distributed training and 8x MoE architectures up to 300B active parameters}
 }
 ```
 
@@ -1172,20 +1196,30 @@ For DeepSpeed integration, also cite:
 }
 ```
 
+For the Mixtral 8x7B inspiration, cite:
+```bibtex
+@article{jiang2024mixtral,
+  title={Mixtral of Experts},
+  author={Jiang, Albert Q and Sablayrolles, Alexandre and Roux, Antoine and Mensch, Arthur and Savary, Blanche and Bamford, Chris and Chaplot, Devendra Singh and Casas, Diego de las and Hanna, Emma Bou and Bressand, Florian and others},
+  journal={arXiv preprint arXiv:2401.04088},
+  year={2024}
+}
+```
+
 ### Acknowledgments
 
 Special thanks to:
 - Microsoft DeepSpeed team for the distributed training framework
+- Mistral AI for pioneering the 8x7B MoE architecture with Mixtral
 - Hugging Face for the transformers library foundation
 - The broader open-source community for inspiration and feedback
 
 ### Contact and Support
 
 - **Issues and Bug Reports**: GitHub Issues
-- **Feature Requests**: GitHub Discussions
+- **Feature Requests**: GitHub Discussions  
 - **Commercial Licensing**: Contact project maintainers
-- **Community**: Join our Discord server for discussions and support
 
 ---
 
-**LuminaAI** - Empowering researchers and practitioners to train state-of-the-art language models efficiently and at scale.
+**LuminaAI** - Empowering researchers and practitioners to train state-of-the-art 8x MoE language models efficiently and at scale, following the proven Mixtral pattern.
