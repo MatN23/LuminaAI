@@ -60,6 +60,10 @@ class ConversationTokenizer:
             thread_safe: Enable thread-safe operations
             validation_level: 'strict', 'moderate', or 'permissive'
         """
+        self.special_tokens["<|endoftext|>"] = self.base_vocab_size + len(self.special_tokens)
+        self.vocab_size += 1
+        self._reverse_special_tokens[self.special_tokens["<|endoftext|>"]] = "<|endoftext|>"
+
         self.model_name = model_name
         self.max_context_length = max_context_length
         self.enable_caching = enable_caching
@@ -84,6 +88,7 @@ class ConversationTokenizer:
             "<|tool|>": self.base_vocab_size + 9,    # For tool usage
             "<|error|>": self.base_vocab_size + 10,  # For error handling
             "<|truncated|>": self.base_vocab_size + 11,  # Truncation marker
+            "<|endoftext|>": self.base_vocab_size + 12, 
         }
         
         self.vocab_size = self.base_vocab_size + len(self.special_tokens)
@@ -225,7 +230,11 @@ class ConversationTokenizer:
     def _cached_encode(self, content: str) -> Tuple[List[int], bool]:
         """Cached content encoding with error handling."""
         try:
-            tokens = self.tokenizer.encode(content)
+            tokens = self.tokenizer.encode(
+                content,
+                allowed_special={'<|endoftext|>'}
+            )
+
             return tokens, True
         except Exception as e:
             logging.warning(f"Encoding error for content (len={len(content)}): {e}")
@@ -322,7 +331,11 @@ class ConversationTokenizer:
                             content_token_list, encoding_success = self._cached_encode(processed_content)
                         else:
                             try:
-                                content_token_list = self.tokenizer.encode(processed_content)
+                                content_token_list = self.tokenizer.encode(
+                                    processed_content,
+                                    allowed_special={'<|endoftext|>'}
+                                )
+
                                 encoding_success = True
                             except Exception as e:
                                 logging.warning(f"Content encoding failed: {e}")
