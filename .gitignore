@@ -63,8 +63,3 @@ jspm_packages/
 .Trashes
 ehthumbs.db
 Thumbs.db
-
-# Model files (too large for git)
-*.pth
-*.pt
-models/
