@@ -40,6 +40,186 @@ from core.dataset import create_dataloader
 from monitoring.logger import TrainingHealthMonitor
 from training.checkpoint import CheckpointManager
 
+class DeepSpeedConfigGenerator:
+    """Generate DeepSpeed configurations for different scenarios."""
+    
+    @staticmethod
+    def create_base_config(
+        batch_size: int,
+        micro_batch_size: int,
+        gradient_accumulation_steps: int,
+        learning_rate: float,
+        zero_stage: int = 3,
+        precision: str = "bf16",
+        cpu_offload: bool = False,
+        nvme_path: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Create a base DeepSpeed configuration."""
+        
+        config = {
+            "train_batch_size": batch_size,
+            "train_micro_batch_size_per_gpu": micro_batch_size,
+            "gradient_accumulation_steps": gradient_accumulation_steps,
+            
+            # Precision settings
+            "fp16": {
+                "enabled": precision == "fp16",
+                "auto_cast": False,
+                "loss_scale": 0,
+                "initial_scale_power": 16,
+                "loss_scale_window": 1000,
+                "hysteresis": 2,
+                "min_loss_scale": 1
+            },
+            "bf16": {
+                "enabled": precision == "bf16"
+            },
+            
+            # Gradient clipping
+            "gradient_clipping": 1.0,
+            
+            # Optimizer
+            "optimizer": {
+                "type": "AdamW",
+                "params": {
+                    "lr": learning_rate,
+                    "betas": [0.9, 0.95],
+                    "eps": 1e-8,
+                    "weight_decay": 0.01
+                }
+            },
+            
+            # ZeRO optimization
+            "zero_optimization": {
+                "stage": zero_stage,
+                "allgather_partitions": True,
+                "allgather_bucket_size": 2e8,
+                "overlap_comm": True,
+                "reduce_scatter": True,
+                "reduce_bucket_size": 2e8,
+                "contiguous_gradients": True
+            },
+            
+            # Communication settings
+            "communication_data_type": precision,
+            "steps_per_print": 50,
+            "wall_clock_breakdown": False,
+            "dump_state": False
+        }
+        
+        # Add CPU offloading if requested
+        if cpu_offload and zero_stage >= 2:
+            config["zero_optimization"]["cpu_offload"] = True
+            
+            if zero_stage == 3:
+                config["zero_optimization"]["cpu_offload_params"] = True
+                config["zero_optimization"]["cpu_offload_optimizer"] = True
+        
+        # Add NVMe offloading if path provided
+        if nvme_path and zero_stage == 3:
+            config["zero_optimization"]["nvme_path"] = nvme_path
+            
+        return config
+    
+    @staticmethod
+    def create_moe_config_with_expert_parallelism(
+        world_size: int,
+        num_experts: int,
+        model_size_gb: float,
+        sequence_length: int
+    ) -> Dict[str, Any]:
+        """Create MoE-specific DeepSpeed configuration."""
+        
+        # Calculate expert parallel size
+        expert_parallel_size = min(world_size, num_experts)
+        if world_size % expert_parallel_size != 0:
+            # Find largest divisor of world_size that's <= num_experts
+            for ep_size in range(min(world_size, num_experts), 0, -1):
+                if world_size % ep_size == 0:
+                    expert_parallel_size = ep_size
+                    break
+        
+        moe_config = {
+            "moe": {
+                "enabled": True,
+                "num_experts": num_experts,
+                "expert_parallel_size": expert_parallel_size,
+                "moe_param_groups": True,
+                "use_residual": True,
+                
+                # Load balancing
+                "load_balancing": {
+                    "type": "tokens",
+                    "loss_weight": 0.01
+                },
+                
+                # Capacity and routing
+                "capacity_factor": 1.25,
+                "eval_capacity_factor": 1.0,
+                "min_capacity": 1,
+                "use_tutel": False,  # Set to True if Tutel is available
+                
+                # Memory optimizations
+                "enable_expert_tensor_parallelism": False,
+                "all_to_all_group_size": expert_parallel_size,
+            }
+        }
+        
+        # Adjust capacity for long sequences or large models
+        if sequence_length > 8192 or model_size_gb > 50:
+            moe_config["moe"]["capacity_factor"] = 1.0
+            moe_config["moe"]["eval_capacity_factor"] = 0.8
+        
+        return moe_config
+    
+    @staticmethod
+    def optimize_for_t4(config: Dict[str, Any]) -> Dict[str, Any]:
+        """Optimize DeepSpeed config for T4 GPUs."""
+        
+        # T4-specific optimizations
+        config["fp16"]["enabled"] = True
+        config["bf16"]["enabled"] = False  # T4 doesn't support bf16
+        
+        # Smaller bucket sizes for T4's memory constraints
+        if "zero_optimization" in config:
+            config["zero_optimization"]["allgather_bucket_size"] = 1e8
+            config["zero_optimization"]["reduce_bucket_size"] = 1e8
+        
+        # Enable CPU offload more aggressively on T4
+        if config.get("zero_optimization", {}).get("stage", 0) >= 2:
+            config["zero_optimization"]["cpu_offload"] = True
+            
+        return config
+    
+    @staticmethod
+    def create_config_for_sequence_length(
+        sequence_length: int,
+        base_config: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Optimize config for specific sequence lengths."""
+        
+        config = base_config.copy()
+        
+        # Very long sequences (>16K tokens)
+        if sequence_length > 16384:
+            # Force smaller micro batches
+            config["train_micro_batch_size_per_gpu"] = 1
+            config["gradient_accumulation_steps"] = max(8, config.get("gradient_accumulation_steps", 4))
+            
+            # Enable more aggressive memory optimizations
+            config["zero_optimization"]["stage"] = 3
+            config["zero_optimization"]["cpu_offload"] = True
+            
+            # Reduce bucket sizes further
+            config["zero_optimization"]["allgather_bucket_size"] = 5e7
+            config["zero_optimization"]["reduce_bucket_size"] = 5e7
+        
+        # Long sequences (8K-16K tokens)
+        elif sequence_length > 8192:
+            config["train_micro_batch_size_per_gpu"] = min(2, config.get("train_micro_batch_size_per_gpu", 4))
+            config["gradient_accumulation_steps"] = max(4, config.get("gradient_accumulation_steps", 2))
+        
+        return config
 
 class T4OptimizationManager:
     """T4-specific optimizations and compatibility fixes."""
@@ -117,19 +297,26 @@ class T4OptimizationManager:
     def optimize_memory_usage(self):
         """Apply T4-specific memory optimizations."""
         if torch.cuda.is_available():
-            # Enable memory fraction for T4
+            # The correct way to set memory fraction in modern PyTorch
             if self.device_info["is_t4"]:
-                torch.cuda.set_memory_fraction(0.95)  # Use 95% of VRAM
-            
+                try:
+                    # Use the correct API - set_per_process_memory_fraction
+                    torch.cuda.set_per_process_memory_fraction(0.95)
+                    logging.info("Set CUDA memory fraction to 95% for T4")
+                except AttributeError:
+                    # Fallback - just log that we tried
+                    logging.info("Memory fraction setting not available in this PyTorch version")
+        
             # Clear cache
             torch.cuda.empty_cache()
-            
+        
             # Enable memory efficient attention if available
             try:
                 torch.backends.cuda.enable_flash_sdp(True)
-            except:
+                logging.info("Enabled Flash Attention for memory efficiency")
+            except (AttributeError, RuntimeError):
+                logging.debug("Flash Attention not available or failed to enable")
                 pass
-
 
 class EnhancedConversationTrainer:
     """Production trainer optimized for T4 and other GPUs."""
@@ -140,27 +327,33 @@ class EnhancedConversationTrainer:
         self.config = config
         self.logger = logger
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        
+    
         # T4 optimization manager
         self.t4_optimizer = T4OptimizationManager(config)
-        
+    
         # Apply T4 optimizations to config
         self._apply_hardware_optimizations()
-        
+    
         # DeepSpeed integration
         self.use_deepspeed = DEEPSPEED_AVAILABLE and getattr(config, 'use_deepspeed', False)
         self.deepspeed_engine = None
-        
-        # Training state
+    
+        # ADD ALL THESE MISSING ATTRIBUTES:
+        self.use_amp = False  # Will be set properly in _setup_training
+        self.scaler = None
+        self.optimizer = None
+        self.scheduler = None
+    
+        # Training state - THESE ARE THE ONES MISSING NOW:
         self.global_step = 0
         self.current_epoch = 0
         self.best_eval_loss = float('inf')
         self.patience_counter = 0
         self.should_stop = False
-        
+    
         # Setup training components
         self._setup_training()
-        
+    
         logging.info(f"Trainer initialized for {self.t4_optimizer.device_info['name']}")
         logging.info(f"Using precision: {self.training_precision}")
         logging.info(f"Effective batch size: {self.effective_batch_size}")
@@ -321,6 +514,27 @@ class EnhancedConversationTrainer:
         logging.info(f"  Precision: {self.training_precision}")
         logging.info(f"  AMP enabled: {self.use_amp}")
         logging.info(f"  Gradient checkpointing: {getattr(self.config, 'gradient_checkpointing', False)}")
+        
+    def optimize_for_sequence_length(self, sequence_length: int):
+        """Optimize training configuration for specific sequence lengths."""
+        logging.info(f"Optimizing for sequence length: {sequence_length:,}")
+    
+        # Very long sequences (>16K tokens)
+        if sequence_length > 16384:
+            logging.info("Very long sequence detected - applying aggressive optimizations")
+        
+            # Force smaller micro batches
+            if hasattr(self.config, 'batch_size'):
+                original_batch_size = self.config.batch_size
+                self.config.batch_size = 1
+                logging.info(f"Reduced batch size from {original_batch_size} to 1")
+        
+            # Update effective batch size
+            self.effective_batch_size = self.config.batch_size * getattr(self.config, 'gradient_accumulation_steps', 1)
+    
+        # Clear CUDA cache after configuration changes
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
     
     def _create_optimizer(self) -> torch.optim.Optimizer:
         """Create optimizer with T4 optimizations."""
@@ -558,7 +772,7 @@ class EnhancedConversationTrainer:
                 grad_norm = 0.0
             
             # Check for NaN gradients (common on T4)
-            if torch.isnan(grad_norm) or torch.isinf(grad_norm):
+            if grad_norm is None or torch.isnan(grad_norm) or torch.isinf(grad_norm):
                 logging.warning("NaN/Inf gradients detected, skipping step")
                 self.optimizer.zero_grad(set_to_none=True)
                 if self.use_amp and self.scaler is not None:
@@ -584,7 +798,7 @@ class EnhancedConversationTrainer:
                          if self.scheduler 
                          else self.config.learning_rate)
             
-            return {'grad_norm': float(grad_norm), 'lr': current_lr}
+            return {'grad_norm': float(grad_norm) if grad_norm is not None else 0.0, 'lr': current_lr}
             
         except Exception as e:
             logging.warning(f"Error in standard optimizer step: {e}")
@@ -862,7 +1076,7 @@ class EnhancedConversationTrainer:
                         epoch_metrics['total_raw_loss'] += accumulation_metrics['raw_loss']
                         epoch_metrics['total_tokens'] += accumulation_metrics['tokens']
                         epoch_metrics['num_batches'] += 1
-                        if opt_metrics['grad_norm'] > 0:
+                        if opt_metrics['grad_norm'] is not None and opt_metrics['grad_norm'] > 0:
                             epoch_metrics['grad_norm_sum'] += opt_metrics['grad_norm']
                     
                     # Calculate throughput
