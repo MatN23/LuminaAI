@@ -379,28 +379,6 @@ class EnhancedConversationTrainer:
         # Enable gradient checkpointing for memory efficiency
         if optimal["gradient_checkpointing"] and hasattr(self.config, 'gradient_checkpointing'):
             self.config.gradient_checkpointing = True
-
-    def create_dataloader(self, dataset, shuffle=True):
-        """Create dataloader for the trainer."""
-        try:
-            from core.dataset import create_dataloader
-            return create_dataloader(dataset, self.config, shuffle=shuffle)
-        except ImportError:
-            # Fallback if create_dataloader isn't available
-            from torch.utils.data import DataLoader
-            
-            batch_size = getattr(self.config, 'batch_size', 8)
-            num_workers = min(4, batch_size) if batch_size > 1 else 0
-            
-            return DataLoader(
-                dataset,
-                batch_size=batch_size,
-                shuffle=shuffle,
-                num_workers=num_workers,
-                pin_memory=torch.cuda.is_available(),
-                drop_last=True if shuffle else False
-            )    
-
     
     def _setup_training(self):
         """Setup training components based on DeepSpeed availability."""
@@ -838,7 +816,7 @@ class EnhancedConversationTrainer:
         if self.t4_optimizer.device_info["is_t4"]:
             max_batches = min(max_batches, 25)
         
-        eval_dataloader = self.create_dataloader(eval_dataset, shuffle=False)
+        eval_dataloader = create_dataloader(eval_dataset, self.config, shuffle=False)
         
         total_loss = 0.0
         total_raw_loss = 0.0
@@ -932,7 +910,7 @@ class EnhancedConversationTrainer:
         
         # Setup data loaders with error handling
         try:
-            train_dataloader = self.create_dataloader(train_dataset, shuffle=True)
+            train_dataloader = create_dataloader(train_dataset, self.config, shuffle=True)
         except Exception as e:
             logging.error(f"Failed to create train dataloader: {e}")
             return
@@ -1267,50 +1245,36 @@ class EnhancedConversationTrainer:
             logging.info(f"  {info}")
     
     def _log_training_step(self, epoch: int, batch_idx: int, total_batches: int,
-                      metrics, opt_metrics, tokens_per_sec: float):
-        # Calculate additional metrics first
+                          metrics, opt_metrics, tokens_per_sec: float):
+        """Log training step with comprehensive information."""
+        # Memory info
+        memory_info = ""
+        if torch.cuda.is_available():
+            memory_allocated = torch.cuda.memory_allocated() / 1e9
+            memory_cached = torch.cuda.memory_reserved() / 1e9
+            memory_info = f" | GPU: {memory_allocated:.1f}GB/{memory_cached:.1f}GB"
+        
+        # Progress percentage
         progress = (batch_idx + 1) / total_batches * 100
+        
+        # Perplexity calculation
         try:
             raw_loss_clamped = min(metrics['raw_loss'], 50)
             perplexity = math.exp(raw_loss_clamped)
             ppl_str = f"{perplexity:.2e}" if perplexity > 10000 else f"{perplexity:.2f}"
         except (OverflowError, ValueError):
-            perplexity = float('inf')
             ppl_str = "INF"
-    
-        # Create comprehensive metrics dict
-        step_metrics = {
-            'global_step': self.global_step,
-            'epoch': epoch,
-            'batch_idx': batch_idx,
-            'total_batches': total_batches,
-            'progress_percent': progress,
-            'loss': metrics['loss'],
-            'raw_loss': metrics['raw_loss'],
-            'perplexity': perplexity,
-            'learning_rate': opt_metrics['lr'],
-            'grad_norm': opt_metrics['grad_norm'],
-            'tokens_per_sec': tokens_per_sec,
-            'valid_tokens': metrics.get('valid_tokens', 0),
-        }
-    
-        # Add memory info if available
-        if torch.cuda.is_available():
-            step_metrics.update({
-                'gpu_memory_allocated_gb': torch.cuda.memory_allocated() / 1e9,
-                'gpu_memory_cached_gb': torch.cuda.memory_reserved() / 1e9,
-            })
-    
-        # Log to metrics manager if available
-        if hasattr(self, 'metrics_manager'):
-            self.metrics_manager.log_training_step(step_metrics)
-    
-    # Log to health monitor if available  
-        if hasattr(self, 'health_monitor'):
-            self.health_monitor.log_step(step_metrics)
-    
-        # Your existing console logging code continues here...
-        # (the memory_info and logging.info parts stay the same)
+        
+        logging.info(
+            f"Epoch {epoch+1} | Step {self.global_step:6d} | "
+            f"Progress: {progress:5.1f}% | "
+            f"Loss: {metrics['loss']:.6f} | "
+            f"PPL: {ppl_str} | "
+            f"LR: {opt_metrics['lr']:.2e} | "
+            f"GradNorm: {opt_metrics['grad_norm']:.4f} | "
+            f"Tokens/s: {tokens_per_sec:.0f}"
+            f"{memory_info}"
+        )
     
     def _log_memory_usage(self, context: str):
         """Log memory usage information."""

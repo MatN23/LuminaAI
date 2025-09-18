@@ -8,7 +8,6 @@ import traceback
 import psutil
 import gc
 import json
-import time
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, Optional, List
@@ -36,270 +35,10 @@ try:
     from core.model import estimate_parameters, DeepSeekTransformer, DeepSeekConfig
     from core.dataset import ConversationDataset, StreamingConversationDataset, create_memory_efficient_dataloader
     from training.trainer import EnhancedConversationTrainer, DeepSpeedConfigGenerator
-    from monitoring.logger import TrainingHealthMonitor, MetricsCollector
 except ImportError as e:
     print(f"Import error: {e}")
     print("Make sure all required modules are present in the correct directory structure.")
     sys.exit(1)
-
-
-class ComprehensiveMetricsManager:
-    """Manages comprehensive metrics collection and persistence."""
-    
-    def __init__(self, experiment_name: str):
-        self.experiment_name = experiment_name
-        self.metrics_dir = Path(f"logs/metrics/{experiment_name}")
-        self.metrics_dir.mkdir(parents=True, exist_ok=True)
-        
-        self.training_metrics = []
-        self.evaluation_metrics = []
-        self.system_metrics = []
-        self.moe_routing_metrics = []
-        
-        self.start_time = time.time()
-        
-    def log_training_step(self, metrics: Dict[str, Any]):
-        """Log training step metrics."""
-        metrics['timestamp'] = time.time() - self.start_time
-        metrics['wall_time'] = time.time()
-        self.training_metrics.append(metrics)
-        
-        # Save periodically
-        if len(self.training_metrics) % 100 == 0:
-            self.save_training_metrics()
-    
-    def log_evaluation_step(self, metrics: Dict[str, Any]):
-        """Log evaluation metrics."""
-        metrics['timestamp'] = time.time() - self.start_time
-        metrics['wall_time'] = time.time()
-        self.evaluation_metrics.append(metrics)
-        self.save_evaluation_metrics()
-    
-    def log_system_metrics(self, metrics: Dict[str, Any]):
-        """Log system resource metrics."""
-        metrics['timestamp'] = time.time() - self.start_time
-        metrics['wall_time'] = time.time()
-        self.system_metrics.append(metrics)
-    
-    def log_moe_routing(self, metrics: Dict[str, Any]):
-        """Log MoE routing metrics."""
-        metrics['timestamp'] = time.time() - self.start_time
-        metrics['wall_time'] = time.time()
-        self.moe_routing_metrics.append(metrics)
-    
-    def save_training_metrics(self):
-        """Save training metrics to file."""
-        try:
-            with open(self.metrics_dir / "training_metrics.jsonl", "w") as f:
-                for metric in self.training_metrics:
-                    f.write(json.dumps(metric) + "\n")
-        except Exception as e:
-            logging.warning(f"Failed to save training metrics: {e}")
-    
-    def save_evaluation_metrics(self):
-        """Save evaluation metrics to file."""
-        try:
-            with open(self.metrics_dir / "evaluation_metrics.jsonl", "w") as f:
-                for metric in self.evaluation_metrics:
-                    f.write(json.dumps(metric) + "\n")
-        except Exception as e:
-            logging.warning(f"Failed to save evaluation metrics: {e}")
-    
-    def save_system_metrics(self):
-        """Save system metrics to file."""
-        try:
-            with open(self.metrics_dir / "system_metrics.jsonl", "w") as f:
-                for metric in self.system_metrics:
-                    f.write(json.dumps(metric) + "\n")
-        except Exception as e:
-            logging.warning(f"Failed to save system metrics: {e}")
-    
-    def save_moe_metrics(self):
-        """Save MoE routing metrics to file."""
-        try:
-            with open(self.metrics_dir / "moe_routing_metrics.jsonl", "w") as f:
-                for metric in self.moe_routing_metrics:
-                    f.write(json.dumps(metric) + "\n")
-        except Exception as e:
-            logging.warning(f"Failed to save MoE metrics: {e}")
-    
-    def save_all_metrics(self):
-        """Save all metrics to files."""
-        self.save_training_metrics()
-        self.save_evaluation_metrics()
-        self.save_system_metrics()
-        self.save_moe_metrics()
-        
-        # Create summary
-        summary = {
-            'experiment_name': self.experiment_name,
-            'total_training_steps': len(self.training_metrics),
-            'total_evaluations': len(self.evaluation_metrics),
-            'total_runtime_seconds': time.time() - self.start_time,
-            'metrics_files': {
-                'training': str(self.metrics_dir / "training_metrics.jsonl"),
-                'evaluation': str(self.metrics_dir / "evaluation_metrics.jsonl"),
-                'system': str(self.metrics_dir / "system_metrics.jsonl"),
-                'moe_routing': str(self.metrics_dir / "moe_routing_metrics.jsonl")
-            }
-        }
-        
-        with open(self.metrics_dir / "experiment_summary.json", "w") as f:
-            json.dump(summary, f, indent=2)
-        
-        logging.info(f"All metrics saved to: {self.metrics_dir}")
-
-
-class EnhancedTrainerWithMetrics(EnhancedConversationTrainer):
-    """Enhanced trainer with comprehensive metrics collection."""
-    
-    def __init__(self, model, tokenizer, config, logger, metrics_manager):
-        super().__init__(model, tokenizer, config, logger)
-        self.metrics_manager = metrics_manager
-        self.health_monitor = TrainingHealthMonitor()
-        self.system_monitor_interval = 60  # seconds
-        self.last_system_check = 0
-    
-    def _log_training_step(self, epoch: int, batch_idx: int, total_batches: int,
-                          metrics, opt_metrics, tokens_per_sec: float):
-        """Enhanced training step logging with comprehensive metrics."""
-        
-        # Calculate additional metrics
-        progress = (batch_idx + 1) / total_batches * 100
-        try:
-            raw_loss_clamped = min(metrics['raw_loss'], 50)
-            perplexity = math.exp(raw_loss_clamped)
-            ppl_str = f"{perplexity:.2e}" if perplexity > 10000 else f"{perplexity:.2f}"
-        except (OverflowError, ValueError):
-            perplexity = float('inf')
-            ppl_str = "INF"
-        
-        # Comprehensive metrics collection
-        step_metrics = {
-            'global_step': self.global_step,
-            'epoch': epoch,
-            'batch_idx': batch_idx,
-            'total_batches': total_batches,
-            'progress_percent': progress,
-            'loss': metrics['loss'],
-            'raw_loss': metrics['raw_loss'],
-            'perplexity': perplexity,
-            'learning_rate': opt_metrics['lr'],
-            'grad_norm': opt_metrics['grad_norm'],
-            'tokens_per_sec': tokens_per_sec,
-            'valid_tokens': metrics.get('valid_tokens', 0),
-            'training_precision': getattr(self, 'training_precision', 'unknown'),
-            'effective_batch_size': getattr(self, 'effective_batch_size', 0),
-            'use_deepspeed': getattr(self, 'use_deepspeed', False)
-        }
-        
-        # Add memory information
-        if torch.cuda.is_available():
-            step_metrics.update({
-                'gpu_memory_allocated_gb': torch.cuda.memory_allocated() / 1e9,
-                'gpu_memory_cached_gb': torch.cuda.memory_reserved() / 1e9,
-                'gpu_memory_max_allocated_gb': torch.cuda.max_memory_allocated() / 1e9
-            })
-        
-        # Log to metrics manager
-        self.metrics_manager.log_training_step(step_metrics)
-        
-        # Log to health monitor
-        self.health_monitor.log_step(step_metrics)
-        
-        # System monitoring
-        current_time = time.time()
-        if current_time - self.last_system_check > self.system_monitor_interval:
-            self._collect_system_metrics()
-            self.last_system_check = current_time
-        
-        # Original logging logic (but always log key metrics)
-        memory_info = ""
-        if torch.cuda.is_available():
-            memory_allocated = torch.cuda.memory_allocated() / 1e9
-            memory_cached = torch.cuda.memory_reserved() / 1e9
-            memory_info = f" | GPU: {memory_allocated:.1f}GB/{memory_cached:.1f}GB"
-        
-        # Always log every 50 steps or less frequently based on dataset size
-        log_interval = max(1, min(50, total_batches // 20))
-        
-        if (self.global_step % log_interval == 0 or 
-            batch_idx == 0 or 
-            batch_idx == total_batches - 1):
-            
-            logging.info(
-                f"Epoch {epoch+1} | Step {self.global_step:6d} | "
-                f"Progress: {progress:5.1f}% | "
-                f"Loss: {metrics['loss']:.6f} | "
-                f"PPL: {ppl_str} | "
-                f"LR: {opt_metrics['lr']:.2e} | "
-                f"GradNorm: {opt_metrics['grad_norm']:.4f} | "
-                f"Tokens/s: {tokens_per_sec:.0f}"
-                f"{memory_info}"
-            )
-    
-    def _collect_system_metrics(self):
-        """Collect comprehensive system metrics."""
-        try:
-            # CPU and memory
-            cpu_percent = psutil.cpu_percent()
-            memory = psutil.virtual_memory()
-            
-            metrics = {
-                'cpu_percent': cpu_percent,
-                'memory_percent': memory.percent,
-                'memory_available_gb': memory.available / 1e9,
-                'memory_used_gb': memory.used / 1e9
-            }
-            
-            # GPU metrics
-            if torch.cuda.is_available():
-                for i in range(torch.cuda.device_count()):
-                    metrics[f'gpu_{i}_memory_allocated_gb'] = torch.cuda.memory_allocated(i) / 1e9
-                    metrics[f'gpu_{i}_memory_reserved_gb'] = torch.cuda.memory_reserved(i) / 1e9
-            
-            # Process-specific metrics
-            process = psutil.Process()
-            metrics.update({
-                'process_memory_mb': process.memory_info().rss / 1e6,
-                'process_cpu_percent': process.cpu_percent(),
-                'num_threads': process.num_threads()
-            })
-            
-            self.metrics_manager.log_system_metrics(metrics)
-            
-        except Exception as e:
-            logging.debug(f"Failed to collect system metrics: {e}")
-    
-    def evaluate(self, eval_dataset, max_batches: int = 50) -> Dict[str, float]:
-        """Enhanced evaluation with metrics logging."""
-        eval_metrics = super().evaluate(eval_dataset, max_batches)
-        
-        # Add additional evaluation metadata
-        enhanced_metrics = {
-            **eval_metrics,
-            'global_step': self.global_step,
-            'current_epoch': getattr(self, 'current_epoch', 0),
-            'max_batches_evaluated': max_batches
-        }
-        
-        # Log evaluation metrics
-        self.metrics_manager.log_evaluation_step(enhanced_metrics)
-        
-        return eval_metrics
-    
-    def get_training_summary(self) -> Dict[str, Any]:
-        """Get comprehensive training summary."""
-        summary = {
-            'global_step': self.global_step,
-            'current_epoch': getattr(self, 'current_epoch', 0),
-            'best_eval_loss': getattr(self, 'best_eval_loss', float('inf')),
-            'device_info': self.get_device_info(),
-            'memory_stats': self.get_memory_stats(),
-            'health_status': self.health_monitor.get_health_summary() if self.health_monitor else None
-        }
-        
-        return summary
 
 
 class DeepSpeedIntegrationManager:
@@ -474,6 +213,16 @@ class EnhancedResourceManager:
                     'reason': 'Long sequences with MoE require small micro batches'
                 }
         
+        # Communication optimizations for multi-node
+        if self.distributed_manager.world_size > 8:  # Multi-node likely
+            strategy['communication_optimizations'] = {
+                'overlap_comm': True,
+                'allgather_bucket_size': 5e8,
+                'reduce_bucket_size': 5e8,
+                'communication_data_type': strategy['precision_strategy'],
+                'contiguous_gradients': True
+            }
+        
         return strategy
     
     def _estimate_model_memory_usage(self, config: Config) -> float:
@@ -499,16 +248,22 @@ class EnhancedResourceManager:
                 params += num_layers * num_experts * hidden_size * getattr(config, 'intermediate_size', hidden_size * 4)
             
             # Memory usage: parameters + gradients + optimizer states + activations
+            # Parameters: 4 bytes per param (fp32) or 2 bytes (fp16/bf16)
             param_memory = params * 2 / 1e9  # Assume mixed precision
+            
+            # Gradients: same size as parameters
             grad_memory = param_memory
+            
+            # Optimizer states (Adam): 8 bytes per parameter
             optimizer_memory = params * 8 / 1e9
             
-            # Activations
+            # Activations (rough estimate based on sequence length and batch size)
             batch_size = getattr(config, 'batch_size', 8)
             seq_length = getattr(config, 'seq_length', 2048)
             activation_memory = batch_size * seq_length * hidden_size * num_layers * 4 / 1e9
             
             total_memory = param_memory + grad_memory + optimizer_memory + activation_memory
+            
             return total_memory
             
         except Exception as e:
@@ -606,7 +361,7 @@ def create_enhanced_directory_structure():
         'data', 'data/shards', 'data/processed', 'data/cache',
         'checkpoints', 'checkpoints/best', 'checkpoints/emergency', 'checkpoints/deepspeed',
         'experiments', 'experiments/archive',
-        'logs', 'logs/adaptive', 'logs/performance', 'logs/deepspeed', 'logs/metrics',
+        'logs', 'logs/adaptive', 'logs/performance', 'logs/deepspeed',
         'backups', 'backups/configs', 'backups/models',
         'reports', 'reports/adaptive', 'reports/performance', 'reports/moe',
         'monitoring', 'monitoring/metrics', 'monitoring/visualizations', 'monitoring/routing'
@@ -777,9 +532,6 @@ def main():
     
     # Initialize enhanced resource manager
     resource_manager = EnhancedResourceManager(dist_manager)
-    
-    # Initialize metrics manager
-    metrics_manager = ComprehensiveMetricsManager(experiment_name)
     
     if should_log:
         # Display comprehensive system information
@@ -997,13 +749,12 @@ def main():
             deepseek_config = config_to_deepseek_config(config)
             model = DeepSeekTransformer(deepseek_config)
             
-            # Create enhanced trainer with comprehensive metrics
-            trainer = EnhancedTrainerWithMetrics(
+            # Create enhanced trainer with DeepSpeed support
+            trainer = EnhancedConversationTrainer(
                 model=model,
                 tokenizer=tokenizer,
                 config=config,
-                logger=None,
-                metrics_manager=metrics_manager
+                logger=None  # We'll use the built-in logging
             )
             
             if should_log:
@@ -1050,17 +801,6 @@ def main():
             if len(train_dataset) == 0:
                 raise ValueError("Training dataset is empty! Check your data file format and path.")
             
-            # Create orchestrator for comprehensive training
-            try:
-                orchestrator = AdaptiveTrainingOrchestrator(trainer, config)
-                use_orchestrator = True
-                if should_log:
-                    print("Using AdaptiveTrainingOrchestrator for enhanced training")
-            except Exception as e:
-                logging.warning(f"Could not create orchestrator: {e}, falling back to basic trainer")
-                orchestrator = None
-                use_orchestrator = False
-            
             # Run training
             if should_log:
                 print(f"\n" + "="*80)
@@ -1075,13 +815,7 @@ def main():
             
             # START TRAINING
             print(f"TRAINING STARTING NOW with {len(train_dataset)} samples...")
-            
-            if use_orchestrator:
-                # Use orchestrator for comprehensive training with metrics
-                orchestrator.train(train_dataset, eval_dataset)
-            else:
-                # Fall back to basic trainer
-                trainer.train(train_dataset, eval_dataset)
+            trainer.train(train_dataset, eval_dataset)
             
             end_time = datetime.now()
             training_duration = (end_time - start_time).total_seconds()
@@ -1089,23 +823,6 @@ def main():
             if should_log:
                 print(f"\nTraining completed successfully!")
                 print(f"   Duration: {training_duration:.1f} seconds ({training_duration/3600:.2f} hours)")
-                
-                # Save comprehensive metrics
-                metrics_manager.save_all_metrics()
-                print(f"   Metrics saved to: {metrics_manager.metrics_dir}")
-                
-                # Get training summary
-                training_summary = trainer.get_training_summary()
-                summary_path = metrics_manager.metrics_dir / "training_summary.json"
-                with open(summary_path, 'w') as f:
-                    json.dump(training_summary, f, indent=2, default=str)
-                print(f"   Training summary saved to: {summary_path}")
-                
-                # Display final metrics
-                print(f"\nFinal Training Metrics:")
-                print(f"   Total steps: {trainer.global_step}")
-                print(f"   Final epoch: {getattr(trainer, 'current_epoch', 0)}")
-                print(f"   Best eval loss: {getattr(trainer, 'best_eval_loss', 'N/A')}")
                 
                 # Get MoE diagnostics if available
                 if config.use_moe and getattr(trainer, 'use_deepspeed', False):
@@ -1129,33 +846,17 @@ def main():
                         print(f"   Peak GPU usage: {gpu_stats['max_allocated_gb']:.2f}GB")
                 except Exception as e:
                     logging.debug(f"Could not get memory stats: {e}")
-                
-                # Health monitor summary
-                try:
-                    if hasattr(trainer, 'health_monitor'):
-                        health_summary = trainer.health_monitor.get_health_summary()
-                        print(f"\nTraining Health Summary:")
-                        print(f"   Training stability: {health_summary.get('stability_score', 'N/A')}")
-                        print(f"   Average loss: {health_summary.get('avg_loss', 'N/A')}")
-                        print(f"   Loss trend: {health_summary.get('loss_trend', 'N/A')}")
-                except Exception as e:
-                    logging.debug(f"Could not get health summary: {e}")
             
             return 0
             
         except KeyboardInterrupt:
             if should_log:
                 print(f"\nTraining interrupted by user")
-                # Save metrics even on interruption
-                metrics_manager.save_all_metrics()
-                print(f"Metrics saved to: {metrics_manager.metrics_dir}")
             return 1
         except Exception as e:
             if should_log:
                 logging.error(f"Training failed: {e}")
                 logging.error(traceback.format_exc())
-                # Save metrics even on failure
-                metrics_manager.save_all_metrics()
             return 1
         
     except Exception as e:
@@ -1166,51 +867,22 @@ def main():
 
 
 if __name__ == "__main__":
-    # Set up environment for better training
-    os.environ['PYTHONUNBUFFERED'] = '1'
-    if torch.cuda.is_available():
-        os.environ['CUDA_LAUNCH_BLOCKING'] = '1'  # Better error messages
+    # For DeepSpeed, we need to handle the distributed launch
+    if DEEPSPEED_AVAILABLE and len(sys.argv) > 1 and '--local_rank' in ' '.join(sys.argv):
+        # DeepSpeed distributed launch
+        import torch
+        if not torch.distributed.is_initialized():
+            deepspeed.init_distributed()
     
-    # Simple banner
-    print("\n" + "="*80)
-    print("🚀 ENHANCED AI TRAINING SYSTEM")
-    print("   Comprehensive Metrics • Adaptive Learning • Production Ready")
-    print("="*80)
+    exit_code = main()
     
-    try:
-        # For DeepSpeed, we need to handle the distributed launch
-        if DEEPSPEED_AVAILABLE and len(sys.argv) > 1 and '--local_rank' in ' '.join(sys.argv):
-            # DeepSpeed distributed launch
+    # Clean up distributed training
+    if DEEPSPEED_AVAILABLE:
+        try:
             import torch
-            if not torch.distributed.is_initialized():
-                deepspeed.init_distributed()
-        
-        exit_code = main()
-        
-        if exit_code == 0:
-            print("\n✅ Training completed successfully!")
-            print("📊 Check logs/metrics/ for detailed training analytics")
-            print("📈 Check logs/adaptive/ for orchestration reports")
-        else:
-            print(f"\n❌ Training failed with exit code: {exit_code}")
-            print("📋 Check logs/ directory for error details")
-        
-        # Clean up distributed training
-        if DEEPSPEED_AVAILABLE:
-            try:
-                import torch
-                if torch.distributed.is_initialized():
-                    torch.distributed.destroy_process_group()
-            except:
-                pass
-        
-        exit(exit_code)
-        
-    except KeyboardInterrupt:
-        print("\n🛑 Training interrupted by user")
-        print("💾 Metrics and checkpoints have been saved")
-        exit(1)
-    except Exception as e:
-        print(f"\n💥 Unexpected error: {e}")
-        print("📋 Check logs for full traceback")
-        exit(1)
+            if torch.distributed.is_initialized():
+                torch.distributed.destroy_process_group()
+        except:
+            pass
+    
+    exit(exit_code)
