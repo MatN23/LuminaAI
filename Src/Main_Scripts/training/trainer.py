@@ -838,7 +838,7 @@ class EnhancedConversationTrainer:
         if self.t4_optimizer.device_info["is_t4"]:
             max_batches = min(max_batches, 25)
         
-        eval_dataloader = create_dataloader(eval_dataset, self.config, shuffle=False)
+        eval_dataloader = self.create_dataloader(eval_dataset, shuffle=False)
         
         total_loss = 0.0
         total_raw_loss = 0.0
@@ -932,7 +932,7 @@ class EnhancedConversationTrainer:
         
         # Setup data loaders with error handling
         try:
-            train_dataloader = create_dataloader(train_dataset, self.config, shuffle=True)
+            train_dataloader = self.create_dataloader(train_dataset, shuffle=True)
         except Exception as e:
             logging.error(f"Failed to create train dataloader: {e}")
             return
