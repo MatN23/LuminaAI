@@ -9,7 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import OneCycleLR, CosineAnnealingLR
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 from contextlib import nullcontext
 from typing import Dict, Optional, Any, Union, List, Tuple
 from pathlib import Path
@@ -768,16 +768,16 @@ class EnhancedConversationTrainer:
             return nullcontext()
         elif target_precision in ["fp16", "mixed_fp16"]:
             try:
-                return autocast(device_type='cuda', dtype=torch.float16)
+                return autocast('cuda', dtype=torch.float16)
             except TypeError:
-                return autocast(enabled=True)
+                return autocast('cuda')
         elif target_precision in ["bf16", "mixed_bf16"]:
             try:
-                return autocast(device_type='cuda', dtype=torch.bfloat16)
+                return autocast('cuda', dtype=torch.bfloat16)
             except TypeError:
-                return autocast(enabled=True)
+                return autocast('cuda')
         else:
-            return nullcontext()
+            return nullcontext() 
     
     def compute_loss(self, logits: torch.Tensor, labels: torch.Tensor, 
                     loss_weights: torch.Tensor) -> Dict[str, torch.Tensor]:
