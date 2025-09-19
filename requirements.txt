@@ -136,3 +136,5 @@ tqdm>=4.64.0
 # flash-attn>=2.0.0  # For flash attention (requires CUDA)
 # wandb>=0.13.0      # For experiment tracking
 # tensorboard>=2.10.0 # For tensorboard logging
+deepspeed
+mpi4py

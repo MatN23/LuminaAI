@@ -477,7 +477,7 @@ class EnhancedConversationTrainer:
         self.moe_optimizer = MoEOptimizationManager(config)
         self.cpu_offload_manager = CPUOffloadManager(config)
         
-        # DeepSpeed integration
+        # DeepSpeed integration - CRITICAL FIX
         self.use_deepspeed = DEEPSPEED_AVAILABLE and getattr(config, 'use_deepspeed', False)
         self.deepspeed_engine = None
         
@@ -504,13 +504,29 @@ class EnhancedConversationTrainer:
 
     def _setup_deepspeed_training(self):
         """Setup DeepSpeed training with MoE and CPU offloading optimizations."""
-        logging.info("Initializing DeepSpeed training...")
+        logging.info("="*60)
+        logging.info("INITIALIZING DEEPSPEED TRAINING")
+        logging.info("="*60)
+        
+        # Debug information
+        logging.info(f"DeepSpeed available: {DEEPSPEED_AVAILABLE}")
+        logging.info(f"CUDA available: {torch.cuda.is_available()}")
+        logging.info(f"Config use_deepspeed: {getattr(self.config, 'use_deepspeed', False)}")
+        logging.info(f"World size: {int(os.environ.get('WORLD_SIZE', 1))}")
+        logging.info(f"Local rank: {int(os.environ.get('LOCAL_RANK', 0))}")
         
         # Create DeepSpeed configuration
         ds_config = self._create_deepspeed_config()
         
+        # Log the configuration for debugging
+        logging.info("DeepSpeed Configuration:")
+        config_str = json.dumps(ds_config, indent=2, default=str)
+        logging.info(config_str)
+        
         # Initialize DeepSpeed engine
         try:
+            logging.info("Attempting DeepSpeed initialization...")
+            
             self.deepspeed_engine, optimizer, _, lr_scheduler = deepspeed.initialize(
                 model=self.model,
                 config=ds_config,
@@ -521,8 +537,11 @@ class EnhancedConversationTrainer:
             self.scheduler = lr_scheduler
             self.model = self.deepspeed_engine
             
-            # Log DeepSpeed setup
-            logging.info(f"DeepSpeed initialized:")
+            # CRITICAL: Set this flag to indicate successful DeepSpeed init
+            self.use_deepspeed = True
+            
+            # Log DeepSpeed setup success
+            logging.info("✅ DEEPSPEED INITIALIZATION SUCCESSFUL!")
             logging.info(f"  World size: {self.deepspeed_engine.world_size}")
             logging.info(f"  Local rank: {self.deepspeed_engine.local_rank}")
             logging.info(f"  ZeRO stage: {ds_config.get('zero_optimization', {}).get('stage', 'disabled')}")
@@ -540,22 +559,30 @@ class EnhancedConversationTrainer:
                     logging.debug(f"Memory estimation failed: {e}")
             
         except Exception as e:
-            logging.error(f"DeepSpeed initialization failed: {e}")
-            logging.info("Falling back to standard training")
+            logging.error("❌ DEEPSPEED INITIALIZATION FAILED!")
+            logging.error(f"Error: {e}")
+            logging.error(f"DeepSpeed config that failed: {ds_config}")
+            
+            # Import traceback for detailed error info
+            import traceback
+            logging.error("Full traceback:")
+            logging.error(traceback.format_exc())
+            
+            logging.info("🔄 Falling back to standard PyTorch training...")
             self.use_deepspeed = False
             self._setup_standard_training()
     
     def _create_deepspeed_config(self) -> Dict[str, Any]:
         """Create comprehensive DeepSpeed configuration."""
         
-        # Base configuration
+        # Base configuration with FIXED parameters
         ds_config = {
             "train_batch_size": getattr(self.config, 'effective_batch_size', 
                                       self.config.batch_size * getattr(self.config, 'gradient_accumulation_steps', 1)),
             "train_micro_batch_size_per_gpu": self.config.batch_size,
             "gradient_accumulation_steps": getattr(self.config, 'gradient_accumulation_steps', 1),
             
-            # Precision settings
+            # Precision settings - SIMPLIFIED
             "fp16": {
                 "enabled": self.config.precision in ["fp16", "mixed_fp16"],
                 "auto_cast": False,
@@ -572,24 +599,22 @@ class EnhancedConversationTrainer:
             # Gradient clipping
             "gradient_clipping": getattr(self.config, 'max_grad_norm', 1.0),
             
-            # Learning rate scheduler
+            # FIXED: Simplified scheduler configuration
             "scheduler": {
                 "type": "WarmupLR",
                 "params": {
                     "warmup_min_lr": 0.0,
                     "warmup_max_lr": self.config.learning_rate,
-                    "warmup_num_steps": int(getattr(self.config, 'warmup_ratio', 0.1) * 
-                                          getattr(self.config, 'max_steps', 1000))
+                    "warmup_num_steps": 100  # Fixed number instead of calculation
                 }
             },
             
-            # Communication settings for multi-GPU
-            "communication_data_type": "fp16" if self.config.precision in ["fp16", "mixed_fp16"] else "bf16",
+            # Communication settings - SIMPLIFIED
             "allgather_partitions": True,
-            "allgather_bucket_size": 5e8,
+            "allgather_bucket_size": int(5e8),
             "overlap_comm": True,
             "reduce_scatter": True,
-            "reduce_bucket_size": 5e8,
+            "reduce_bucket_size": int(5e8),
             "contiguous_gradients": True,
             
             # Logging
@@ -598,102 +623,47 @@ class EnhancedConversationTrainer:
             "dump_state": False
         }
         
-        # Add optimizer configuration
-        ds_config["optimizer"] = self._create_optimizer_config()
+        # Add FIXED optimizer configuration
+        ds_config["optimizer"] = {
+            "type": "AdamW",
+            "params": {
+                "lr": self.config.learning_rate,
+                "betas": [0.9, 0.95],
+                "eps": 1e-8,
+                "weight_decay": getattr(self.config, 'weight_decay', 0.01)
+            }
+        }
         
         # Add MoE configuration if model uses MoE
         if hasattr(self.config, 'use_moe') and self.config.use_moe:
+            logging.info("Adding MoE configuration to DeepSpeed config...")
             ds_config = self.moe_optimizer.create_deepspeed_moe_config(ds_config)
         else:
-            # Standard ZeRO configuration
-            ds_config["zero_optimization"] = self._create_zero_config()
+            # Standard ZeRO configuration - SIMPLIFIED
+            ds_config["zero_optimization"] = {
+                "stage": getattr(self.config, 'zero_stage', 2),  # Use stage 2 by default for stability
+                "allgather_partitions": True,
+                "allgather_bucket_size": int(5e8),
+                "overlap_comm": True,
+                "reduce_scatter": True,
+                "reduce_bucket_size": int(5e8),
+                "contiguous_gradients": True
+            }
         
-        # Add CPU offloading configuration
-        cpu_offload_config = self.cpu_offload_manager.setup_cpu_offload(self.model, ds_config["optimizer"])
-        ds_config["zero_optimization"].update(cpu_offload_config)
-        
-        # Advanced optimizations
-        ds_config.update({
-            "activation_checkpointing": {
-                "partition_activations": True,
-                "cpu_checkpointing": getattr(self.config, 'cpu_offload', False),
-                "contiguous_memory_optimization": True,
-                "number_checkpoints": 4,
-                "synchronize_checkpoint_boundary": True,
-                "profile": False
-            },
-            
-            "aio": {
-                "block_size": 1048576,
-                "queue_depth": 8,
-                "thread_count": 1,
-                "single_submit": False,
-                "overlap_events": True
-            } if getattr(self.config, 'nvme_path', None) else None
-        })
-        
-        # Remove None values
-        ds_config = {k: v for k, v in ds_config.items() if v is not None}
+        # Add CPU offloading ONLY if explicitly enabled
+        if getattr(self.config, 'cpu_offload', False):
+            logging.info("Adding CPU offloading configuration...")
+            cpu_offload_config = self.cpu_offload_manager.setup_cpu_offload(self.model, ds_config["optimizer"])
+            if "zero_optimization" in ds_config:
+                ds_config["zero_optimization"].update(cpu_offload_config)
         
         return ds_config
     
-    def _create_optimizer_config(self) -> Dict[str, Any]:
-        """Create optimizer configuration for DeepSpeed."""
-        
-        if getattr(self.config, 'cpu_offload_optimizer', False):
-            # Use CPU Adam for offloaded optimizer states
-            optimizer_config = {
-                "type": "DeepSpeedCPUAdam",
-                "params": {
-                    "lr": self.config.learning_rate,
-                    "betas": [0.9, 0.95],
-                    "eps": 1e-8,
-                    "weight_decay": getattr(self.config, 'weight_decay', 0.01)
-                }
-            }
-        else:
-            # Use FusedAdam for GPU training
-            optimizer_config = {
-                "type": "AdamW",
-                "params": {
-                    "lr": self.config.learning_rate,
-                    "betas": [0.9, 0.95],
-                    "eps": 1e-8,
-                    "weight_decay": getattr(self.config, 'weight_decay', 0.01)
-                }
-            }
-        
-        return optimizer_config
-    
-    def _create_zero_config(self) -> Dict[str, Any]:
-        """Create ZeRO optimization configuration."""
-        
-        zero_stage = getattr(self.config, 'zero_stage', 3)
-        
-        zero_config = {
-            "stage": zero_stage,
-            "allgather_partitions": True,
-            "allgather_bucket_size": 5e8,
-            "overlap_comm": True,
-            "reduce_scatter": True,
-            "reduce_bucket_size": 5e8,
-            "contiguous_gradients": True,
-            "cpu_offload": getattr(self.config, 'cpu_offload', False)
-        }
-        
-        if zero_stage >= 2:
-            zero_config.update({
-                "stage3_param_persistence_threshold": 1e4,
-                "stage3_max_live_parameters": 1e9,
-                "stage3_prefetch_bucket_size": 5e7,
-                "memory_efficient_linear": True,
-            })
-        
-        return zero_config
-    
     def _setup_standard_training(self):
         """Setup standard PyTorch training as fallback."""
-        logging.info("Setting up standard PyTorch training...")
+        logging.info("="*60)
+        logging.info("SETTING UP STANDARD PYTORCH TRAINING")
+        logging.info("="*60)
         
         # Move model to device
         self.model = self.model.to(self.device)
@@ -715,7 +685,7 @@ class EnhancedConversationTrainer:
             except Exception as e:
                 logging.warning(f"Model compilation failed: {e}")
         
-        logging.info(f"Standard training setup complete - Device: {self.device}")
+        logging.info(f"✅ Standard training setup complete - Device: {self.device}")
     
     def _create_standard_optimizer(self) -> torch.optim.Optimizer:
         """Create standard PyTorch optimizer."""
