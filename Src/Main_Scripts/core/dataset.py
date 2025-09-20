@@ -707,7 +707,7 @@ def create_dataloader(dataset: Union[ConversationDataset, StreamingConversationD
                 shuffle=shuffle,
                 num_workers=config.num_workers,
                 pin_memory=torch.cuda.is_available(),
-                prefetch_factor=2 if config.num_workers > 0 else None,
+                prefetch_factor=4 if config.num_workers > 0 else None,
                 drop_last=True,
                 persistent_workers=config.num_workers > 0
             )

@@ -39,7 +39,7 @@ class Config:
     max_grad_norm: float = 1.0
     precision: str = "auto"  # Changed default to "auto"
     inference_precision: str = "auto"  # Changed default to "auto"
-    compile: bool = False
+    compile: bool = True
     
     # Data parameters
     train_data_path: str = "data/train.jsonl"

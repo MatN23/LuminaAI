@@ -193,7 +193,7 @@ class GroupedQueryAttention(nn.Module):
             v = v.repeat_interleave(self.num_queries_per_kv, dim=1)
         
         # Use Flash Attention if available and beneficial
-        if HAS_FLASH_ATTN and L > 512 and x.dtype in [torch.float16, torch.bfloat16]:
+        if HAS_FLASH_ATTN and L > 1024 and x.dtype in [torch.float16, torch.bfloat16]:
             try:
                 # Ensure correct shapes for flash attention [B, L, H, D]
                 q_flash = q.transpose(1, 2).contiguous()  # [B, L, H, D]
