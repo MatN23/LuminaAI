@@ -429,9 +429,9 @@ class EnhancedConversationTrainer:
             "scheduler": {
                 "type": "WarmupLR",
                 "params": {
-                    "warmup_min_lr": 0.0,
+                    "warmup_min_lr": 1e-6,
                     "warmup_max_lr": self.config.learning_rate,
-                    "warmup_num_steps": 100  # Fixed number instead of calculation
+                    "warmup_num_steps": 10  # Fixed number instead of calculation
                 }
             },
             
@@ -980,7 +980,7 @@ class EnhancedConversationTrainer:
                 continue
             
             # Accumulate metrics
-            accumulation_metrics['loss'] += step_metrics['loss']
+            accumulation_metrics['loss'] += step_metrics['loss'] / gradient_accumulation_steps
             accumulation_metrics['raw_loss'] += step_metrics['raw_loss']
             accumulation_metrics['tokens'] += step_metrics['valid_tokens']
             
