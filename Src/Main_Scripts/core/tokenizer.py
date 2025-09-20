@@ -91,6 +91,9 @@ class ConversationTokenizer:
         self.vocab_size = self.base_vocab_size + len(self.special_tokens)
         self._reverse_special_tokens = {v: k for k, v in self.special_tokens.items()}
         
+        # CRITICAL FIX: Add pad_token_id property
+        self.pad_token_id = 0  # Using 0 as pad token ID (common convention)
+        
         # Pad vocab size to be efficient for modern hardware
         alignment = 128  # Better for modern GPUs
         if self.vocab_size % alignment != 0:
@@ -128,6 +131,7 @@ class ConversationTokenizer:
         logging.info(f"  Vocab size: {self.vocab_size:,}")
         logging.info(f"  Max context: {max_context_length:,}")
         logging.info(f"  Special tokens: {len(self.special_tokens)}")
+        logging.info(f"  Pad token ID: {self.pad_token_id}")
     
     @classmethod
     def _get_or_create_tokenizer(cls, model_name: str):
@@ -608,4 +612,5 @@ class ConversationTokenizer:
     def __repr__(self) -> str:
         return (f"ConversationTokenizer(model='{self.model_name}', "
                 f"vocab_size={self.vocab_size:,}, "
-                f"max_context={self.max_context_length:,})")
+                f"max_context={self.max_context_length:,}, "
+                f"pad_token_id={self.pad_token_id})")
