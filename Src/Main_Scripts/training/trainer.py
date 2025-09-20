@@ -36,9 +36,39 @@ except ImportError:
     class DeepSpeedEngine:
         pass
 
-from core.dataset import create_dataloader
-from monitoring.logger import TrainingHealthMonitor
-from training.checkpoint import CheckpointManager
+try:
+    from core.dataset import create_dataloader
+except ImportError:
+    # Fallback dataloader creation
+    from torch.utils.data import DataLoader
+    def create_dataloader(dataset, config, shuffle=True):
+        return DataLoader(
+            dataset,
+            batch_size=getattr(config, 'batch_size', 1),
+            shuffle=shuffle,
+            num_workers=getattr(config, 'num_workers', 0),
+            pin_memory=torch.cuda.is_available()
+        )
+
+try:
+    from monitoring.logger import TrainingHealthMonitor
+except ImportError:
+    # Fallback logger
+    class TrainingHealthMonitor:
+        def __init__(self, *args, **kwargs):
+            pass
+        def log(self, *args, **kwargs):
+            pass
+
+try:
+    from training.checkpoint import CheckpointManager
+except ImportError:
+    # Fallback checkpoint manager
+    class CheckpointManager:
+        def __init__(self, *args, **kwargs):
+            pass
+        def save_checkpoint(self, *args, **kwargs):
+            pass
 
 
 class MoEOptimizationManager:
@@ -114,8 +144,8 @@ class MoEOptimizationManager:
                 "device": "cpu" if getattr(self.config, 'cpu_offload', False) else "none",
                 "nvme_path": getattr(self.config, 'nvme_path', None),
                 "buffer_count": 5,
-                "buffer_size": 1e8,
-                "max_in_cpu": 1e9
+                "buffer_size": 100000000.0,
+                "max_in_cpu": 1000000000.0
             },
             "offload_optimizer": {
                 "device": "cpu" if getattr(self.config, 'cpu_offload_optimizer', False) else "none",
@@ -126,11 +156,11 @@ class MoEOptimizationManager:
                 "pipeline_write": True,
                 "fast_init": False
             },
-            "stage3_param_persistence_threshold": 1e4,  # Aggressive parameter offloading
-            "stage3_max_live_parameters": 1e9,
-            "stage3_prefetch_bucket_size": 5e7,
+            "stage3_param_persistence_threshold": 10000.0,  # Aggressive parameter offloading
+            "stage3_max_live_parameters": 1000000000.0,
+            "stage3_prefetch_bucket_size": 50000000.0,
             "memory_efficient_linear": True,  # Critical for MoE
-            "stage3_max_reuse_distance": 1000,
+            "stage3_max_reuse_distance": 1000
         })
         
         logging.info(f"MoE Config: {num_experts} experts, EP size: {optimal_ep_size}, "
@@ -250,218 +280,6 @@ class MoEOptimizationManager:
         return diagnostics
 
 
-class CPUOffloadManager:
-    """Manages CPU offloading strategies for memory optimization."""
-    
-    def __init__(self, config):
-        self.config = config
-        self.offload_stats = {
-            'cpu_memory_usage': [],
-            'gpu_memory_saved': [],
-            'transfer_times': []
-        }
-        
-    def setup_cpu_offload(self, model, optimizer_config: Dict[str, Any]) -> Dict[str, Any]:
-        """Setup CPU offloading configuration."""
-        
-        # Determine what to offload based on available memory
-        cpu_offload_config = {
-            "offload_param": {"device": "none"},
-            "offload_optimizer": {"device": "none"}
-        }
-        
-        if getattr(self.config, 'cpu_offload', False):
-            # Parameter offloading
-            cpu_offload_config["offload_param"] = {
-                "device": "cpu",
-                "nvme_path": getattr(self.config, 'nvme_path', None),
-                "buffer_count": 5,
-                "buffer_size": int(1e8),
-                "max_in_cpu": int(1e9),
-                "pin_memory": True
-            }
-            
-            # Optimizer state offloading
-            if getattr(self.config, 'cpu_offload_optimizer', True):
-                cpu_offload_config["offload_optimizer"] = {
-                    "device": "cpu",
-                    "nvme_path": getattr(self.config, 'nvme_path', None),
-                    "buffer_count": 4,
-                    "pin_memory": True,
-                    "pipeline_read": True,
-                    "pipeline_write": True,
-                    "fast_init": False
-                }
-            
-            logging.info("CPU offloading enabled for parameters and optimizer states")
-            
-        # Advanced memory management for large models
-        if hasattr(self.config, 'aggressive_cpu_offload') and self.config.aggressive_cpu_offload:
-            # More aggressive settings for very large models
-            cpu_offload_config.update({
-                "stage3_param_persistence_threshold": 1e3,  # More aggressive
-                "stage3_max_live_parameters": int(5e8),     # Keep fewer params on GPU
-                "stage3_prefetch_bucket_size": int(1e7),    # Smaller buckets
-                "memory_efficient_linear": True,
-                "stage3_max_reuse_distance": 500,           # More aggressive reuse
-            })
-            
-            logging.info("Aggressive CPU offloading enabled")
-        
-        return cpu_offload_config
-    
-    def monitor_memory_usage(self):
-        """Monitor memory usage during training."""
-        try:
-            # GPU memory
-            if torch.cuda.is_available():
-                gpu_memory = torch.cuda.memory_allocated() / 1e9
-                gpu_reserved = torch.cuda.memory_reserved() / 1e9
-            else:
-                gpu_memory = gpu_reserved = 0
-            
-            # CPU memory
-            try:
-                import psutil
-                cpu_memory = psutil.virtual_memory()
-                cpu_usage_gb = (cpu_memory.total - cpu_memory.available) / 1e9
-                self.offload_stats['cpu_memory_usage'].append(cpu_usage_gb)
-            except ImportError:
-                cpu_usage_gb = 0
-            
-            # Log periodically
-            if len(self.offload_stats['cpu_memory_usage']) % 100 == 0:
-                logging.info(f"Memory usage - GPU: {gpu_memory:.2f}GB/{gpu_reserved:.2f}GB, "
-                           f"CPU: {cpu_usage_gb:.2f}GB")
-            
-        except Exception as e:
-            logging.debug(f"Memory monitoring failed: {e}")
-
-
-class PrecisionManager:
-    """Manages different precision types and their configurations."""
-    
-    # Comprehensive precision definitions
-    PRECISION_CONFIGS = {
-        "fp32": {
-            "dtype": torch.float32,
-            "name": "Float32",
-            "description": "Full precision (32-bit)",
-            "memory_efficiency": 1.0,
-            "speed_multiplier": 1.0,
-            "numerical_stability": "excellent",
-            "supported_devices": ["cpu", "cuda"]
-        },
-        "fp16": {
-            "dtype": torch.float16,
-            "name": "Float16",
-            "description": "Half precision (16-bit)",
-            "memory_efficiency": 2.0,
-            "speed_multiplier": 1.5,
-            "numerical_stability": "good",
-            "supported_devices": ["cuda"]
-        },
-        "bf16": {
-            "dtype": torch.bfloat16,
-            "name": "BFloat16",
-            "description": "Brain floating point (16-bit with extended range)",
-            "memory_efficiency": 2.0,
-            "speed_multiplier": 1.4,
-            "numerical_stability": "very good",
-            "supported_devices": ["cuda"]
-        },
-        "mixed_fp16": {
-            "dtype": torch.float16,
-            "name": "Mixed Float16",
-            "description": "Mixed precision with fp16 forward, fp32 gradients",
-            "memory_efficiency": 1.8,
-            "speed_multiplier": 1.6,
-            "numerical_stability": "very good",
-            "supported_devices": ["cuda"]
-        },
-        "mixed_bf16": {
-            "dtype": torch.bfloat16,
-            "name": "Mixed BFloat16",
-            "description": "Mixed precision with bf16 forward, fp32 gradients",
-            "memory_efficiency": 1.8,
-            "speed_multiplier": 1.5,
-            "numerical_stability": "excellent",
-            "supported_devices": ["cuda"]
-        },
-        "tf32": {
-            "dtype": None,
-            "name": "TensorFloat-32",
-            "description": "NVIDIA Tensor Float (19-bit precision)",
-            "memory_efficiency": 1.0,
-            "speed_multiplier": 1.2,
-            "numerical_stability": "very good",
-            "supported_devices": ["cuda"]
-        },
-        "dynamic": {
-            "dtype": None,
-            "name": "Dynamic",
-            "description": "Automatically select best precision",
-            "memory_efficiency": "variable",
-            "speed_multiplier": "variable",
-            "numerical_stability": "variable",
-            "supported_devices": ["cpu", "cuda"]
-        }
-    }
-    
-    @classmethod
-    def get_supported_precisions(cls, device: torch.device) -> List[str]:
-        """Get list of supported precisions for the given device."""
-        device_type = device.type
-        supported = []
-        
-        for precision, config in cls.PRECISION_CONFIGS.items():
-            if device_type in config["supported_devices"]:
-                if precision in ["bf16", "mixed_bf16"]:
-                    if device_type == "cuda" and torch.cuda.is_available():
-                        try:
-                            test_tensor = torch.tensor([1.0], dtype=torch.bfloat16, device=device)
-                            supported.append(precision)
-                        except:
-                            continue
-                elif precision == "tf32":
-                    if device_type == "cuda" and torch.cuda.is_available():
-                        if hasattr(torch.cuda, 'get_device_capability'):
-                            capability = torch.cuda.get_device_capability(device.index or 0)
-                            if capability[0] >= 8:
-                                supported.append(precision)
-                else:
-                    supported.append(precision)
-        
-        return supported
-    
-    @classmethod
-    def auto_select_precision(cls, device: torch.device, priority: str = "balanced") -> str:
-        """Automatically select the best precision for the device."""
-        supported = cls.get_supported_precisions(device)
-        
-        if not supported:
-            return "fp32"
-        
-        if priority == "speed":
-            for precision in ["fp16", "bf16", "mixed_fp16", "mixed_bf16", "tf32", "fp32"]:
-                if precision in supported:
-                    return precision
-        elif priority == "memory":
-            for precision in ["fp16", "bf16", "mixed_fp16", "mixed_bf16", "fp32"]:
-                if precision in supported:
-                    return precision
-        elif priority == "stability":
-            for precision in ["bf16", "mixed_bf16", "fp32", "mixed_fp16", "fp16"]:
-                if precision in supported:
-                    return precision
-        else:  # balanced
-            for precision in ["mixed_bf16", "bf16", "mixed_fp16", "tf32", "fp16", "fp32"]:
-                if precision in supported:
-                    return precision
-        
-        return "fp32"
-
-
 class EnhancedConversationTrainer:
     """Production trainer with DeepSpeed, MoE optimizations, and CPU offloading."""
     
@@ -473,9 +291,7 @@ class EnhancedConversationTrainer:
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
         # Enhanced managers
-        self.precision_manager = PrecisionManager()
-        self.moe_optimizer = MoEOptimizationManager(config)
-        self.cpu_offload_manager = CPUOffloadManager(config)
+        self.moe_optimizer = MoEOptimizationManager(config) if hasattr(config, 'use_moe') and config.use_moe else None
         
         # DeepSpeed integration - CRITICAL FIX
         self.use_deepspeed = DEEPSPEED_AVAILABLE and getattr(config, 'use_deepspeed', False)
@@ -497,10 +313,6 @@ class EnhancedConversationTrainer:
             self._setup_deepspeed_training()
         else:
             self._setup_standard_training()
-
-    def _create_dataloader(self, dataset):
-        """Create dataloader for training."""
-        return create_dataloader(dataset, self.config, shuffle=True)
 
     def _setup_deepspeed_training(self):
         """Setup DeepSpeed training with MoE and CPU offloading optimizations."""
@@ -561,7 +373,12 @@ class EnhancedConversationTrainer:
         except Exception as e:
             logging.error("❌ DEEPSPEED INITIALIZATION FAILED!")
             logging.error(f"Error: {e}")
-            logging.error(f"DeepSpeed config that failed: {ds_config}")
+            logging.error(f"DeepSpeed config that failed:")
+            for key, value in ds_config.items():
+                if isinstance(value, dict):
+                    logging.error(f"  {key}: {json.dumps(value, indent=4, default=str)}")
+                else:
+                    logging.error(f"  {key}: {value}")
             
             # Import traceback for detailed error info
             import traceback
@@ -573,18 +390,31 @@ class EnhancedConversationTrainer:
             self._setup_standard_training()
     
     def _create_deepspeed_config(self) -> Dict[str, Any]:
-        """Create comprehensive DeepSpeed configuration."""
+        """Create comprehensive DeepSpeed configuration with FIXED batch size calculation."""
+        
+        # CRITICAL FIX: Calculate effective batch size correctly
+        micro_batch_size = getattr(self.config, 'batch_size', 1)
+        gradient_accumulation_steps = getattr(self.config, 'gradient_accumulation_steps', 1)
+        world_size = int(os.environ.get('WORLD_SIZE', 1))
+        
+        # Calculate train_batch_size correctly: micro_batch * grad_accum * world_size
+        train_batch_size = micro_batch_size * gradient_accumulation_steps * world_size
+        
+        logging.info(f"Batch size calculation:")
+        logging.info(f"  Micro batch size: {micro_batch_size}")
+        logging.info(f"  Gradient accumulation steps: {gradient_accumulation_steps}")
+        logging.info(f"  World size: {world_size}")
+        logging.info(f"  Train batch size: {train_batch_size}")
         
         # Base configuration with FIXED parameters
         ds_config = {
-            "train_batch_size": getattr(self.config, 'effective_batch_size', 
-                                      self.config.batch_size * getattr(self.config, 'gradient_accumulation_steps', 1)),
-            "train_micro_batch_size_per_gpu": self.config.batch_size,
-            "gradient_accumulation_steps": getattr(self.config, 'gradient_accumulation_steps', 1),
+            "train_batch_size": train_batch_size,
+            "train_micro_batch_size_per_gpu": micro_batch_size,
+            "gradient_accumulation_steps": gradient_accumulation_steps,
             
             # Precision settings - SIMPLIFIED
             "fp16": {
-                "enabled": self.config.precision in ["fp16", "mixed_fp16"],
+                "enabled": getattr(self.config, 'precision', 'fp32') in ["fp16", "mixed_fp16"],
                 "auto_cast": False,
                 "loss_scale": 0,
                 "initial_scale_power": 16,
@@ -593,7 +423,7 @@ class EnhancedConversationTrainer:
                 "min_loss_scale": 1
             },
             "bf16": {
-                "enabled": self.config.precision in ["bf16", "mixed_bf16"]
+                "enabled": getattr(self.config, 'precision', 'fp32') in ["bf16", "mixed_bf16"]
             },
             
             # Gradient clipping
@@ -635,13 +465,14 @@ class EnhancedConversationTrainer:
         }
         
         # Add MoE configuration if model uses MoE
-        if hasattr(self.config, 'use_moe') and self.config.use_moe:
+        if hasattr(self.config, 'use_moe') and self.config.use_moe and self.moe_optimizer:
             logging.info("Adding MoE configuration to DeepSpeed config...")
             ds_config = self.moe_optimizer.create_deepspeed_moe_config(ds_config)
         else:
             # Standard ZeRO configuration - SIMPLIFIED
+            zero_stage = getattr(self.config, 'zero_stage', 2)
             ds_config["zero_optimization"] = {
-                "stage": getattr(self.config, 'zero_stage', 2),  # Use stage 2 by default for stability
+                "stage": zero_stage,
                 "allgather_partitions": True,
                 "allgather_bucket_size": int(5e8),
                 "overlap_comm": True,
@@ -649,13 +480,29 @@ class EnhancedConversationTrainer:
                 "reduce_bucket_size": int(5e8),
                 "contiguous_gradients": True
             }
-        
-        # Add CPU offloading ONLY if explicitly enabled
-        if getattr(self.config, 'cpu_offload', False):
-            logging.info("Adding CPU offloading configuration...")
-            cpu_offload_config = self.cpu_offload_manager.setup_cpu_offload(self.model, ds_config["optimizer"])
-            if "zero_optimization" in ds_config:
-                ds_config["zero_optimization"].update(cpu_offload_config)
+            
+            # Add CPU offloading ONLY if explicitly enabled
+            if getattr(self.config, 'cpu_offload', False):
+                logging.info("Adding CPU offloading configuration...")
+                ds_config["zero_optimization"]["offload_optimizer"] = {
+                    "device": "cpu",
+                    "nvme_path": getattr(self.config, 'nvme_path', None),
+                    "buffer_count": 4,
+                    "pin_memory": True,
+                    "pipeline_read": True,
+                    "pipeline_write": True,
+                    "fast_init": False
+                }
+                
+                if getattr(self.config, 'cpu_offload_parameters', False):
+                    ds_config["zero_optimization"]["offload_param"] = {
+                        "device": "cpu",
+                        "nvme_path": getattr(self.config, 'nvme_path', None),
+                        "buffer_count": 5,
+                        "buffer_size": 100000000.0,
+                        "max_in_cpu": 1000000000.0,
+                        "pin_memory": True
+                    }
         
         return ds_config
     
@@ -727,12 +574,7 @@ class EnhancedConversationTrainer:
             return nullcontext()  # DeepSpeed handles precision internally
         
         # Use existing precision logic for standard training
-        target_precision = precision or (getattr(self, 'inference_precision', self.training_precision) if for_inference else self.training_precision)
-        
-        if target_precision == "dynamic":
-            target_precision = self.precision_manager.auto_select_precision(
-                self.device, priority="speed" if for_inference else "balanced"
-            )
+        target_precision = precision or (getattr(self.config, 'inference_precision', self.training_precision) if for_inference else self.training_precision)
         
         if target_precision == "fp32" or not torch.cuda.is_available():
             return nullcontext()
@@ -750,19 +592,31 @@ class EnhancedConversationTrainer:
             return nullcontext() 
     
     def compute_loss(self, logits: torch.Tensor, labels: torch.Tensor, 
-                    loss_weights: torch.Tensor) -> Dict[str, torch.Tensor]:
+                    loss_weights: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
         """Compute weighted loss with MoE auxiliary losses."""
+        
+        # For next-token prediction, shift logits and labels
+        shift_logits = logits[..., :-1, :].contiguous()
+        shift_labels = labels[..., 1:].contiguous()
+        
         # Flatten tensors
-        flat_logits = logits.view(-1, logits.size(-1))
-        flat_labels = labels.view(-1)
-        flat_weights = loss_weights.view(-1)
+        flat_logits = shift_logits.view(-1, shift_logits.size(-1))
+        flat_labels = shift_labels.view(-1)
+        
+        # Create attention mask (ignore padding tokens)
+        mask = (flat_labels != self.tokenizer.pad_token_id).float() if hasattr(self.tokenizer, 'pad_token_id') else torch.ones_like(flat_labels)
         
         # Compute base loss
         loss = F.cross_entropy(flat_logits, flat_labels, reduction='none')
         
-        # Apply weights and mask padding
-        mask = (flat_labels != 0).float()
-        weighted_loss = loss * flat_weights * mask
+        # Apply weights if provided
+        if loss_weights is not None:
+            # Also shift and flatten loss weights
+            shift_weights = loss_weights[..., 1:].contiguous()
+            flat_weights = shift_weights.view(-1)
+            weighted_loss = loss * flat_weights * mask
+        else:
+            weighted_loss = loss * mask
         
         # Check for numerical issues
         if torch.isnan(weighted_loss).any() or torch.isinf(weighted_loss).any():
@@ -802,11 +656,16 @@ class EnhancedConversationTrainer:
         # Move batch to device
         batch = {k: v.to(self.device, non_blocking=True) for k, v in batch.items()}
         
-        if batch['input_ids'].numel() == 0:
+        input_ids = batch.get('input_ids')
+        attention_mask = batch.get('attention_mask')
+        labels = batch.get('labels', input_ids)  # Use input_ids as labels if not provided
+        loss_weights = batch.get('loss_weights')
+        
+        if input_ids is None or input_ids.numel() == 0:
             return {'loss': 0.0, 'perplexity': float('inf'), 'valid_tokens': 0}
         
         # Forward pass
-        output = self.deepspeed_engine(batch['input_ids'], batch['attention_mask'])
+        output = self.deepspeed_engine(input_ids, attention_mask)
         
         # Handle MoE outputs
         aux_losses = {}
@@ -815,15 +674,15 @@ class EnhancedConversationTrainer:
                 logits, total_aux_loss, aux_losses = output
             else:  # (logits, total_aux_loss)
                 logits, total_aux_loss = output
-            loss_dict = self.compute_loss(logits, batch['labels'], batch['loss_weights'])
+            loss_dict = self.compute_loss(logits, labels, loss_weights)
             loss_dict['loss'] = loss_dict['loss'] + total_aux_loss
             
             # Monitor MoE routing if available
-            if aux_losses:
+            if aux_losses and self.moe_optimizer:
                 self.moe_optimizer.monitor_routing_balance(aux_losses)
         else:
             logits = output
-            loss_dict = self.compute_loss(logits, batch['labels'], batch['loss_weights'])
+            loss_dict = self.compute_loss(logits, labels, loss_weights)
         
         loss = loss_dict['loss']
         
@@ -831,7 +690,7 @@ class EnhancedConversationTrainer:
         self.deepspeed_engine.backward(loss)
         
         return {
-            'loss': loss.item() * getattr(self.config, 'gradient_accumulation_steps', 1),
+            'loss': loss.item(),
             'raw_loss': loss_dict['raw_loss'].item(),
             'perplexity': loss_dict['perplexity'].item(),
             'valid_tokens': loss_dict['valid_tokens'].item()
@@ -844,20 +703,29 @@ class EnhancedConversationTrainer:
         # Move batch to device
         batch = {k: v.to(self.device, non_blocking=True) for k, v in batch.items()}
         
-        if batch['input_ids'].numel() == 0:
+        input_ids = batch.get('input_ids')
+        attention_mask = batch.get('attention_mask')
+        labels = batch.get('labels', input_ids)  # Use input_ids as labels if not provided
+        loss_weights = batch.get('loss_weights')
+        
+        if input_ids is None or input_ids.numel() == 0:
             return {'loss': 0.0, 'perplexity': float('inf'), 'valid_tokens': 0}
         
         # Forward pass with precision
         with self._get_autocast_context(for_inference=False):
-            output = self.model(batch['input_ids'], batch['attention_mask'])
+            output = self.model(input_ids, attention_mask)
             
             if isinstance(output, tuple):
                 logits, total_aux_loss, aux_losses = output
-                loss_dict = self.compute_loss(logits, batch['labels'], batch['loss_weights'])
+                loss_dict = self.compute_loss(logits, labels, loss_weights)
                 loss_dict['loss'] = loss_dict['loss'] + total_aux_loss
+                
+                # Monitor MoE routing if available
+                if aux_losses and self.moe_optimizer:
+                    self.moe_optimizer.monitor_routing_balance(aux_losses)
             else:
                 logits = output
-                loss_dict = self.compute_loss(logits, batch['labels'], batch['loss_weights'])
+                loss_dict = self.compute_loss(logits, labels, loss_weights)
         
         loss = loss_dict['loss']
         
@@ -873,7 +741,7 @@ class EnhancedConversationTrainer:
             loss.backward()
         
         return {
-            'loss': loss.item() * getattr(self.config, 'gradient_accumulation_steps', 1),
+            'loss': loss.item(),
             'raw_loss': loss_dict['raw_loss'].item(),
             'perplexity': loss_dict['perplexity'].item(),
             'valid_tokens': loss_dict['valid_tokens'].item()
@@ -970,15 +838,20 @@ class EnhancedConversationTrainer:
             
             batch = {k: v.to(self.device, non_blocking=True) for k, v in batch.items()}
             
-            if batch['input_ids'].numel() == 0:
+            input_ids = batch.get('input_ids')
+            attention_mask = batch.get('attention_mask')
+            labels = batch.get('labels', input_ids)
+            loss_weights = batch.get('loss_weights')
+            
+            if input_ids is None or input_ids.numel() == 0:
                 continue
             
             # Forward pass
             if self.use_deepspeed:
-                output = self.deepspeed_engine(batch['input_ids'], batch['attention_mask'])
+                output = self.deepspeed_engine(input_ids, attention_mask)
             else:
                 with self._get_autocast_context(for_inference=True):
-                    output = self.model(batch['input_ids'], batch['attention_mask'])
+                    output = self.model(input_ids, attention_mask)
             
             # Handle outputs
             if isinstance(output, tuple):
@@ -986,7 +859,7 @@ class EnhancedConversationTrainer:
             else:
                 logits = output
             
-            loss_dict = self.compute_loss(logits, batch['labels'], batch['loss_weights'])
+            loss_dict = self.compute_loss(logits, labels, loss_weights)
             
             if not (torch.isnan(loss_dict['loss']).any() or torch.isinf(loss_dict['loss']).any()):
                 total_loss += loss_dict['loss'].item()
@@ -1083,11 +956,8 @@ class EnhancedConversationTrainer:
                 
                 self.current_epoch = epoch + 1
                 
-                # Memory monitoring
-                self.cpu_offload_manager.monitor_memory_usage()
-                
                 # MoE diagnostics
-                if hasattr(self.config, 'use_moe') and self.config.use_moe:
+                if self.moe_optimizer:
                     moe_diagnostics = self.moe_optimizer.get_routing_diagnostics()
                     if moe_diagnostics['recommendations']:
                         logging.info("MoE Routing Recommendations:")
@@ -1161,7 +1031,6 @@ class EnhancedConversationTrainer:
                     epoch_metrics['num_batches'] += 1
                     if 'grad_norm' in opt_metrics and opt_metrics['grad_norm'] is not None:
                         epoch_metrics['grad_norm_sum'] += opt_metrics['grad_norm']
-
                 
                 # Calculate throughput
                 step_time = time.time() - step_start_time
@@ -1178,7 +1047,6 @@ class EnhancedConversationTrainer:
                 
                 # System monitoring
                 if self.global_step % 500 == 0:
-                    self.cpu_offload_manager.monitor_memory_usage()
                     self._log_memory_usage(f"Step {self.global_step}")
                 
                 # Reset accumulation metrics
@@ -1282,7 +1150,8 @@ class EnhancedConversationTrainer:
             f"Model Parameters: {model_params:,}" if isinstance(model_params, int) else f"Model Parameters: {model_params}",
             f"Epochs: {self.config.num_epochs}",
             f"Batches per epoch: {batches_per_epoch:,}",
-            f"Effective batch size: {getattr(self.config, 'effective_batch_size', self.config.batch_size)}",
+            f"Micro batch size: {getattr(self.config, 'batch_size', 1)}",
+            f"Gradient accumulation: {getattr(self.config, 'gradient_accumulation_steps', 1)}",
             f"Learning rate: {self.config.learning_rate:.2e}",
             f"Weight decay: {getattr(self.config, 'weight_decay', 0.01)}",
             f"Precision: {getattr(self.config, 'precision', 'fp32')}",
@@ -1357,8 +1226,8 @@ class EnhancedConversationTrainer:
     
     def get_moe_diagnostics(self) -> Dict[str, Any]:
         """Get MoE routing and performance diagnostics."""
-        if not (hasattr(self.config, 'use_moe') and self.config.use_moe):
-            return {"error": "MoE not enabled"}
+        if not self.moe_optimizer:
+            return {"error": "MoE not enabled or not available"}
         
         return self.moe_optimizer.get_routing_diagnostics()
     
@@ -1386,9 +1255,6 @@ class EnhancedConversationTrainer:
         except ImportError:
             stats['cpu'] = {'error': 'psutil not available'}
         
-        # CPU offload stats
-        stats['offload'] = self.cpu_offload_manager.offload_stats
-        
         return stats
     
     def optimize_for_sequence_length(self, sequence_length: int):
@@ -1413,131 +1279,6 @@ class EnhancedConversationTrainer:
                 self.deepspeed_engine.gradient_accumulation_steps = optimal_grad_accum
             except AttributeError:
                 logging.warning("Could not update DeepSpeed batch sizes dynamically")
-    
-    def benchmark_moe_routing(self, num_batches: int = 100) -> Dict[str, Any]:
-        """Benchmark MoE routing performance and balance."""
-        if not (hasattr(self.config, 'use_moe') and self.config.use_moe):
-            return {"error": "MoE not enabled"}
-        
-        if not self.use_deepspeed:
-            return {"error": "MoE benchmarking requires DeepSpeed"}
-        
-        logging.info(f"Benchmarking MoE routing over {num_batches} batches...")
-        
-        routing_stats = {
-            'expert_utilization': {},
-            'communication_times': [],
-            'load_balance_losses': [],
-            'throughput_comparison': {}
-        }
-        
-        # This would require integration with the actual training loop
-        # and access to MoE internal metrics
-        logging.warning("MoE benchmarking requires integration with training data")
-        
-        return routing_stats
-    
-    @torch.no_grad()
-    def generate(self, prompt: str, max_new_tokens: Optional[int] = None, 
-                 **kwargs) -> str:
-        """Generate response with DeepSpeed support."""
-        if self.use_deepspeed:
-            self.deepspeed_engine.eval()
-            model = self.deepspeed_engine
-        else:
-            self.model.eval()
-            model = self.model
-        
-        if max_new_tokens is None:
-            max_new_tokens = getattr(self.config, 'max_new_tokens', 512)
-        
-        try:
-            # Create conversation format
-            conversation = {
-                'messages': [{'role': 'user', 'content': prompt}]
-            }
-            
-            # Encode input
-            input_tokens = self.tokenizer.encode_conversation(conversation)
-            input_tokens.extend([
-                self.tokenizer.special_tokens["<|im_start|>"],
-                self.tokenizer.special_tokens["<|assistant|>"]
-            ])
-            
-            # Ensure reasonable context length
-            if len(input_tokens) >= self.config.seq_length:
-                input_tokens = input_tokens[-(self.config.seq_length//2):]
-            
-            input_ids = torch.tensor([input_tokens], device=self.device, dtype=torch.long)
-            
-            # Generation parameters
-            temperature = kwargs.get('temperature', 0.7)
-            top_k = kwargs.get('top_k', 50)
-            top_p = kwargs.get('top_p', 0.9)
-            
-            # Generation loop
-            generated_tokens = []
-            
-            for step in range(max_new_tokens):
-                # Check sequence length
-                if input_ids.size(1) >= self.config.seq_length:
-                    input_ids = input_ids[:, -self.config.seq_length//2:]
-                
-                # Forward pass
-                if self.use_deepspeed:
-                    logits = model(input_ids)
-                else:
-                    with self._get_autocast_context(for_inference=True):
-                        logits = model(input_ids)
-                
-                # Handle MoE outputs
-                if isinstance(logits, tuple):
-                    logits = logits[0]  # Take only the logits
-                
-                # Get next token logits
-                next_token_logits = logits[0, -1, :] / temperature
-                
-                # Apply top-k filtering
-                if top_k > 0:
-                    top_k_logits, top_k_indices = torch.topk(next_token_logits, top_k)
-                    next_token_logits = torch.full_like(next_token_logits, float('-inf'))
-                    next_token_logits.scatter_(0, top_k_indices, top_k_logits)
-                
-                # Apply top-p filtering
-                if top_p < 1.0:
-                    sorted_logits, sorted_indices = torch.sort(next_token_logits, descending=True)
-                    cumulative_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
-                    
-                    sorted_indices_to_remove = cumulative_probs > top_p
-                    sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
-                    sorted_indices_to_remove[..., 0] = 0
-                    
-                    indices_to_remove = sorted_indices_to_remove.scatter(0, sorted_indices, sorted_indices_to_remove)
-                    next_token_logits[indices_to_remove] = float('-inf')
-                
-                # Sample next token
-                probs = F.softmax(next_token_logits, dim=-1)
-                next_token = torch.multinomial(probs, 1)
-                
-                # Check for stop tokens
-                if next_token.item() == self.tokenizer.special_tokens["<|im_end|>"]:
-                    break
-                
-                generated_tokens.append(next_token.item())
-                input_ids = torch.cat([input_ids, next_token.unsqueeze(0)], dim=1)
-            
-            # Decode response
-            response = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
-            return response.strip()
-            
-        except Exception as e:
-            logging.error(f"Generation failed: {e}")
-            return "I apologize, but I encountered an error while generating a response."
-        finally:
-            if self.use_deepspeed:
-                self.deepspeed_engine.train()
-            else:
-                self.model.train()
 
 
 class DeepSpeedConfigGenerator:
@@ -1653,79 +1394,3 @@ class DeepSpeedConfigGenerator:
                 best_ep_size = ep_size
         
         return best_ep_size
-    
-    @staticmethod
-    def create_cpu_offload_config(
-        model_size_gb: float,
-        available_gpu_memory_gb: float,
-        available_cpu_memory_gb: float,
-        nvme_path: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """Create CPU offload configuration based on available resources."""
-        
-        config = {
-            "zero_optimization": {
-                "stage": 3,
-                "allgather_partitions": True,
-                "allgather_bucket_size": 5e8,
-                "overlap_comm": True,
-                "reduce_scatter": True,
-                "reduce_bucket_size": 5e8,
-                "contiguous_gradients": True,
-            }
-        }
-        
-        # Determine what to offload based on memory constraints
-        gpu_memory_needed = model_size_gb * 1.5  # Model + optimizer states + activations
-        
-        if gpu_memory_needed > available_gpu_memory_gb * 0.8:
-            # Need aggressive offloading
-            config["zero_optimization"]["offload_param"] = {
-                "device": "cpu",
-                "nvme_path": nvme_path,
-                "buffer_count": 5,
-                "buffer_size": int(1e8),
-                "max_in_cpu": min(int(available_cpu_memory_gb * 0.5 * 1e9), int(5e9)),
-                "pin_memory": True
-            }
-            
-            config["zero_optimization"]["offload_optimizer"] = {
-                "device": "cpu",
-                "nvme_path": nvme_path,
-                "buffer_count": 4,
-                "pin_memory": True,
-                "pipeline_read": True,
-                "pipeline_write": True,
-                "fast_init": False
-            }
-            
-            # More aggressive ZeRO-3 settings
-            config["zero_optimization"].update({
-                "stage3_param_persistence_threshold": 1e3,
-                "stage3_max_live_parameters": int(available_gpu_memory_gb * 0.3 * 1e9),
-                "stage3_prefetch_bucket_size": int(2e7),
-                "memory_efficient_linear": True,
-                "stage3_max_reuse_distance": 500,
-            })
-            
-            logging.info("Aggressive CPU offloading enabled")
-            
-        elif gpu_memory_needed > available_gpu_memory_gb * 0.6:
-            # Moderate offloading
-            config["zero_optimization"]["offload_optimizer"] = {
-                "device": "cpu",
-                "nvme_path": nvme_path,
-                "buffer_count": 4,
-                "pin_memory": True,
-                "pipeline_read": True,
-                "pipeline_write": True,
-                "fast_init": False
-            }
-            
-            logging.info("Moderate CPU offloading enabled (optimizer only)")
-            
-        else:
-            # No offloading needed
-            logging.info("No CPU offloading needed")
-        
-        return config
