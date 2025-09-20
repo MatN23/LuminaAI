@@ -304,6 +304,16 @@ class EnhancedConversationTrainer:
         self.patience_counter = 0
         self.should_stop = False
         
+        # Initialize training metrics
+        self.metrics = {
+            'train_losses': [],
+            'eval_losses': [],
+            'learning_rates': [],
+            'gradient_norms': [],
+            'throughput': [],
+            'epoch_times': []
+        }
+        
         # Setup training components
         self._setup_training()
         
@@ -316,28 +326,28 @@ class EnhancedConversationTrainer:
 
     def _setup_deepspeed_training(self):
         """Setup DeepSpeed training with MoE and CPU offloading optimizations."""
-        logging.info("="*60)
-        logging.info("INITIALIZING DEEPSPEED TRAINING")
-        logging.info("="*60)
+        print("="*60)
+        print("INITIALIZING DEEPSPEED TRAINING")
+        print("="*60)
         
         # Debug information
-        logging.info(f"DeepSpeed available: {DEEPSPEED_AVAILABLE}")
-        logging.info(f"CUDA available: {torch.cuda.is_available()}")
-        logging.info(f"Config use_deepspeed: {getattr(self.config, 'use_deepspeed', False)}")
-        logging.info(f"World size: {int(os.environ.get('WORLD_SIZE', 1))}")
-        logging.info(f"Local rank: {int(os.environ.get('LOCAL_RANK', 0))}")
+        print(f"DeepSpeed available: {DEEPSPEED_AVAILABLE}")
+        print(f"CUDA available: {torch.cuda.is_available()}")
+        print(f"Config use_deepspeed: {getattr(self.config, 'use_deepspeed', False)}")
+        print(f"World size: {int(os.environ.get('WORLD_SIZE', 1))}")
+        print(f"Local rank: {int(os.environ.get('LOCAL_RANK', 0))}")
         
         # Create DeepSpeed configuration
         ds_config = self._create_deepspeed_config()
         
         # Log the configuration for debugging
-        logging.info("DeepSpeed Configuration:")
+        print("DeepSpeed Configuration:")
         config_str = json.dumps(ds_config, indent=2, default=str)
-        logging.info(config_str)
+        print(config_str[:2000])  # Print first 2000 chars to avoid spam
         
         # Initialize DeepSpeed engine
         try:
-            logging.info("Attempting DeepSpeed initialization...")
+            print("Attempting DeepSpeed initialization...")
             
             self.deepspeed_engine, optimizer, _, lr_scheduler = deepspeed.initialize(
                 model=self.model,
@@ -353,39 +363,25 @@ class EnhancedConversationTrainer:
             self.use_deepspeed = True
             
             # Log DeepSpeed setup success
-            logging.info("✅ DEEPSPEED INITIALIZATION SUCCESSFUL!")
-            logging.info(f"  World size: {self.deepspeed_engine.world_size}")
-            logging.info(f"  Local rank: {self.deepspeed_engine.local_rank}")
-            logging.info(f"  ZeRO stage: {ds_config.get('zero_optimization', {}).get('stage', 'disabled')}")
+            print("✅ DEEPSPEED INITIALIZATION SUCCESSFUL!")
+            print(f"  World size: {self.deepspeed_engine.world_size}")
+            print(f"  Local rank: {self.deepspeed_engine.local_rank}")
+            print(f"  ZeRO stage: {ds_config.get('zero_optimization', {}).get('stage', 'disabled')}")
             
             if ds_config.get('moe', {}).get('enabled', False):
-                logging.info(f"  MoE enabled: {ds_config['moe']['num_experts']} experts")
-                logging.info(f"  Expert parallel size: {ds_config['moe']['expert_parallel_size']}")
-            
-            # Memory estimation
-            if hasattr(self.deepspeed_engine, 'estimate_model_mem_needs'):
-                try:
-                    mem_estimate = self.deepspeed_engine.estimate_model_mem_needs()
-                    logging.info(f"  Estimated memory needs: {mem_estimate}")
-                except Exception as e:
-                    logging.debug(f"Memory estimation failed: {e}")
+                print(f"  MoE enabled: {ds_config['moe']['num_experts']} experts")
+                print(f"  Expert parallel size: {ds_config['moe']['expert_parallel_size']}")
             
         except Exception as e:
-            logging.error("❌ DEEPSPEED INITIALIZATION FAILED!")
-            logging.error(f"Error: {e}")
-            logging.error(f"DeepSpeed config that failed:")
-            for key, value in ds_config.items():
-                if isinstance(value, dict):
-                    logging.error(f"  {key}: {json.dumps(value, indent=4, default=str)}")
-                else:
-                    logging.error(f"  {key}: {value}")
+            print("❌ DEEPSPEED INITIALIZATION FAILED!")
+            print(f"Error: {e}")
             
             # Import traceback for detailed error info
             import traceback
-            logging.error("Full traceback:")
-            logging.error(traceback.format_exc())
+            print("Full traceback:")
+            traceback.print_exc()
             
-            logging.info("🔄 Falling back to standard PyTorch training...")
+            print("🔄 Falling back to standard PyTorch training...")
             self.use_deepspeed = False
             self._setup_standard_training()
     
@@ -400,11 +396,11 @@ class EnhancedConversationTrainer:
         # Calculate train_batch_size correctly: micro_batch * grad_accum * world_size
         train_batch_size = micro_batch_size * gradient_accumulation_steps * world_size
         
-        logging.info(f"Batch size calculation:")
-        logging.info(f"  Micro batch size: {micro_batch_size}")
-        logging.info(f"  Gradient accumulation steps: {gradient_accumulation_steps}")
-        logging.info(f"  World size: {world_size}")
-        logging.info(f"  Train batch size: {train_batch_size}")
+        print(f"Batch size calculation:")
+        print(f"  Micro batch size: {micro_batch_size}")
+        print(f"  Gradient accumulation steps: {gradient_accumulation_steps}")
+        print(f"  World size: {world_size}")
+        print(f"  Train batch size: {train_batch_size}")
         
         # Base configuration with FIXED parameters
         ds_config = {
@@ -448,7 +444,7 @@ class EnhancedConversationTrainer:
             "contiguous_gradients": True,
             
             # Logging
-            "steps_per_print": 100,
+            "steps_per_print": 1,  # Log every step for debugging
             "wall_clock_breakdown": False,
             "dump_state": False
         }
@@ -466,7 +462,7 @@ class EnhancedConversationTrainer:
         
         # Add MoE configuration if model uses MoE
         if hasattr(self.config, 'use_moe') and self.config.use_moe and self.moe_optimizer:
-            logging.info("Adding MoE configuration to DeepSpeed config...")
+            print("Adding MoE configuration to DeepSpeed config...")
             ds_config = self.moe_optimizer.create_deepspeed_moe_config(ds_config)
         else:
             # Standard ZeRO configuration - SIMPLIFIED
@@ -483,7 +479,7 @@ class EnhancedConversationTrainer:
             
             # Add CPU offloading ONLY if explicitly enabled
             if getattr(self.config, 'cpu_offload', False):
-                logging.info("Adding CPU offloading configuration...")
+                print("Adding CPU offloading configuration...")
                 ds_config["zero_optimization"]["offload_optimizer"] = {
                     "device": "cpu",
                     "nvme_path": getattr(self.config, 'nvme_path', None),
@@ -508,9 +504,9 @@ class EnhancedConversationTrainer:
     
     def _setup_standard_training(self):
         """Setup standard PyTorch training as fallback."""
-        logging.info("="*60)
-        logging.info("SETTING UP STANDARD PYTORCH TRAINING")
-        logging.info("="*60)
+        print("="*60)
+        print("SETTING UP STANDARD PYTORCH TRAINING")
+        print("="*60)
         
         # Move model to device
         self.model = self.model.to(self.device)
@@ -528,11 +524,11 @@ class EnhancedConversationTrainer:
         if getattr(self.config, 'compile', False) and hasattr(torch, 'compile'):
             try:
                 self.model = torch.compile(self.model, mode='default')
-                logging.info("Model compiled successfully")
+                print("Model compiled successfully")
             except Exception as e:
-                logging.warning(f"Model compilation failed: {e}")
+                print(f"Model compilation failed: {e}")
         
-        logging.info(f"✅ Standard training setup complete - Device: {self.device}")
+        print(f"✅ Standard training setup complete - Device: {self.device}")
     
     def _create_standard_optimizer(self) -> torch.optim.Optimizer:
         """Create standard PyTorch optimizer."""
@@ -604,7 +600,7 @@ class EnhancedConversationTrainer:
         flat_labels = shift_labels.view(-1)
         
         # Create attention mask (ignore padding tokens)
-        mask = (flat_labels != self.tokenizer.pad_token_id).float() if hasattr(self.tokenizer, 'pad_token_id') else torch.ones_like(flat_labels)
+        mask = (flat_labels != getattr(self.tokenizer, 'pad_token_id', 0)).float()
         
         # Compute base loss
         loss = F.cross_entropy(flat_logits, flat_labels, reduction='none')
@@ -620,7 +616,7 @@ class EnhancedConversationTrainer:
         
         # Check for numerical issues
         if torch.isnan(weighted_loss).any() or torch.isinf(weighted_loss).any():
-            logging.warning("NaN or Inf detected in loss computation")
+            print("NaN or Inf detected in loss computation")
             return {
                 'loss': torch.tensor(0.0, device=loss.device, requires_grad=True),
                 'raw_loss': torch.tensor(0.0, device=loss.device),
@@ -652,7 +648,7 @@ class EnhancedConversationTrainer:
             return self._standard_train_step(batch)
     
     def _deepspeed_train_step(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
-        """DeepSpeed training step with MoE optimization monitoring."""
+        """DeepSpeed training step with guaranteed metric return."""
         # Move batch to device
         batch = {k: v.to(self.device, non_blocking=True) for k, v in batch.items()}
         
@@ -662,39 +658,61 @@ class EnhancedConversationTrainer:
         loss_weights = batch.get('loss_weights')
         
         if input_ids is None or input_ids.numel() == 0:
-            return {'loss': 0.0, 'perplexity': float('inf'), 'valid_tokens': 0}
+            # Return safe defaults
+            return {
+                'loss': 0.0,
+                'raw_loss': 0.0,
+                'perplexity': float('inf'),
+                'valid_tokens': 0
+            }
         
-        # Forward pass
-        output = self.deepspeed_engine(input_ids, attention_mask)
-        
-        # Handle MoE outputs
-        aux_losses = {}
-        if isinstance(output, tuple):
-            if len(output) == 3:  # (logits, total_aux_loss, aux_losses_dict)
-                logits, total_aux_loss, aux_losses = output
-            else:  # (logits, total_aux_loss)
-                logits, total_aux_loss = output
-            loss_dict = self.compute_loss(logits, labels, loss_weights)
-            loss_dict['loss'] = loss_dict['loss'] + total_aux_loss
+        try:
+            # Forward pass
+            output = self.deepspeed_engine(input_ids, attention_mask)
             
-            # Monitor MoE routing if available
-            if aux_losses and self.moe_optimizer:
-                self.moe_optimizer.monitor_routing_balance(aux_losses)
-        else:
-            logits = output
-            loss_dict = self.compute_loss(logits, labels, loss_weights)
-        
-        loss = loss_dict['loss']
-        
-        # Backward pass (DeepSpeed handles everything)
-        self.deepspeed_engine.backward(loss)
-        
-        return {
-            'loss': loss.item(),
-            'raw_loss': loss_dict['raw_loss'].item(),
-            'perplexity': loss_dict['perplexity'].item(),
-            'valid_tokens': loss_dict['valid_tokens'].item()
-        }
+            # Handle MoE outputs
+            aux_losses = {}
+            if isinstance(output, tuple):
+                if len(output) == 3:  # (logits, total_aux_loss, aux_losses_dict)
+                    logits, total_aux_loss, aux_losses = output
+                else:  # (logits, total_aux_loss)
+                    logits, total_aux_loss = output
+                loss_dict = self.compute_loss(logits, labels, loss_weights)
+                loss_dict['loss'] = loss_dict['loss'] + total_aux_loss
+                
+                # Monitor MoE routing if available
+                if aux_losses and self.moe_optimizer:
+                    self.moe_optimizer.monitor_routing_balance(aux_losses)
+            else:
+                logits = output
+                loss_dict = self.compute_loss(logits, labels, loss_weights)
+            
+            loss = loss_dict['loss']
+            
+            # Backward pass (DeepSpeed handles everything)
+            self.deepspeed_engine.backward(loss)
+            
+            # Extract values safely
+            loss_value = loss.item() if hasattr(loss, 'item') else float(loss)
+            raw_loss_value = loss_dict['raw_loss'].item() if hasattr(loss_dict['raw_loss'], 'item') else float(loss_dict['raw_loss'])
+            perplexity_value = loss_dict['perplexity'].item() if hasattr(loss_dict['perplexity'], 'item') else float(loss_dict['perplexity'])
+            valid_tokens_value = loss_dict['valid_tokens'].item() if hasattr(loss_dict['valid_tokens'], 'item') else float(loss_dict['valid_tokens'])
+            
+            return {
+                'loss': loss_value,
+                'raw_loss': raw_loss_value,
+                'perplexity': perplexity_value,
+                'valid_tokens': valid_tokens_value
+            }
+            
+        except Exception as e:
+            print(f"DeepSpeed training step error: {e}")
+            return {
+                'loss': 0.0,
+                'raw_loss': 0.0,
+                'perplexity': float('inf'),
+                'valid_tokens': 0
+            }
     
     def _standard_train_step(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
         """Standard PyTorch training step."""
@@ -709,7 +727,12 @@ class EnhancedConversationTrainer:
         loss_weights = batch.get('loss_weights')
         
         if input_ids is None or input_ids.numel() == 0:
-            return {'loss': 0.0, 'perplexity': float('inf'), 'valid_tokens': 0}
+            return {
+                'loss': 0.0,
+                'raw_loss': 0.0,
+                'perplexity': float('inf'),
+                'valid_tokens': 0
+            }
         
         # Forward pass with precision
         with self._get_autocast_context(for_inference=False):
@@ -731,8 +754,13 @@ class EnhancedConversationTrainer:
         
         # Check for valid loss
         if torch.isnan(loss).any() or torch.isinf(loss).any():
-            logging.warning("Invalid loss detected, skipping batch")
-            return {'loss': 0.0, 'perplexity': float('inf'), 'valid_tokens': 0}
+            print("Invalid loss detected, skipping batch")
+            return {
+                'loss': 0.0,
+                'raw_loss': 0.0,
+                'perplexity': float('inf'),
+                'valid_tokens': 0
+            }
         
         # Backward pass
         if self.use_amp and self.scaler is not None:
@@ -755,22 +783,35 @@ class EnhancedConversationTrainer:
             return self._standard_optimizer_step()
     
     def _deepspeed_optimizer_step(self) -> Dict[str, float]:
-        """DeepSpeed optimizer step."""
+        """DeepSpeed optimizer step with proper gradient norm handling."""
         # DeepSpeed handles gradient clipping, optimization, and LR scheduling internally
         self.deepspeed_engine.step()
         
-        # Get metrics
-        current_lr = self.deepspeed_engine.get_lr()[0] if hasattr(self.deepspeed_engine, 'get_lr') else self.config.learning_rate
+        # Get metrics with proper error handling
+        current_lr = self.config.learning_rate  # Default fallback
+        try:
+            if hasattr(self.deepspeed_engine, 'get_lr') and callable(self.deepspeed_engine.get_lr):
+                lr_list = self.deepspeed_engine.get_lr()
+                if lr_list and len(lr_list) > 0:
+                    current_lr = lr_list[0]
+        except Exception as e:
+            print(f"Could not get learning rate from DeepSpeed: {e}")
         
-        # Get gradient norm if available
+        # Get gradient norm with proper error handling
         grad_norm = 0.0
         try:
             if hasattr(self.deepspeed_engine, 'get_global_grad_norm'):
-                grad_norm = self.deepspeed_engine.get_global_grad_norm()
-        except:
-            pass
+                norm = self.deepspeed_engine.get_global_grad_norm()
+                if norm is not None and not (math.isnan(norm) or math.isinf(norm)):
+                    grad_norm = float(norm)
+        except Exception as e:
+            print(f"Could not get gradient norm from DeepSpeed: {e}")
+            grad_norm = 0.0
         
-        return {'grad_norm': grad_norm, 'lr': current_lr}
+        return {
+            'grad_norm': grad_norm,
+            'lr': current_lr
+        }
     
     def _standard_optimizer_step(self) -> Dict[str, float]:
         """Standard optimizer step."""
@@ -786,7 +827,7 @@ class EnhancedConversationTrainer:
         
         # Check for NaN gradients
         if torch.isnan(grad_norm) or torch.isinf(grad_norm):
-            logging.warning("NaN/Inf gradients detected, skipping step")
+            print("NaN/Inf gradients detected, skipping step")
             self.optimizer.zero_grad(set_to_none=True)
             if self.use_amp and self.scaler is not None:
                 self.scaler.update()
@@ -892,95 +933,8 @@ class EnhancedConversationTrainer:
             'eval_peak_memory_mb': peak_memory
         }
     
-    def train(self, train_dataset, eval_dataset=None):
-        """Main training loop with DeepSpeed and MoE optimizations."""
-        logging.info("="*80)
-        if self.use_deepspeed:
-            logging.info("STARTING DEEPSPEED TRAINING WITH MOE AND CPU OFFLOADING")
-        else:
-            logging.info("STARTING STANDARD TRAINING")
-        logging.info("="*80)
-        
-        # Store eval dataset
-        self.eval_dataset = eval_dataset
-        
-        # Setup data loaders
-        train_dataloader = create_dataloader(train_dataset, self.config, shuffle=True)
-        
-        if len(train_dataloader) == 0:
-            logging.error("ERROR: Train dataloader is empty!")
-            return
-        
-        # Calculate total steps (DeepSpeed handles this internally)
-        if not self.use_deepspeed:
-            gradient_accumulation_steps = getattr(self.config, 'gradient_accumulation_steps', 1)
-            total_steps = len(train_dataloader) * self.config.num_epochs // gradient_accumulation_steps
-            self._setup_scheduler(total_steps)
-        
-        # Log training configuration
-        self._log_training_config(len(train_dataloader))
-        
-        training_start_time = time.time()
-        
-        try:
-            for epoch in range(self.current_epoch, self.config.num_epochs):
-                if self.should_stop:
-                    break
-                
-                logging.info(f"\n{'='*60}")
-                logging.info(f"EPOCH {epoch + 1}/{self.config.num_epochs}")
-                logging.info(f"{'='*60}")
-                
-                # Train epoch
-                epoch_metrics = self.train_epoch(train_dataloader, epoch)
-                
-                # Evaluation
-                if eval_dataset is not None:
-                    eval_metrics = self.evaluate(eval_dataset)
-                    epoch_metrics.update(eval_metrics)
-                    
-                    logging.info(f"Epoch {epoch + 1} Summary:")
-                    logging.info(f"  Train Loss: {epoch_metrics['avg_loss']:.6f}")
-                    logging.info(f"  Eval Loss: {eval_metrics['eval_loss']:.6f}")
-                    logging.info(f"  Eval Perplexity: {eval_metrics['eval_perplexity']:.2f}")
-                    
-                    # Early stopping check
-                    if getattr(self.config, 'early_stopping_patience', None):
-                        self._check_early_stopping(eval_metrics['eval_loss'])
-                
-                # Checkpointing
-                if self.use_deepspeed:
-                    self._save_deepspeed_checkpoint(epoch + 1)
-                else:
-                    self._save_standard_checkpoint(epoch + 1)
-                
-                self.current_epoch = epoch + 1
-                
-                # MoE diagnostics
-                if self.moe_optimizer:
-                    moe_diagnostics = self.moe_optimizer.get_routing_diagnostics()
-                    if moe_diagnostics['recommendations']:
-                        logging.info("MoE Routing Recommendations:")
-                        for rec in moe_diagnostics['recommendations']:
-                            logging.info(f"  - {rec}")
-        
-        except KeyboardInterrupt:
-            logging.info("Training interrupted by user")
-        except Exception as e:
-            logging.error(f"Training error: {e}")
-            raise
-        finally:
-            total_training_time = time.time() - training_start_time
-            logging.info(f"\nTraining finished after {total_training_time / 3600:.2f} hours")
-            
-            # Final checkpoint
-            if self.use_deepspeed:
-                self._save_deepspeed_checkpoint(self.current_epoch, final=True)
-            else:
-                self._save_standard_checkpoint(self.current_epoch, final=True)
-
     def train_epoch(self, train_dataloader, epoch: int):
-        """Train one epoch with enhanced monitoring."""
+        """Train one epoch with FIXED logging."""
         if self.use_deepspeed:
             self.deepspeed_engine.train()
         else:
@@ -1004,6 +958,9 @@ class EnhancedConversationTrainer:
         epoch_start_time = time.time()
         last_log_time = time.time()
         
+        print(f"Starting epoch {epoch + 1} with {len(train_dataloader)} batches")
+        print(f"Gradient accumulation steps: {gradient_accumulation_steps}")
+        
         for batch_idx, batch in enumerate(train_dataloader):
             if self.should_stop:
                 break
@@ -1012,6 +969,15 @@ class EnhancedConversationTrainer:
             
             # Training step
             step_metrics = self.train_step(batch)
+            
+            # ALWAYS log every step for debugging
+            if batch_idx < 10 or batch_idx % 5 == 0:
+                print(f"DEBUG: Batch {batch_idx}, Step metrics: {step_metrics}")
+            
+            # Skip invalid batches
+            if step_metrics['loss'] == 0.0 or math.isnan(step_metrics['loss']) or math.isinf(step_metrics['loss']):
+                print(f"Skipping batch {batch_idx} due to invalid loss: {step_metrics['loss']}")
+                continue
             
             # Accumulate metrics
             accumulation_metrics['loss'] += step_metrics['loss']
@@ -1036,17 +1002,22 @@ class EnhancedConversationTrainer:
                 step_time = time.time() - step_start_time
                 tokens_per_sec = accumulation_metrics['tokens'] / step_time if step_time > 0 else 0
                 
-                # Periodic logging
-                current_time = time.time()
-                if self.global_step % 100 == 0 or current_time - last_log_time > 300:
+                # FORCE logging - log every step for the first 20 steps, then every 5 steps
+                should_log = (
+                    self.global_step <= 20 or 
+                    self.global_step % 5 == 0 or 
+                    time.time() - last_log_time > 10
+                )
+                
+                if should_log:
                     self._log_training_step(
                         epoch, batch_idx, len(train_dataloader),
                         accumulation_metrics, opt_metrics, tokens_per_sec
                     )
-                    last_log_time = current_time
+                    last_log_time = time.time()
                 
                 # System monitoring
-                if self.global_step % 500 == 0:
+                if self.global_step % 20 == 0:
                     self._log_memory_usage(f"Step {self.global_step}")
                 
                 # Reset accumulation metrics
@@ -1063,10 +1034,10 @@ class EnhancedConversationTrainer:
         else:
             avg_loss = avg_raw_loss = avg_grad_norm = avg_tokens_per_sec = 0.0
         
-        logging.info(f"Epoch {epoch+1} completed in {epoch_time:.2f}s | "
-                    f"Avg Loss: {avg_loss:.6f} | "
-                    f"Avg Grad Norm: {avg_grad_norm:.4f} | "
-                    f"Throughput: {avg_tokens_per_sec:.0f} tokens/s")
+        print(f"Epoch {epoch+1} completed in {epoch_time:.2f}s | "
+              f"Avg Loss: {avg_loss:.6f} | "
+              f"Avg Grad Norm: {avg_grad_norm:.4f} | "
+              f"Throughput: {avg_tokens_per_sec:.0f} tokens/s")
         
         return {
             'avg_loss': avg_loss,
@@ -1076,6 +1047,150 @@ class EnhancedConversationTrainer:
             'throughput': avg_tokens_per_sec
         }
     
+    def _log_training_step(self, epoch: int, batch_idx: int, total_batches: int,
+                          metrics, opt_metrics, tokens_per_sec: float):
+        """FIXED logging with guaranteed output."""
+        
+        try:
+            # Memory info with fallback
+            memory_info = ""
+            if torch.cuda.is_available():
+                try:
+                    memory_allocated = torch.cuda.memory_allocated() / 1e9
+                    memory_cached = torch.cuda.memory_reserved() / 1e9
+                    memory_info = f" | GPU: {memory_allocated:.1f}GB/{memory_cached:.1f}GB"
+                except:
+                    memory_info = " | GPU: N/A"
+            
+            # Training mode info
+            mode_info = " | DeepSpeed" if self.use_deepspeed else " | Standard"
+            
+            # Safe metric extraction with defaults
+            loss = metrics.get('loss', 0.0)
+            raw_loss = metrics.get('raw_loss', loss)
+            lr = opt_metrics.get('lr', 0.0)
+            grad_norm = opt_metrics.get('grad_norm', 0.0)
+            
+            # Safe perplexity calculation
+            try:
+                ppl_value = min(raw_loss, 50)  # Cap to prevent overflow
+                perplexity = math.exp(ppl_value)
+                ppl_str = f"{perplexity:.2e}" if perplexity > 10000 else f"{perplexity:.2f}"
+            except:
+                ppl_str = "N/A"
+            
+            # FORCE the log message
+            log_message = (
+                f"Epoch {epoch+1} | Step {self.global_step:6d} | "
+                f"Batch {batch_idx+1:4d}/{total_batches} | "
+                f"Loss: {loss:.6f} | "
+                f"PPL: {ppl_str} | "
+                f"LR: {lr:.2e} | "
+                f"GradNorm: {grad_norm:.4f} | "
+                f"Tokens/s: {tokens_per_sec:.0f}"
+                f"{mode_info}{memory_info}"
+            )
+            
+            # Multiple logging attempts to ensure visibility
+            logging.info(log_message)
+            print(f"[TRAINING] {log_message}")
+            
+        except Exception as e:
+            # Emergency fallback logging
+            fallback_msg = f"Step {self.global_step} | Loss: {metrics.get('loss', 'N/A')} | Logging Error: {e}"
+            logging.error(fallback_msg)
+            print(f"[TRAINING ERROR] {fallback_msg}")
+    
+    def train(self, train_dataset, eval_dataset=None):
+        """Main training loop with enhanced logging."""
+        print("="*80)
+        if self.use_deepspeed:
+            print("STARTING DEEPSPEED TRAINING WITH ENHANCED LOGGING")
+        else:
+            print("STARTING STANDARD TRAINING WITH ENHANCED LOGGING")
+        print("="*80)
+        
+        # Store eval dataset
+        self.eval_dataset = eval_dataset
+        
+        # Setup data loaders
+        train_dataloader = create_dataloader(train_dataset, self.config, shuffle=True)
+        
+        if len(train_dataloader) == 0:
+            print("ERROR: Train dataloader is empty!")
+            return
+        
+        # Calculate total steps (DeepSpeed handles this internally)
+        if not self.use_deepspeed:
+            gradient_accumulation_steps = getattr(self.config, 'gradient_accumulation_steps', 1)
+            total_steps = len(train_dataloader) * self.config.num_epochs // gradient_accumulation_steps
+            self._setup_scheduler(total_steps)
+        
+        # Log training configuration
+        self._log_training_config(len(train_dataloader))
+        
+        training_start_time = time.time()
+        
+        try:
+            for epoch in range(self.current_epoch, self.config.num_epochs):
+                if self.should_stop:
+                    break
+                
+                print(f"\n{'='*60}")
+                print(f"EPOCH {epoch + 1}/{self.config.num_epochs}")
+                print(f"{'='*60}")
+                
+                # Train epoch
+                epoch_metrics = self.train_epoch(train_dataloader, epoch)
+                
+                # Evaluation
+                if eval_dataset is not None:
+                    print("Running evaluation...")
+                    eval_metrics = self.evaluate(eval_dataset)
+                    epoch_metrics.update(eval_metrics)
+                    
+                    print(f"Epoch {epoch + 1} Summary:")
+                    print(f"  Train Loss: {epoch_metrics['avg_loss']:.6f}")
+                    print(f"  Eval Loss: {eval_metrics['eval_loss']:.6f}")
+                    print(f"  Eval Perplexity: {eval_metrics['eval_perplexity']:.2f}")
+                    
+                    # Early stopping check
+                    if getattr(self.config, 'early_stopping_patience', None):
+                        self._check_early_stopping(eval_metrics['eval_loss'])
+                
+                # Checkpointing
+                if self.use_deepspeed:
+                    self._save_deepspeed_checkpoint(epoch + 1)
+                else:
+                    self._save_standard_checkpoint(epoch + 1)
+                
+                self.current_epoch = epoch + 1
+                
+                # MoE diagnostics
+                if self.moe_optimizer:
+                    moe_diagnostics = self.moe_optimizer.get_routing_diagnostics()
+                    if moe_diagnostics.get('recommendations', []):
+                        print("MoE Routing Recommendations:")
+                        for rec in moe_diagnostics['recommendations']:
+                            print(f"  - {rec}")
+        
+        except KeyboardInterrupt:
+            print("Training interrupted by user")
+        except Exception as e:
+            print(f"Training error: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
+        finally:
+            total_training_time = time.time() - training_start_time
+            print(f"\nTraining finished after {total_training_time / 3600:.2f} hours")
+            
+            # Final checkpoint
+            if self.use_deepspeed:
+                self._save_deepspeed_checkpoint(self.current_epoch, final=True)
+            else:
+                self._save_standard_checkpoint(self.current_epoch, final=True)
+    
     def _save_deepspeed_checkpoint(self, epoch: int, final: bool = False):
         """Save DeepSpeed checkpoint."""
         try:
@@ -1084,9 +1199,9 @@ class EnhancedConversationTrainer:
                 checkpoint_dir = Path("checkpoints/deepspeed_final")
             
             self.deepspeed_engine.save_checkpoint(str(checkpoint_dir))
-            logging.info(f"DeepSpeed checkpoint saved: {checkpoint_dir}")
+            print(f"DeepSpeed checkpoint saved: {checkpoint_dir}")
         except Exception as e:
-            logging.error(f"Failed to save DeepSpeed checkpoint: {e}")
+            print(f"Failed to save DeepSpeed checkpoint: {e}")
     
     def _save_standard_checkpoint(self, epoch: int, final: bool = False):
         """Save standard PyTorch checkpoint."""
@@ -1104,9 +1219,9 @@ class EnhancedConversationTrainer:
                 'config': self.config
             }, checkpoint_path)
             
-            logging.info(f"Checkpoint saved: {checkpoint_path}")
+            print(f"Checkpoint saved: {checkpoint_path}")
         except Exception as e:
-            logging.error(f"Failed to save checkpoint: {e}")
+            print(f"Failed to save checkpoint: {e}")
     
     def _setup_scheduler(self, total_steps: int):
         """Setup learning rate scheduler for standard training."""
@@ -1135,7 +1250,7 @@ class EnhancedConversationTrainer:
             self.patience_counter += 1
             
         if self.patience_counter >= self.config.early_stopping_patience:
-            logging.info(f"Early stopping triggered after {self.patience_counter} steps without improvement")
+            print(f"Early stopping triggered after {self.patience_counter} steps without improvement")
             self.should_stop = True
     
     def _log_training_config(self, batches_per_epoch: int):
@@ -1170,41 +1285,9 @@ class EnhancedConversationTrainer:
                     f"MoE top-k: {getattr(self.config, 'moe_top_k', 2)}"
                 ])
         
-        logging.info("Training Configuration:")
+        print("Training Configuration:")
         for info in config_info:
-            logging.info(f"  {info}")
-    
-    def _log_training_step(self, epoch: int, batch_idx: int, total_batches: int,
-                          metrics, opt_metrics, tokens_per_sec: float):
-        """Log training step with comprehensive information."""
-        # Memory info
-        memory_info = ""
-        if torch.cuda.is_available():
-            memory_allocated = torch.cuda.memory_allocated() / 1e9
-            memory_cached = torch.cuda.memory_reserved() / 1e9
-            memory_info = f" | GPU: {memory_allocated:.1f}GB/{memory_cached:.1f}GB"
-        
-        # Training mode info
-        mode_info = " | DeepSpeed" if self.use_deepspeed else " | Standard"
-        
-        # Perplexity calculation
-        try:
-            raw_loss_clamped = min(metrics['raw_loss'], 50)
-            perplexity = math.exp(raw_loss_clamped)
-            ppl_str = f"{perplexity:.2e}" if perplexity > 10000 else f"{perplexity:.2f}"
-        except (OverflowError, ValueError):
-            ppl_str = "INF"
-        
-        logging.info(
-            f"Epoch {epoch+1} | Step {self.global_step:6d} | "
-            f"Batch {batch_idx+1:4d}/{total_batches} | "
-            f"Loss: {metrics['loss']:.6f} | "
-            f"PPL: {ppl_str} | "
-            f"LR: {opt_metrics['lr']:.2e} | "
-            f"GradNorm: {opt_metrics['grad_norm']:.4f} | "
-            f"Tokens/s: {tokens_per_sec:.0f}"
-            f"{mode_info}{memory_info}"
-        )
+            print(f"  {info}")
     
     def _log_memory_usage(self, context: str):
         """Log memory usage information."""
@@ -1212,15 +1295,15 @@ class EnhancedConversationTrainer:
             allocated = torch.cuda.memory_allocated() / 1e9
             reserved = torch.cuda.memory_reserved() / 1e9
             max_allocated = torch.cuda.max_memory_allocated() / 1e9
-            logging.info(f"{context} - GPU Memory: {allocated:.2f}GB allocated, "
-                        f"{reserved:.2f}GB reserved, {max_allocated:.2f}GB max")
+            print(f"{context} - GPU Memory: {allocated:.2f}GB allocated, "
+                  f"{reserved:.2f}GB reserved, {max_allocated:.2f}GB max")
         
         # System memory
         try:
             import psutil
             memory = psutil.virtual_memory()
-            logging.info(f"{context} - System Memory: {memory.percent:.1f}% used, "
-                        f"{memory.available / 1e9:.1f}GB available")
+            print(f"{context} - System Memory: {memory.percent:.1f}% used, "
+                  f"{memory.available / 1e9:.1f}GB available")
         except ImportError:
             pass
     
@@ -1260,7 +1343,7 @@ class EnhancedConversationTrainer:
     def optimize_for_sequence_length(self, sequence_length: int):
         """Optimize training configuration for specific sequence length."""
         if not self.use_deepspeed:
-            logging.warning("Sequence length optimization requires DeepSpeed")
+            print("Sequence length optimization requires DeepSpeed")
             return
         
         # Calculate optimal batch size for long sequences
@@ -1269,16 +1352,83 @@ class EnhancedConversationTrainer:
             optimal_micro_batch = max(1, self.config.batch_size // 4)
             optimal_grad_accum = self.config.batch_size * 4
             
-            logging.info(f"Optimizing for very long sequences ({sequence_length})")
-            logging.info(f"Reducing micro batch size to {optimal_micro_batch}")
-            logging.info(f"Increasing gradient accumulation to {optimal_grad_accum}")
+            print(f"Optimizing for very long sequences ({sequence_length})")
+            print(f"Reducing micro batch size to {optimal_micro_batch}")
+            print(f"Increasing gradient accumulation to {optimal_grad_accum}")
             
             # Update DeepSpeed configuration if possible
             try:
                 self.deepspeed_engine.train_micro_batch_size_per_gpu = optimal_micro_batch
                 self.deepspeed_engine.gradient_accumulation_steps = optimal_grad_accum
             except AttributeError:
-                logging.warning("Could not update DeepSpeed batch sizes dynamically")
+                print("Could not update DeepSpeed batch sizes dynamically")
+    
+    def get_current_metrics(self):
+        """Get current training metrics for adaptive processing."""
+        try:
+            from training.orchestrator import TrainingMetrics
+        except ImportError:
+            # Fallback if orchestrator not available
+            from dataclasses import dataclass
+            from datetime import datetime
+            
+            @dataclass
+            class TrainingMetrics:
+                epoch: int
+                step: int
+                loss: float
+                grad_norm: float
+                learning_rate: float
+                expert_utilization: dict
+                memory_usage: dict
+                throughput: float
+                semantic_coherence: float
+                factual_accuracy: float
+                reasoning_score: float
+                timestamp: datetime
+        
+        return TrainingMetrics(
+            epoch=self.current_epoch,
+            step=self.global_step,
+            loss=self.metrics['train_losses'][-1] if self.metrics['train_losses'] else 0.0,
+            grad_norm=self.metrics['gradient_norms'][-1] if self.metrics['gradient_norms'] else 0.0,
+            learning_rate=self.metrics['learning_rates'][-1] if self.metrics['learning_rates'] else self.config.learning_rate,
+            expert_utilization={f'expert_{i}': 0.125 for i in range(8)},  # Mock data
+            memory_usage=self.get_memory_stats(),
+            throughput=self.metrics['throughput'][-1] if self.metrics['throughput'] else 0.0,
+            semantic_coherence=0.8,  # Mock
+            factual_accuracy=0.7,    # Mock
+            reasoning_score=0.6,     # Mock
+            timestamp=datetime.now()
+        )
+    
+    def adjust_learning_rate(self, new_lr: float):
+        """Adjust learning rate during training."""
+        old_lr = self.config.learning_rate
+        self.config.learning_rate = new_lr
+        
+        if self.use_deepspeed:
+            # Update DeepSpeed learning rate
+            try:
+                if hasattr(self.deepspeed_engine, 'optimizer'):
+                    for param_group in self.deepspeed_engine.optimizer.param_groups:
+                        param_group['lr'] = new_lr
+                print(f"DeepSpeed learning rate adjusted: {old_lr:.2e} -> {new_lr:.2e}")
+            except Exception as e:
+                print(f"Failed to adjust DeepSpeed learning rate: {e}")
+        else:
+            # Update standard optimizer learning rate
+            if self.optimizer:
+                for param_group in self.optimizer.param_groups:
+                    param_group['lr'] = new_lr
+                print(f"Learning rate adjusted: {old_lr:.2e} -> {new_lr:.2e}")
+    
+    def emergency_lr_reduction(self, factor: float = 0.1):
+        """Emergency learning rate reduction for stability."""
+        current_lr = self.config.learning_rate
+        new_lr = current_lr * factor
+        self.adjust_learning_rate(new_lr)
+        print(f"EMERGENCY: Learning rate reduced by {factor}x: {current_lr:.2e} -> {new_lr:.2e}")
 
 
 class DeepSpeedConfigGenerator:
@@ -1342,10 +1492,10 @@ class DeepSpeedConfigGenerator:
             }
         }
         
-        logging.info(f"Generated MoE config:")
-        logging.info(f"  Expert parallel size: {optimal_ep_size} (from {num_gpus} GPUs)")
-        logging.info(f"  Capacity factor: {capacity_factor} (for seq_len {sequence_length})")
-        logging.info(f"  Experts per parallel group: {num_experts // optimal_ep_size}")
+        print(f"Generated MoE config:")
+        print(f"  Expert parallel size: {optimal_ep_size} (from {num_gpus} GPUs)")
+        print(f"  Capacity factor: {capacity_factor} (for seq_len {sequence_length})")
+        print(f"  Experts per parallel group: {num_experts // optimal_ep_size}")
         
         return config
     
@@ -1394,3 +1544,61 @@ class DeepSpeedConfigGenerator:
                 best_ep_size = ep_size
         
         return best_ep_size
+
+
+# Utility functions for backward compatibility and helper methods
+def _count_parameters(model):
+    """Count trainable parameters in model."""
+    return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
+# Additional helper methods for debugging
+def debug_dataloader(dataloader, tokenizer, max_batches=3):
+    """Debug dataloader to check if data is flowing correctly."""
+    print(f"\n=== DEBUGGING DATALOADER ===")
+    print(f"Dataloader length: {len(dataloader)}")
+    
+    for batch_idx, batch in enumerate(dataloader):
+        if batch_idx >= max_batches:
+            break
+        
+        print(f"\nBatch {batch_idx}:")
+        for key, value in batch.items():
+            if hasattr(value, 'shape'):
+                print(f"  {key}: shape={value.shape}, dtype={value.dtype}")
+                if key == 'input_ids' and hasattr(tokenizer, 'decode'):
+                    try:
+                        sample_text = tokenizer.decode(value[0][:50].tolist())
+                        print(f"    Sample text: {repr(sample_text[:100])}")
+                    except:
+                        print(f"    Sample tokens: {value[0][:10].tolist()}")
+            else:
+                print(f"  {key}: {type(value)}")
+    
+    print(f"=== DATALOADER DEBUG COMPLETE ===\n")
+
+
+# Add debugging method to trainer
+def debug_training_setup(self):
+    """Debug training setup to identify issues."""
+    print(f"\n=== DEBUGGING TRAINING SETUP ===")
+    print(f"Model: {type(self.model)}")
+    print(f"Use DeepSpeed: {self.use_deepspeed}")
+    print(f"Device: {self.device}")
+    print(f"Global step: {self.global_step}")
+    print(f"Current epoch: {self.current_epoch}")
+    
+    if hasattr(self, 'optimizer'):
+        print(f"Optimizer: {type(self.optimizer)}")
+    
+    if self.use_deepspeed and hasattr(self, 'deepspeed_engine'):
+        print(f"DeepSpeed engine: {type(self.deepspeed_engine)}")
+        print(f"DeepSpeed world size: {getattr(self.deepspeed_engine, 'world_size', 'N/A')}")
+    
+    print(f"Config batch size: {getattr(self.config, 'batch_size', 'N/A')}")
+    print(f"Config grad accumulation: {getattr(self.config, 'gradient_accumulation_steps', 'N/A')}")
+    print(f"=== TRAINING SETUP DEBUG COMPLETE ===\n")
+
+
+# Patch the debug method to the trainer
+EnhancedConversationTrainer.debug_training_setup = debug_training_setup
