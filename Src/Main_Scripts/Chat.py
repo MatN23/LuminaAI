@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Complete Interactive Chat Interface for DeepSeek Transformer
-Automatically loads model configuration from checkpoints
+Fixed to properly load multi-shard ZeRO checkpoints
 """
 
 import os
@@ -12,6 +12,7 @@ import signal
 import json
 import time
 import re
+import glob
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple, Union
@@ -21,6 +22,8 @@ from collections import defaultdict
 import torch
 import torch.nn.functional as F
 from torch.cuda import get_device_properties
+
+from config.config_manager import ConfigPresets
 
 # Add current directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
@@ -77,6 +80,85 @@ class ConversationStats:
             self.session_start = datetime.now()
 
 
+def load_zero_checkpoint_shards(checkpoint_dir: str) -> Dict[str, torch.Tensor]:
+    """Load and merge all ZeRO checkpoint shards from a directory"""
+    checkpoint_dir = Path(checkpoint_dir)
+    
+    if checkpoint_dir.is_file():
+        # Single checkpoint file
+        checkpoint_files = [checkpoint_dir]
+    else:
+        # Directory with multiple shards
+        patterns = [
+            "*model_states.pt",
+            "*mp_rank_*.pt", 
+            "zero_pp_rank_*_mp_rank_*.pt",
+            "pytorch_model*.pt"
+        ]
+        
+        checkpoint_files = []
+        for pattern in patterns:
+            files = list(checkpoint_dir.glob(pattern))
+            if files:
+                checkpoint_files.extend(files)
+                break
+        
+        if not checkpoint_files:
+            raise FileNotFoundError(f"No checkpoint files found in {checkpoint_dir}")
+    
+    print(f"Loading {len(checkpoint_files)} checkpoint shard(s)...")
+    for f in checkpoint_files:
+        print(f"  - {f.name}")
+    
+    # Load and merge all shards
+    merged_state_dict = {}
+    
+    for i, shard_file in enumerate(sorted(checkpoint_files)):
+        print(f"Loading shard {i+1}/{len(checkpoint_files)}: {shard_file.name}")
+        
+        try:
+            # Load shard
+            shard_data = torch.load(shard_file, map_location='cpu', weights_only=False)
+            
+            # Extract state dict from various possible formats
+            if isinstance(shard_data, dict):
+                if 'module' in shard_data:
+                    shard_state = shard_data['module']
+                elif 'model_state_dict' in shard_data:
+                    shard_state = shard_data['model_state_dict']
+                elif 'state_dict' in shard_data:
+                    shard_state = shard_data['state_dict']
+                else:
+                    shard_state = shard_data
+            else:
+                shard_state = shard_data
+            
+            # Merge parameters
+            for key, tensor in shard_state.items():
+                if key in merged_state_dict:
+                    # Handle parameter sharding/concatenation if needed
+                    existing_tensor = merged_state_dict[key]
+                    if existing_tensor.shape != tensor.shape:
+                        print(f"Warning: Shape mismatch for {key}: {existing_tensor.shape} vs {tensor.shape}")
+                        # Keep the newer tensor
+                        merged_state_dict[key] = tensor
+                    else:
+                        # Use the newer tensor (last shard wins for identical keys)
+                        merged_state_dict[key] = tensor
+                else:
+                    merged_state_dict[key] = tensor
+            
+        except Exception as e:
+            print(f"Warning: Failed to load shard {shard_file}: {e}")
+            continue
+    
+    if not merged_state_dict:
+        raise RuntimeError("Failed to load any checkpoint data")
+    
+    print(f"Successfully merged {len(merged_state_dict)} parameters")
+    return merged_state_dict
+
+
 def load_config_from_checkpoint(checkpoint_path: str) -> DeepSeekConfig:
     """Load configuration from checkpoint file with comprehensive inference"""
     try:
@@ -87,8 +169,12 @@ def load_config_from_checkpoint(checkpoint_path: str) -> DeepSeekConfig:
         
         print(f"Loading configuration from checkpoint: {checkpoint_path}")
         
-        # Load checkpoint
-        checkpoint = torch.load(checkpoint_path, map_location='cpu')
+        # Load merged checkpoint state
+        if checkpoint_path.is_dir():
+            merged_state_dict = load_zero_checkpoint_shards(checkpoint_path)
+            checkpoint = {'merged_state': merged_state_dict}
+        else:
+            checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
         
         # Try to extract existing config first
         config_dict = None
@@ -101,7 +187,8 @@ def load_config_from_checkpoint(checkpoint_path: str) -> DeepSeekConfig:
             
             if config_dict is None:
                 print("No explicit config found, inferring from model structure...")
-                config_dict = infer_config_from_checkpoint(checkpoint)
+                state_dict = checkpoint.get('merged_state', checkpoint)
+                config_dict = infer_config_from_checkpoint(state_dict)
         else:
             config_dict = infer_config_from_checkpoint(checkpoint)
         
@@ -145,6 +232,8 @@ def infer_config_from_checkpoint(checkpoint) -> Dict[str, Any]:
             state_dict = checkpoint['model_state_dict']
         elif 'state_dict' in checkpoint:
             state_dict = checkpoint['state_dict']
+        elif 'merged_state' in checkpoint:
+            state_dict = checkpoint['merged_state']
         else:
             state_dict = checkpoint
     else:
@@ -266,18 +355,32 @@ def find_best_checkpoint() -> Optional[str]:
         if not location.exists():
             continue
             
-        patterns = ["best_*.pt", "*_best.pt", "checkpoint_*.pt", "model_*.pt", "*.pt", "*.pth"]
+        # Look for checkpoint directories first (ZeRO shards)
+        for subdir in location.iterdir():
+            if subdir.is_dir() and any(subdir.glob("*model_states.pt")):
+                try:
+                    mtime = subdir.stat().st_mtime
+                    if mtime > best_time:
+                        best_checkpoint = str(subdir)
+                        best_time = mtime
+                        print(f"Found checkpoint directory: {best_checkpoint}")
+                except:
+                    continue
+        
+        # Look for individual checkpoint files (prioritize model states over optimizer states)
+        patterns = ["*model_states.pt", "best_*.pt", "*_best.pt", "checkpoint_*.pt", "model_*.pt", "*.pt", "*.pth"]
         
         for pattern in patterns:
             for checkpoint in location.glob(pattern):
-                try:
-                    mtime = checkpoint.stat().st_mtime
-                    if mtime > best_time:
-                        best_checkpoint = str(checkpoint)
-                        best_time = mtime
-                        print(f"Found checkpoint: {best_checkpoint}")
-                except:
-                    continue
+                if checkpoint.is_file():
+                    try:
+                        mtime = checkpoint.stat().st_mtime
+                        if mtime > best_time:
+                            best_checkpoint = str(checkpoint)
+                            best_time = mtime
+                            print(f"Found checkpoint: {best_checkpoint}")
+                    except:
+                        continue
     
     if best_checkpoint:
         print(f"Using checkpoint: {best_checkpoint}")
@@ -289,27 +392,27 @@ def find_best_checkpoint() -> Optional[str]:
 
 
 class ChatInterface:
-    """Main chat interface with dynamic config loading"""
+    """Main chat interface with proper ZeRO checkpoint loading"""
     
     def __init__(self, checkpoint_path: str):
         self.checkpoint_path = checkpoint_path
         
-        # Load configuration from checkpoint
+        # Load config from checkpoint
         self.config = load_config_from_checkpoint(checkpoint_path)
         
         # Initialize tracking
         self.conversation_history = []
         self.stats = ConversationStats()
-        
+
         # Setup device
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
+
         # Chat settings
         self.max_history_length = 15
         self.show_token_count = False
         self.show_timing = False
         self.system_prompt = None
-        
+
         # Generation settings
         self.generation_configs = {
             'standard': {'temperature': 0.8, 'top_p': 0.9, 'top_k': 50},
@@ -318,11 +421,11 @@ class ChatInterface:
             'precise': {'temperature': 0.1, 'top_p': 0.5, 'top_k': 10}
         }
         self.conversation_mode = "standard"
-        
+
         # Initialize components
         self.tokenizer = None
         self.model = None
-        
+
         self._initialize_system()
     
     def _initialize_system(self):
@@ -371,27 +474,36 @@ class ChatInterface:
             raise
     
     def _load_checkpoint(self):
-        """Load model weights from checkpoint"""
+        """Load model weights from checkpoint with ZeRO support"""
         try:
             print(f"Loading checkpoint: {self.checkpoint_path}")
             
-            if self.device.type == 'cuda':
-                checkpoint = torch.load(self.checkpoint_path, map_location='cuda')
-            else:
-                checkpoint = torch.load(self.checkpoint_path, map_location='cpu')
+            checkpoint_path = Path(self.checkpoint_path)
             
-            # Extract model state dict
-            if isinstance(checkpoint, dict):
-                if 'module' in checkpoint:
-                    state_dict = checkpoint['module']
-                elif 'model_state_dict' in checkpoint:
-                    state_dict = checkpoint['model_state_dict']
-                elif 'state_dict' in checkpoint:
-                    state_dict = checkpoint['state_dict']
+            if checkpoint_path.is_dir():
+                # Handle ZeRO checkpoint directory
+                print("Detected ZeRO checkpoint directory")
+                state_dict = load_zero_checkpoint_shards(checkpoint_path)
+            else:
+                # Handle single checkpoint file
+                print("Loading single checkpoint file")
+                if self.device.type == 'cuda':
+                    checkpoint = torch.load(checkpoint_path, map_location='cuda', weights_only=False)
+                else:
+                    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+                
+                # Extract model state dict
+                if isinstance(checkpoint, dict):
+                    if 'module' in checkpoint:
+                        state_dict = checkpoint['module']
+                    elif 'model_state_dict' in checkpoint:
+                        state_dict = checkpoint['model_state_dict']
+                    elif 'state_dict' in checkpoint:
+                        state_dict = checkpoint['state_dict']
+                    else:
+                        state_dict = checkpoint
                 else:
                     state_dict = checkpoint
-            else:
-                state_dict = checkpoint
             
             # Filter and load state dict
             model_keys = set(self.model.state_dict().keys())
@@ -401,14 +513,30 @@ class ChatInterface:
             
             if missing_keys:
                 print(f"Warning: {len(missing_keys)} missing keys")
+                for key in missing_keys[:5]:  # Show first 5
+                    print(f"  Missing: {key}")
             if unexpected_keys:
                 print(f"Warning: {len(unexpected_keys)} unexpected keys")
+                for key in unexpected_keys[:5]:  # Show first 5
+                    print(f"  Unexpected: {key}")
             
-            print("Checkpoint loaded successfully")
+            # Check if we actually loaded meaningful weights
+            total_params = sum(p.numel() for p in self.model.parameters())
+            loaded_params = sum(p.numel() for name, p in self.model.named_parameters() if name in filtered_state_dict)
+            
+            print(f"Loaded {loaded_params:,}/{total_params:,} parameters ({100*loaded_params/total_params:.1f}%)")
+            
+            if loaded_params == 0:
+                print("WARNING: No parameters were loaded! Model will use random weights.")
+                print("This will result in gibberish output and token ID warnings.")
+            else:
+                print("Checkpoint loaded successfully")
             
         except Exception as e:
             print(f"Failed to load checkpoint: {e}")
             print("Model will use random weights")
+            import traceback
+            traceback.print_exc()
     
     def _generate_response(self, user_input: str) -> Tuple[str, Dict[str, Any]]:
         """Generate response to user input"""
@@ -762,11 +890,12 @@ def main():
 Examples:
   python chat.py                                    # Auto-detect checkpoint
   python chat.py --checkpoint model.pt             # Specific checkpoint
+  python chat.py --checkpoint ./checkpoints/       # ZeRO checkpoint directory
   python chat.py --mode creative --show-timing     # Creative mode with timing
         """
     )
     
-    parser.add_argument('--checkpoint', type=str, help='Checkpoint file to load')
+    parser.add_argument('--checkpoint', type=str, help='Checkpoint file or directory to load')
     parser.add_argument('--mode', choices=['standard', 'creative', 'analytical', 'precise'],
                        default='standard', help='Conversation mode')
     parser.add_argument('--system-prompt', type=str, help='Initial system prompt')
@@ -785,6 +914,7 @@ Examples:
     
     try:
         # Initialize chat
+        print("Initializing chat interface...")
         chat = ChatInterface(checkpoint_path)
         
         # Apply settings

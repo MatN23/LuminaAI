@@ -43,23 +43,22 @@ except ImportError as e:
 
 
 def benchmark_actual_performance(model, tokenizer, config, dist_manager, samples=20):
-    """Measure real training performance instead of guessing."""
+    """Measure real training performance for accurate time estimation."""
     import time
     import torch
     from torch.utils.data import DataLoader
     
-    print("🔥 MEASURING ACTUAL PERFORMANCE...")
+    print("MEASURING ACTUAL PERFORMANCE...")
     
     # Create realistic test data
     test_inputs = []
     for i in range(samples):
         # Create varied length test sequences
-        base_length = config.seq_length // 4 + (i * 10)  # Varied lengths
+        base_length = config.seq_length // 4 + (i * 10)
         test_text = f"Training benchmark sample {i}. This is a realistic test sequence. " * (base_length // 50)
         
         try:
             tokens = tokenizer.encode(test_text)
-            # Truncate or pad to exact sequence length
             if len(tokens) > config.seq_length:
                 tokens = tokens[:config.seq_length]
             else:
@@ -67,7 +66,6 @@ def benchmark_actual_performance(model, tokenizer, config, dist_manager, samples
             
             test_inputs.append(torch.tensor(tokens, dtype=torch.long))
         except Exception as e:
-            # Fallback: create random tokens
             tokens = torch.randint(0, tokenizer.get_vocab_size(), (config.seq_length,), dtype=torch.long)
             test_inputs.append(tokens)
     
@@ -100,22 +98,18 @@ def benchmark_actual_performance(model, tokenizer, config, dist_manager, samples
             break
             
         batch = batch.to(device, non_blocking=True)
-        
-        # FIX: Create proper attention mask and use correct forward call
         attention_mask = (batch != tokenizer.pad_token_id).long()
         
         try:
             with torch.cuda.amp.autocast(enabled=getattr(config, 'use_amp', True)):
-                # FIXED: Pass only input_ids and attention_mask
                 outputs = model(batch, attention_mask)
                 
-                # For loss calculation, we need to handle the output properly
                 if isinstance(outputs, tuple):
                     logits = outputs[0]
                 else:
                     logits = outputs
                 
-                # Calculate loss manually since model doesn't handle labels internally
+                # Calculate loss manually
                 shift_logits = logits[..., :-1, :].contiguous()
                 shift_labels = batch[..., 1:].contiguous()
                 
@@ -123,7 +117,6 @@ def benchmark_actual_performance(model, tokenizer, config, dist_manager, samples
                 loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
         except Exception as e:
             print(f"Error in warmup forward pass: {e}")
-            # Create a dummy loss for warmup
             loss = torch.tensor(1.0, device=device, requires_grad=True)
         
         loss.backward()
@@ -154,13 +147,11 @@ def benchmark_actual_performance(model, tokenizer, config, dist_manager, samples
         batch = batch.to(device, non_blocking=True)
         batch_size, seq_len = batch.shape
         
-        # Create attention mask
         attention_mask = (batch != tokenizer.pad_token_id).long()
         
         # Forward pass
         try:
             with torch.cuda.amp.autocast(enabled=getattr(config, 'use_amp', True)):
-                # FIXED: Proper forward call
                 outputs = model(batch, attention_mask)
                 
                 if isinstance(outputs, tuple):
@@ -176,7 +167,6 @@ def benchmark_actual_performance(model, tokenizer, config, dist_manager, samples
                 loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
         except Exception as e:
             print(f"Error in measurement forward pass: {e}")
-            # Create a dummy loss for measurement
             loss = torch.tensor(1.0, device=device, requires_grad=True)
         
         # Backward pass
@@ -202,11 +192,10 @@ def benchmark_actual_performance(model, tokenizer, config, dist_manager, samples
     measurement_end = time.time()
     total_measurement_time = measurement_end - measurement_start
     
-    # Calculate performance metrics
-    tokens_per_second = total_tokens_processed / total_measurement_time
-    samples_per_second = total_samples / total_measurement_time
-    steps_per_second = total_steps / total_measurement_time
-    avg_step_time = sum(step_times) / len(step_times) if step_times else 0
+    # Calculate per-step performance (this is what we'll scale up)
+    single_step_time = total_measurement_time / total_steps if total_steps > 0 else 1.0
+    tokens_per_step = total_tokens_processed / total_steps if total_steps > 0 else 1.0
+    samples_per_step = total_samples / total_steps if total_steps > 0 else 1.0
     
     # Memory statistics
     peak_memory_gb = 0
@@ -215,17 +204,10 @@ def benchmark_actual_performance(model, tokenizer, config, dist_manager, samples
         peak_memory_gb = torch.cuda.max_memory_allocated() / (1024**3)
         current_memory_gb = torch.cuda.memory_allocated() / (1024**3)
     
-    # Account for distributed training
-    effective_tokens_per_sec = tokens_per_second * dist_manager.world_size
-    effective_samples_per_sec = samples_per_second * dist_manager.world_size
-    
     performance_stats = {
-        'tokens_per_second': tokens_per_second,
-        'samples_per_second': samples_per_second,
-        'steps_per_second': steps_per_second,
-        'effective_tokens_per_second': effective_tokens_per_sec,
-        'effective_samples_per_second': effective_samples_per_sec,
-        'avg_step_time': avg_step_time,
+        'single_step_time': single_step_time,
+        'tokens_per_step': tokens_per_step,
+        'samples_per_step': samples_per_step,
         'total_time': total_measurement_time,
         'tokens_processed': total_tokens_processed,
         'samples_processed': total_samples,
@@ -235,10 +217,10 @@ def benchmark_actual_performance(model, tokenizer, config, dist_manager, samples
         'world_size': dist_manager.world_size
     }
     
-    print(f"✅ Performance measurement complete!")
-    print(f"   Measured {total_tokens_processed:,} tokens in {total_measurement_time:.1f}s")
-    print(f"   Single GPU: {tokens_per_second:,.0f} tokens/sec")
-    print(f"   Effective ({dist_manager.world_size}x GPU): {effective_tokens_per_sec:,.0f} tokens/sec")
+    print(f"Performance measurement complete!")
+    print(f"   Measured {total_steps} steps in {total_measurement_time:.1f}s")
+    print(f"   Single step time: {single_step_time:.3f}s")
+    print(f"   Tokens per step: {tokens_per_step:,.0f}")
     print(f"   Memory usage: {current_memory_gb:.1f}GB (peak: {peak_memory_gb:.1f}GB)")
     
     return performance_stats
@@ -626,7 +608,7 @@ def config_to_deepseek_config(config: Config):
 
 
 def main():
-    """Enhanced main function with comprehensive DeepSpeed integration."""
+    """Enhanced main function with comprehensive DeepSpeed integration and accurate timing calculation."""
     
     # HARDCODED CONFIGURATION - MODIFY THESE PARAMETERS
     # =================================================
@@ -673,7 +655,7 @@ def main():
     dist_manager.setup_distributed_environment()
     
     # Only log from rank 0 in distributed training
-    should_log = dist_manager.should_log()
+    should_log = True
     
     if should_log:
         # Create enhanced directory structure
@@ -867,12 +849,17 @@ def main():
                 logging.error(traceback.format_exc())
             return 1
         
+        # Initialize variables for time estimation
+        estimated_seconds = None
+        dataset_size = 0
+        steps_per_epoch = 0
+        total_training_steps = 0
+        
         # MEASURED PERFORMANCE TIME ESTIMATION
         if estimate_time and should_log:
             try:
                 # Analyze real dataset
-                print("\n📊 ANALYZING DATASET...")
-                dataset_size = 0
+                print("\nAnalyzing dataset...")
                 total_file_size = 0
                 avg_conversation_length = 0
                 
@@ -918,15 +905,7 @@ def main():
                 print(f"   Dataset: {dataset_size:,} samples ({total_file_size:.1f}MB)")
                 print(f"   Average conversation: {avg_conversation_length:.0f} chars")
                 
-                # MEASURE actual performance
-                print("\n🔬 BENCHMARKING ACTUAL TRAINING PERFORMANCE...")
-                perf_stats = benchmark_actual_performance(model, tokenizer, config, dist_manager, samples=min(32, dataset_size//10))
-                
-                # Calculate comprehensive training metrics
-                total_samples_to_train = dataset_size * config.num_epochs
-                total_tokens_to_train = total_samples_to_train * config.seq_length
-                
-                # Account for distributed training and gradient accumulation
+                # Calculate training structure first
                 effective_batch_size = (config.batch_size * 
                                       config.gradient_accumulation_steps * 
                                       dist_manager.world_size)
@@ -934,50 +913,64 @@ def main():
                 steps_per_epoch = max(1, dataset_size // effective_batch_size)
                 total_training_steps = steps_per_epoch * config.num_epochs
                 
-                # Time calculations from MEASURED performance
-                measured_tokens_per_sec = perf_stats['effective_tokens_per_second']
-                measured_samples_per_sec = perf_stats['effective_samples_per_second']
+                print(f"   Steps per epoch: {steps_per_epoch:,}")
+                print(f"   Total training steps: {total_training_steps:,}")
+                print(f"   Effective batch size: {effective_batch_size}")
                 
-                # Primary time estimate (token-based)
-                estimated_seconds_tokens = total_tokens_to_train / measured_tokens_per_sec
+                # MEASURE actual performance - this measures ONE STEP that doesn't count for training
+                print("\nBenchmarking actual training performance...")
+                perf_stats = benchmark_actual_performance(model, tokenizer, config, dist_manager, samples=min(32, dataset_size//10))
                 
-                # Secondary time estimate (sample-based)
-                estimated_seconds_samples = total_samples_to_train / measured_samples_per_sec
+                # Extract single step metrics
+                single_step_time = perf_stats['single_step_time']
                 
-                # Use the more conservative estimate
-                estimated_seconds = max(estimated_seconds_tokens, estimated_seconds_samples)
+                # Scale up to full training - THIS IS THE CRITICAL CALCULATION
+                # Each training step = 1 forward + 1 backward + optimizer step (every gradient_accumulation_steps)
+                # We measured the time for one complete step (including gradient accumulation)
+                
+                # Total time = steps_per_epoch * num_epochs * time_per_step
+                estimated_seconds = total_training_steps * single_step_time
                 
                 estimated_hours = estimated_seconds / 3600
                 estimated_days = estimated_hours / 24
                 
-                # Calculate confidence intervals based on measurement variance
+                # Calculate confidence intervals
                 confidence_factor = 1.2  # 20% uncertainty
                 best_case_hours = estimated_hours / confidence_factor
                 worst_case_hours = estimated_hours * confidence_factor
                 
                 # Throughput analysis
-                tokens_per_hour = measured_tokens_per_sec * 3600
-                samples_per_hour = measured_samples_per_sec * 3600
+                tokens_per_step = perf_stats['tokens_per_step']
+                samples_per_step = perf_stats['samples_per_step']
                 
-                print(f"\n🎯 MEASURED TRAINING TIME ANALYSIS:")
+                tokens_per_second = tokens_per_step / single_step_time if single_step_time > 0 else 0
+                samples_per_second = samples_per_step / single_step_time if single_step_time > 0 else 0
+                
+                # Scale for distributed training
+                effective_tokens_per_sec = tokens_per_second * dist_manager.world_size
+                effective_samples_per_sec = samples_per_second * dist_manager.world_size
+                
+                print(f"\nTRAINING TIME ANALYSIS:")
                 print(f"{'='*60}")
                 print(f"Dataset Analysis:")
-                print(f"   Total samples to train: {total_samples_to_train:,}")
-                print(f"   Total tokens to train: {total_tokens_to_train:,}")
-                print(f"   Total training steps: {total_training_steps:,}")
+                print(f"   Total samples: {dataset_size:,}")
+                print(f"   Epochs: {config.num_epochs}")
                 print(f"   Steps per epoch: {steps_per_epoch:,}")
+                print(f"   Total training steps: {total_training_steps:,}")
                 print(f"   Effective batch size: {effective_batch_size}")
                 
-                print(f"\nMeasured Performance:")
-                print(f"   Tokens/second: {measured_tokens_per_sec:,.0f}")
-                print(f"   Samples/second: {measured_samples_per_sec:.1f}")
-                print(f"   Tokens/hour: {tokens_per_hour:,.0f}")
-                print(f"   Samples/hour: {samples_per_hour:,.0f}")
+                print(f"\nMeasured Performance (Single Step):")
+                print(f"   Time per step: {single_step_time:.3f}s")
+                print(f"   Tokens per step: {tokens_per_step:,.0f}")
+                print(f"   Samples per step: {samples_per_step:.0f}")
                 print(f"   Peak memory: {perf_stats['peak_memory_gb']:.1f}GB")
-                print(f"   World size: {dist_manager.world_size}x GPUs")
+                
+                print(f"\nScaled Performance ({dist_manager.world_size}x GPUs):")
+                print(f"   Effective tokens/second: {effective_tokens_per_sec:,.0f}")
+                print(f"   Effective samples/second: {effective_samples_per_sec:.1f}")
                 
                 print(f"\nTime Estimates:")
-                print(f"   MEASURED estimate: {estimated_hours:.1f}h ({estimated_days:.2f} days)")
+                print(f"   CALCULATED estimate: {estimated_hours:.1f}h ({estimated_days:.2f} days)")
                 print(f"   Best case: {best_case_hours:.1f}h ({best_case_hours/24:.2f} days)")
                 print(f"   Worst case: {worst_case_hours:.1f}h ({worst_case_hours/24:.2f} days)")
                 
@@ -1024,17 +1017,17 @@ def main():
                     print(f"   Range: ${cost_range_low:.2f} - ${cost_range_high:.2f}")
                 
                 # Recommendations
-                print(f"\n💡 OPTIMIZATION RECOMMENDATIONS:")
+                print(f"\nOPTIMIZATION RECOMMENDATIONS:")
                 if estimated_hours > 24:
-                    print(f"   ⚠️  Training >24h - consider reducing model size or dataset")
+                    print(f"   Training >24h - consider reducing model size or dataset")
                 if perf_stats['peak_memory_gb'] > 20:
-                    print(f"   ⚠️  High memory usage - consider gradient checkpointing")
+                    print(f"   High memory usage - consider gradient checkpointing")
                 if config.batch_size == 1:
-                    print(f"   💡 Small batch size - increase if memory allows")
+                    print(f"   Small batch size - increase if memory allows")
                 if not config.use_moe and estimated_hours > 48:
-                    print(f"   💡 Consider MoE for faster training with large models")
+                    print(f"   Consider MoE for faster training with large models")
                 if dist_manager.world_size == 1 and torch.cuda.device_count() > 1:
-                    print(f"   💡 Multiple GPUs detected - consider distributed training")
+                    print(f"   Multiple GPUs detected - consider distributed training")
                 
                 print(f"{'='*60}")
                 
@@ -1044,20 +1037,26 @@ def main():
                     logging.error(traceback.format_exc())
                     
                 # Fallback to simple estimation
-                print(f"\n⚠️  FALLBACK TIME ESTIMATION:")
+                print(f"\nFALLBACK TIME ESTIMATION:")
                 try:
-                    simple_tokens = dataset_size * config.seq_length * config.num_epochs
-                    fallback_throughput = 1000 * dist_manager.world_size  # Conservative
-                    fallback_hours = simple_tokens / (fallback_throughput * 3600)
-                    print(f"   Conservative estimate: {fallback_hours:.1f} hours")
+                    if dataset_size > 0 and steps_per_epoch > 0:
+                        # Conservative fallback calculation
+                        fallback_step_time = 1.0  # 1 second per step estimate
+                        estimated_seconds = total_training_steps * fallback_step_time
+                        fallback_hours = estimated_seconds / 3600
+                        print(f"   Conservative estimate: {fallback_hours:.1f} hours")
+                    else:
+                        print(f"   Unable to estimate training time")
+                        estimated_seconds = None
                 except:
                     print(f"   Unable to estimate training time")
+                    estimated_seconds = None
         
         # Dry run summary
         if dry_run:
             if should_log:
                 model_size_gb = resource_manager._estimate_model_memory_usage(config)
-                print(f"\n✅ DRY RUN COMPLETE - CONFIGURATION SUMMARY:")
+                print(f"\nDRY RUN COMPLETE - CONFIGURATION SUMMARY:")
                 print(f"{'='*60}")
                 print(f"   Configuration: {config_choice}")
                 print(f"   Model parameters: ~{estimate_parameters(deepseek_config):,}")
@@ -1073,14 +1072,20 @@ def main():
                 print(f"   World size: {dist_manager.world_size}")
                 print(f"   Training epochs: {config.num_epochs}")
                 print(f"   Learning rate: {config.learning_rate}")
+                if dataset_size > 0:
+                    print(f"   Dataset size: {dataset_size:,} samples")
+                    print(f"   Steps per epoch: {steps_per_epoch:,}")
+                    print(f"   Total training steps: {total_training_steps:,}")
+                if estimated_seconds:
+                    print(f"   Estimated training time: {estimated_seconds/3600:.1f} hours")
                 print(f"{'='*60}")
-                print(f"   ✅ Ready for training!")
+                print(f"   Ready for training!")
             return 0
         
         # Initialize trainer and run training
         try:
             if should_log:
-                print(f"\n🚀 INITIALIZING TRAINING SYSTEM...")
+                print(f"\nINITIALIZING TRAINING SYSTEM...")
             
             # Create enhanced trainer with DeepSpeed support
             trainer = EnhancedConversationTrainer(
@@ -1091,7 +1096,7 @@ def main():
             )
             
             if should_log:
-                print(f"\n🎯 TRAINING CONFIGURATION:")
+                print(f"\nTRAINING CONFIGURATION:")
                 print(f"   Experiment: {config.experiment_name}")
                 print(f"   Model: ~{estimate_parameters(deepseek_config):,} parameters")
                 print(f"   Training mode: {'DeepSpeed' if getattr(trainer, 'use_deepspeed', False) else 'Standard PyTorch'}")
@@ -1127,7 +1132,7 @@ def main():
             # Run training
             if should_log:
                 print(f"\n" + "="*80)
-                print(f"🚀 STARTING ENHANCED TRAINING WITH MEASURED OPTIMIZATIONS")
+                print(f"STARTING ENHANCED TRAINING WITH MEASURED OPTIMIZATIONS")
                 print(f"="*80)
             
             start_time = datetime.now()
@@ -1142,25 +1147,23 @@ def main():
             training_duration = (end_time - start_time).total_seconds()
             
             if should_log:
-                print(f"\n🎉 TRAINING COMPLETED SUCCESSFULLY!")
+                print(f"\nTRAINING COMPLETED SUCCESSFULLY!")
                 print(f"   Actual duration: {training_duration:.1f}s ({training_duration/3600:.2f}h)")
                 
                 # Compare with prediction if we had one
-                if estimate_time:
+                if estimate_time and estimated_seconds is not None:
                     try:
-                        predicted_seconds = estimated_seconds if 'estimated_seconds' in locals() else None
-                        if predicted_seconds:
-                            accuracy = abs(training_duration - predicted_seconds) / predicted_seconds
-                            print(f"   Prediction accuracy: {(1-accuracy)*100:.1f}% (off by {accuracy*100:.1f}%)")
-                    except:
-                        pass
+                        accuracy = abs(training_duration - estimated_seconds) / estimated_seconds
+                        print(f"   Prediction accuracy: {(1-accuracy)*100:.1f}% (off by {accuracy*100:.1f}%)")
+                    except Exception as e:
+                        logging.debug(f"Could not calculate prediction accuracy: {e}")
                 
                 # Get MoE diagnostics if available
                 if config.use_moe and getattr(trainer, 'use_deepspeed', False):
                     try:
                         moe_diagnostics = trainer.get_moe_diagnostics()
                         if 'recommendations' in moe_diagnostics and moe_diagnostics['recommendations']:
-                            print(f"\n🧠 MoE Routing Analysis:")
+                            print(f"\nMoE Routing Analysis:")
                             for rec in moe_diagnostics['recommendations']:
                                 print(f"   - {rec}")
                     except Exception as e:
@@ -1171,7 +1174,7 @@ def main():
                     memory_stats = trainer.get_memory_stats()
                     if 'gpu' in memory_stats:
                         gpu_stats = memory_stats['gpu']
-                        print(f"\n💾 Final Memory Usage:")
+                        print(f"\nFinal Memory Usage:")
                         print(f"   GPU allocated: {gpu_stats['allocated_gb']:.2f}GB")
                         print(f"   GPU reserved: {gpu_stats['reserved_gb']:.2f}GB")
                         print(f"   Peak GPU usage: {gpu_stats['max_allocated_gb']:.2f}GB")
@@ -1182,7 +1185,7 @@ def main():
             
         except KeyboardInterrupt:
             if should_log:
-                print(f"\n⚠️  Training interrupted by user")
+                print(f"\nTraining interrupted by user")
             return 1
         except Exception as e:
             if should_log:
