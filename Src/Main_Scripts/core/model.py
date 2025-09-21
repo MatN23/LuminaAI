@@ -288,7 +288,7 @@ class OptimizedMoELayer(nn.Module):
         std = self.config.init_std
         
         # Initialize gate with smaller std for better routing stability
-        nn.init.normal_(self.gate.weight, mean=0.0, std=std * 0.1)
+        nn.init.normal_(self.gate.weight, mean=0.0, std=0.001) 
         
         # Initialize expert weights
         for expert in self.experts:
@@ -555,7 +555,7 @@ class DeepSeekTransformer(nn.Module):
         with torch.no_grad():
             for layer_idx, layer in enumerate(self.layers):
                 # Progressive scaling: deeper layers get smaller initialization
-                depth_scale = 1.0 / math.sqrt(layer_idx + 1)
+                depth_scale = 1.0 / math.sqrt((layer_idx + 1) * 2)
                 
                 # Scale attention output projection
                 layer.self_attn.o_proj.weight.data *= 0.67 * depth_scale

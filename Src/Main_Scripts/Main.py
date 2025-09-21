@@ -917,7 +917,7 @@ def main():
         'num_epochs': 3,        # Training epochs (reduced for testing)
         'learning_rate': 1e-4,  # Learning rate
         'batch_size': 1,        # Micro batch size
-        'gradient_accumulation_steps': 2,  # Reduced for testing
+        'gradient_accumulation_steps': 16,  # Reduced for testing
         'train_data_path': 'oasst1_data/oasst1_train.jsonl',
         'eval_data_path': 'data/eval.jsonl',
 
@@ -931,7 +931,7 @@ def main():
         'cpu_offload': True,             # FORCE CPU offloading
         'cpu_offload_optimizer': True,   # FORCE CPU optimizer offloading
         'cpu_offload_parameters': True,  # FORCE CPU parameter offloading
-        'zero_stage': 3,                 # FORCE ZeRO-3
+        'zero_stage': 2,                 # FORCE ZeRO-3
         'nvme_path': None,               # Set to NVMe path if available
     }
     
