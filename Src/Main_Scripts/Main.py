@@ -9,10 +9,15 @@ import psutil
 import gc
 import json
 import time
-import argparse
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, Optional, List
+
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'     # Avoid tokenizer warnings
+os.environ['CUDA_LAUNCH_BLOCKING'] = '1'           # Synchronous CUDA for debugging
+os.environ['TORCH_SHOW_CPP_STACKTRACES'] = '1'     # Better error messages
+os.environ['NCCL_DEBUG'] = 'INFO'                  # NCCL communication debug
+os.environ['PYTHONPATH'] = '.'  
 
 # Add the current directory to Python path for imports
 sys.path.insert(0, str(Path(__file__).parent))
@@ -21,6 +26,12 @@ sys.path.insert(0, str(Path(__file__).parent))
 try:
     import deepspeed
     import torch
+
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True  
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+
     DEEPSPEED_AVAILABLE = True
 except ImportError:
     DEEPSPEED_AVAILABLE = False
@@ -83,1045 +94,14 @@ except ImportError:
 
 try:
     from training.trainer import EnhancedConversationTrainer, DeepSpeedConfigGenerator, debug_dataloader
-    from training.checkpoint import CheckpointManager
 except ImportError:
     try:
         from trainer import EnhancedConversationTrainer, DeepSpeedConfigGenerator, debug_dataloader
-        from checkpoint import CheckpointManager
     except ImportError:
         print("Warning: Enhanced trainer not available")
         EnhancedConversationTrainer = None
         DeepSpeedConfigGenerator = None
         debug_dataloader = None
-        CheckpointManager = None
-
-
-def create_argument_parser():
-    """Create argument parser focused on training workflow and system features."""
-    parser = argparse.ArgumentParser(
-        description="Enhanced DeepSpeed MoE Training System with Advanced Features",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Advanced Training Features:
-  
-  # Resume training from latest checkpoint
-  python Main.py --resume
-  python Main.py --resume latest
-  python Main.py --resume best
-  python Main.py --resume checkpoints/specific_checkpoint.pt
-  
-  # Continue training with different experiment name
-  python Main.py --resume --continue-as new_experiment_name
-  
-  # Analyze model without training
-  python Main.py --analyze-model
-  python Main.py --analyze-model --checkpoint best
-  
-  # Data validation and preprocessing
-  python Main.py --validate-data
-  python Main.py --process-data input.jsonl output.jsonl
-  
-  # System and environment checks
-  python Main.py --check-environment
-  python Main.py --benchmark-performance
-  
-  # Export model for inference
-  python Main.py --export-model --checkpoint best --format pytorch
-  
-  # Training monitoring and debugging
-  python Main.py --debug-setup
-  python Main.py --profile-memory
-  
-  # Backup and restore
-  python Main.py --create-backup
-  python Main.py --list-checkpoints
-        """
-    )
-    
-    # === TRAINING WORKFLOW ===
-    workflow_group = parser.add_argument_group('Training Workflow')
-    workflow_group.add_argument(
-        '--resume', 
-        nargs='?',
-        const='latest',
-        metavar='CHECKPOINT',
-        help='Resume training from checkpoint (latest/best/path). Default: latest'
-    )
-    
-    workflow_group.add_argument(
-        '--continue-as',
-        type=str,
-        metavar='NAME',
-        help='Continue training with a new experiment name'
-    )
-    
-    workflow_group.add_argument(
-        '--dry-run',
-        action='store_true',
-        help='Test configuration without training'
-    )
-    
-    workflow_group.add_argument(
-        '--force-restart',
-        action='store_true',
-        help='Ignore existing checkpoints and start fresh'
-    )
-    
-    # === MODEL ANALYSIS ===
-    analysis_group = parser.add_argument_group('Model Analysis')
-    analysis_group.add_argument(
-        '--analyze-model',
-        action='store_true',
-        help='Analyze model architecture and parameters'
-    )
-    
-    analysis_group.add_argument(
-        '--checkpoint', '--ckpt',
-        type=str,
-        metavar='PATH',
-        help='Checkpoint path for analysis (latest/best/path)'
-    )
-    
-    analysis_group.add_argument(
-        '--model-stats',
-        action='store_true',
-        help='Show detailed model statistics'
-    )
-    
-    analysis_group.add_argument(
-        '--memory-analysis',
-        action='store_true',
-        help='Analyze memory requirements'
-    )
-    
-    # === DATA MANAGEMENT ===
-    data_group = parser.add_argument_group('Data Management')
-    data_group.add_argument(
-        '--validate-data',
-        action='store_true',
-        help='Validate training data quality'
-    )
-    
-    data_group.add_argument(
-        '--process-data',
-        nargs=2,
-        metavar=('INPUT', 'OUTPUT'),
-        help='Process raw data: input_file output_file'
-    )
-    
-    data_group.add_argument(
-        '--data-report',
-        action='store_true',
-        help='Generate data summary report'
-    )
-    
-    data_group.add_argument(
-        '--create-shards',
-        type=int,
-        metavar='N',
-        help='Split data into N shards for distributed training'
-    )
-    
-    # === SYSTEM DIAGNOSTICS ===
-    system_group = parser.add_argument_group('System Diagnostics')
-    system_group.add_argument(
-        '--check-environment',
-        action='store_true',
-        help='Validate training environment and dependencies'
-    )
-    
-    system_group.add_argument(
-        '--benchmark-performance',
-        action='store_true',
-        help='Benchmark training performance'
-    )
-    
-    system_group.add_argument(
-        '--profile-memory',
-        action='store_true',
-        help='Profile memory usage during training'
-    )
-    
-    system_group.add_argument(
-        '--debug-setup',
-        action='store_true',
-        help='Debug training setup and configuration'
-    )
-    
-    system_group.add_argument(
-        '--test-deepspeed',
-        action='store_true',
-        help='Test DeepSpeed configuration and setup'
-    )
-    
-    # === MODEL EXPORT ===
-    export_group = parser.add_argument_group('Model Export')
-    export_group.add_argument(
-        '--export-model',
-        action='store_true',
-        help='Export trained model for inference'
-    )
-    
-    export_group.add_argument(
-        '--format',
-        choices=['pytorch', 'onnx', 'tensorrt', 'huggingface'],
-        default='pytorch',
-        help='Export format (default: pytorch)'
-    )
-    
-    export_group.add_argument(
-        '--output-dir',
-        type=str,
-        default='exported_models',
-        help='Output directory for exported model'
-    )
-    
-    # === CHECKPOINT MANAGEMENT ===
-    checkpoint_group = parser.add_argument_group('Checkpoint Management')
-    checkpoint_group.add_argument(
-        '--list-checkpoints',
-        action='store_true',
-        help='List all available checkpoints'
-    )
-    
-    checkpoint_group.add_argument(
-        '--create-backup',
-        action='store_true',
-        help='Create backup of current training state'
-    )
-    
-    checkpoint_group.add_argument(
-        '--clean-checkpoints',
-        action='store_true',
-        help='Clean up old checkpoints (keep best and latest)'
-    )
-    
-    checkpoint_group.add_argument(
-        '--merge-checkpoints',
-        nargs='+',
-        metavar='CHECKPOINT',
-        help='Merge multiple checkpoints (experimental)'
-    )
-    
-    # === EXPERIMENT MANAGEMENT ===
-    experiment_group = parser.add_argument_group('Experiment Management')
-    experiment_group.add_argument(
-        '--list-experiments',
-        action='store_true',
-        help='List all experiments'
-    )
-    
-    experiment_group.add_argument(
-        '--archive-experiment',
-        type=str,
-        metavar='NAME',
-        help='Archive an experiment'
-    )
-    
-    experiment_group.add_argument(
-        '--compare-experiments',
-        nargs='+',
-        metavar='NAME',
-        help='Compare multiple experiments'
-    )
-    
-    # === MONITORING AND LOGGING ===
-    monitoring_group = parser.add_argument_group('Monitoring')
-    monitoring_group.add_argument(
-        '--tensorboard',
-        action='store_true',
-        help='Enable TensorBoard logging'
-    )
-    
-    monitoring_group.add_argument(
-        '--wandb',
-        action='store_true',
-        help='Enable Weights & Biases logging'
-    )
-    
-    monitoring_group.add_argument(
-        '--log-level',
-        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
-        default='INFO',
-        help='Logging level (default: INFO)'
-    )
-    
-    monitoring_group.add_argument(
-        '--verbose', '-v',
-        action='count',
-        default=0,
-        help='Increase verbosity (can be used multiple times)'
-    )
-    
-    # === ADVANCED FEATURES ===
-    advanced_group = parser.add_argument_group('Advanced Features')
-    advanced_group.add_argument(
-        '--auto-tune',
-        action='store_true',
-        help='Enable automatic hyperparameter tuning'
-    )
-    
-    advanced_group.add_argument(
-        '--distributed-backend',
-        choices=['nccl', 'gloo', 'mpi'],
-        help='Distributed training backend'
-    )
-    
-    advanced_group.add_argument(
-        '--mixed-precision',
-        choices=['fp16', 'bf16', 'fp32'],
-        help='Mixed precision training mode'
-    )
-    
-    advanced_group.add_argument(
-        '--compile-model',
-        action='store_true',
-        help='Use torch.compile for model optimization'
-    )
-    
-    return parser
-
-
-def find_checkpoint_path(checkpoint_spec: str, experiment_name: str = None) -> Optional[Path]:
-    """Find checkpoint path based on specification."""
-    if checkpoint_spec in ['latest', 'best']:
-        # Look in current experiment directory first
-        if experiment_name:
-            exp_dir = Path(f"experiments/{experiment_name}")
-            if checkpoint_spec == 'latest':
-                latest_file = exp_dir / "latest_checkpoint.pt"
-                if latest_file.exists():
-                    return latest_file
-            elif checkpoint_spec == 'best':
-                best_file = exp_dir / "best_checkpoint.pt"
-                if best_file.exists():
-                    return best_file
-        
-        # Look in checkpoints directory
-        checkpoints_dir = Path("checkpoints")
-        if checkpoint_spec == 'latest':
-            # Find most recent checkpoint
-            if checkpoints_dir.exists():
-                checkpoints = list(checkpoints_dir.glob("checkpoint_*.pt"))
-                if checkpoints:
-                    return max(checkpoints, key=lambda p: p.stat().st_mtime)
-        elif checkpoint_spec == 'best':
-            best_file = checkpoints_dir / "best_checkpoint.pt"
-            if best_file.exists():
-                return best_file
-    else:
-        # Specific path
-        checkpoint_path = Path(checkpoint_spec)
-        if checkpoint_path.exists():
-            return checkpoint_path
-        
-        # Try relative to checkpoints directory
-        checkpoint_path = Path("checkpoints") / checkpoint_spec
-        if checkpoint_path.exists():
-            return checkpoint_path
-    
-    return None
-
-
-def list_available_checkpoints():
-    """List all available checkpoints."""
-    print("\n" + "="*60)
-    print("AVAILABLE CHECKPOINTS")
-    print("="*60)
-    
-    checkpoints_dir = Path("checkpoints")
-    experiments_dir = Path("experiments")
-    
-    # System-wide checkpoints
-    if checkpoints_dir.exists():
-        checkpoints = list(checkpoints_dir.glob("*.pt"))
-        if checkpoints:
-            print("\nSystem Checkpoints:")
-            for ckpt in sorted(checkpoints, key=lambda p: p.stat().st_mtime, reverse=True):
-                size_mb = ckpt.stat().st_size / (1024*1024)
-                mtime = datetime.fromtimestamp(ckpt.stat().st_mtime)
-                print(f"  {ckpt.name:<40} {size_mb:8.1f}MB  {mtime.strftime('%Y-%m-%d %H:%M')}")
-    
-    # Experiment checkpoints
-    if experiments_dir.exists():
-        for exp_dir in experiments_dir.iterdir():
-            if exp_dir.is_dir():
-                checkpoints = list(exp_dir.glob("*.pt"))
-                if checkpoints:
-                    print(f"\nExperiment '{exp_dir.name}':")
-                    for ckpt in sorted(checkpoints, key=lambda p: p.stat().st_mtime, reverse=True):
-                        size_mb = ckpt.stat().st_size / (1024*1024)
-                        mtime = datetime.fromtimestamp(ckpt.stat().st_mtime)
-                        print(f"  {ckpt.name:<40} {size_mb:8.1f}MB  {mtime.strftime('%Y-%m-%d %H:%M')}")
-
-
-def analyze_model_checkpoint(checkpoint_path: Path):
-    """Analyze a model checkpoint."""
-    print(f"\n" + "="*60)
-    print(f"ANALYZING CHECKPOINT: {checkpoint_path}")
-    print("="*60)
-    
-    try:
-        checkpoint_data = torch.load(checkpoint_path, map_location='cpu')
-        
-        # Basic info
-        print(f"\nCheckpoint Information:")
-        print(f"  File size: {checkpoint_path.stat().st_size / (1024*1024):.1f} MB")
-        print(f"  Created: {datetime.fromtimestamp(checkpoint_path.stat().st_mtime)}")
-        
-        if 'save_time' in checkpoint_data:
-            print(f"  Saved: {checkpoint_data['save_time']}")
-        
-        # Training progress
-        if 'current_epoch' in checkpoint_data:
-            print(f"  Epoch: {checkpoint_data['current_epoch']}")
-        if 'global_step' in checkpoint_data:
-            print(f"  Step: {checkpoint_data['global_step']}")
-        
-        # Model architecture
-        if 'model_config' in checkpoint_data:
-            config = checkpoint_data['model_config']
-            print(f"\nModel Architecture:")
-            for key, value in config.items():
-                print(f"  {key}: {value}")
-        
-        # Model parameters
-        if 'model_state_dict' in checkpoint_data:
-            state_dict = checkpoint_data['model_state_dict']
-            total_params = sum(p.numel() for p in state_dict.values())
-            trainable_params = sum(p.numel() for p in state_dict.values() if (p.requires_grad if hasattr(p, 'requires_grad') else True))
-            print(f"  Total parameters: {total_params:,}")
-            print(f"  Trainable parameters: {trainable_params:,}")
-            
-            # Memory estimation
-            param_memory = sum(p.numel() * p.element_size() for p in state_dict.values() if hasattr(p, 'element_size')) / (1024*1024)
-            print(f"  Parameter memory: {param_memory:.1f} MB")
-        
-        # Training metrics
-        if 'metrics' in checkpoint_data:
-            metrics = checkpoint_data['metrics']
-            print(f"\nTraining Metrics:")
-            for key, value in metrics.items():
-                if isinstance(value, list) and value:
-                    if key.endswith('_losses'):
-                        print(f"  {key}: {value[-1]:.6f} (latest)")
-                    else:
-                        print(f"  {key}: {value[-1]} (latest)")
-                else:
-                    print(f"  {key}: {value}")
-        
-        # Configuration
-        if 'config' in checkpoint_data:
-            config = checkpoint_data['config']
-            print(f"\nTraining Configuration:")
-            important_keys = ['learning_rate', 'batch_size', 'gradient_accumulation_steps', 'use_moe', 'num_experts']
-            for key in important_keys:
-                if key in config:
-                    print(f"  {key}: {config[key]}")
-    
-    except Exception as e:
-        print(f"Error analyzing checkpoint: {e}")
-
-
-def create_data_shards(input_file: Path, num_shards: int):
-    """Split data into shards for distributed training."""
-    print(f"\nCreating {num_shards} data shards from {input_file}")
-    
-    if not input_file.exists():
-        print(f"Error: Input file {input_file} does not exist")
-        return
-    
-    output_dir = input_file.parent / "shards"
-    output_dir.mkdir(exist_ok=True)
-    
-    # Count total lines first
-    total_lines = 0
-    with open(input_file, 'r', encoding='utf-8') as f:
-        for _ in f:
-            total_lines += 1
-    
-    lines_per_shard = max(1, total_lines // num_shards)
-    
-    print(f"Total lines: {total_lines:,}")
-    print(f"Lines per shard: {lines_per_shard:,}")
-    
-    shard_files = []
-    current_shard = 0
-    current_lines = 0
-    current_file = None
-    
-    with open(input_file, 'r', encoding='utf-8') as input_f:
-        for line in input_f:
-            if current_file is None or current_lines >= lines_per_shard:
-                if current_file is not None:
-                    current_file.close()
-                
-                shard_path = output_dir / f"{input_file.stem}_shard_{current_shard:04d}.jsonl"
-                current_file = open(shard_path, 'w', encoding='utf-8')
-                shard_files.append(shard_path)
-                current_shard += 1
-                current_lines = 0
-            
-            current_file.write(line)
-            current_lines += 1
-    
-    if current_file is not None:
-        current_file.close()
-    
-    print(f"Created {len(shard_files)} shards in {output_dir}")
-    for shard_file in shard_files:
-        size_mb = shard_file.stat().st_size / (1024*1024)
-        print(f"  {shard_file.name}: {size_mb:.1f} MB")
-
-
-def benchmark_training_performance(config):
-    """Benchmark training performance."""
-    print("\n" + "="*60)
-    print("BENCHMARKING TRAINING PERFORMANCE")
-    print("="*60)
-    
-    try:
-        # Initialize components
-        tokenizer = ConversationTokenizer()
-        model_config = config_to_deepseek_config(config)
-        model = DeepSeekTransformer(model_config)
-        
-        # Create dummy data
-        dummy_data = []
-        for i in range(10):
-            conversation = {
-                "messages": [
-                    {"role": "user", "content": f"Test question {i} " * 50},
-                    {"role": "assistant", "content": f"Test response {i} " * 50}
-                ]
-            }
-            dummy_data.append(conversation)
-        
-        # Benchmark tokenization
-        start_time = time.time()
-        tokenized_data = []
-        for conv in dummy_data:
-            tokens = tokenizer.encode_conversation(conv)
-            tokenized_data.append(tokens)
-        tokenization_time = time.time() - start_time
-        
-        print(f"Tokenization Performance:")
-        print(f"  Time: {tokenization_time:.3f}s for {len(dummy_data)} conversations")
-        print(f"  Speed: {len(dummy_data) / tokenization_time:.1f} conversations/sec")
-        
-        # Benchmark model forward pass
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        model = model.to(device)
-        
-        # Create batch
-        batch_size = config.batch_size
-        seq_len = config.seq_length
-        dummy_input = torch.randint(0, min(tokenizer.get_vocab_size(), 1000), (batch_size, seq_len), device=device)
-        
-        # Warmup
-        with torch.no_grad():
-            for _ in range(3):
-                _ = model(dummy_input)
-        
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-        
-        # Benchmark
-        start_time = time.time()
-        num_runs = 10
-        
-        with torch.no_grad():
-            for _ in range(num_runs):
-                _ = model(dummy_input)
-        
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-        
-        forward_time = time.time() - start_time
-        
-        print(f"\nModel Forward Pass Performance:")
-        print(f"  Time: {forward_time:.3f}s for {num_runs} runs")
-        print(f"  Average: {forward_time / num_runs * 1000:.1f}ms per forward pass")
-        print(f"  Throughput: {batch_size * seq_len * num_runs / forward_time:.0f} tokens/sec")
-        
-        # Memory usage
-        if torch.cuda.is_available():
-            memory_used = torch.cuda.max_memory_allocated() / (1024*1024*1024)
-            print(f"  GPU Memory: {memory_used:.1f} GB")
-        
-    except Exception as e:
-        print(f"Benchmark error: {e}")
-        traceback.print_exc()
-
-
-def export_model_for_inference(checkpoint_path: Path, output_dir: Path, format_type: str):
-    """Export model for inference."""
-    print(f"\n" + "="*60)
-    print(f"EXPORTING MODEL: {format_type.upper()}")
-    print("="*60)
-    
-    output_dir.mkdir(parents=True, exist_ok=True)
-    
-    try:
-        # Load checkpoint
-        checkpoint_data = torch.load(checkpoint_path, map_location='cpu')
-        
-        # Recreate model
-        if 'model_config' in checkpoint_data:
-            model_config = checkpoint_data['model_config']
-            # Convert to DeepSeekConfig if needed
-            from Main import config_to_deepseek_config
-            
-            # Create a temporary config object
-            class TempConfig:
-                def __init__(self, **kwargs):
-                    for k, v in kwargs.items():
-                        setattr(self, k, v)
-            
-            temp_config = TempConfig(**model_config)
-            deepseek_config = config_to_deepseek_config(temp_config)
-            model = DeepSeekTransformer(deepseek_config)
-            
-            # Load weights
-            model.load_state_dict(checkpoint_data['model_state_dict'])
-            model.eval()
-            
-            print(f"Model loaded successfully")
-            print(f"Parameters: {sum(p.numel() for p in model.parameters()):,}")
-            
-            if format_type == 'pytorch':
-                # Save PyTorch model
-                output_path = output_dir / "model.pt"
-                torch.save({
-                    'model_state_dict': model.state_dict(),
-                    'model_config': model_config,
-                    'tokenizer_config': {},  # Add tokenizer config if available
-                }, output_path)
-                
-                # Save config separately
-                config_path = output_dir / "config.json"
-                with open(config_path, 'w') as f:
-                    json.dump(model_config, f, indent=2)
-                
-                print(f"PyTorch model saved to: {output_path}")
-                print(f"Config saved to: {config_path}")
-            
-            elif format_type == 'huggingface':
-                # Save in HuggingFace format
-                try:
-                    from transformers import AutoModel, AutoConfig
-                    
-                    # This would require creating a HuggingFace-compatible model
-                    print("HuggingFace export not implemented yet")
-                    
-                except ImportError:
-                    print("HuggingFace transformers not available")
-            
-            else:
-                print(f"Export format '{format_type}' not implemented")
-        
-        else:
-            print("Error: Checkpoint missing model configuration")
-    
-    except Exception as e:
-        print(f"Export error: {e}")
-        traceback.print_exc()
-
-
-def list_experiments():
-    """List all experiments with their status."""
-    print("\n" + "="*60)
-    print("AVAILABLE EXPERIMENTS")
-    print("="*60)
-    
-    experiments_dir = Path("experiments")
-    if not experiments_dir.exists():
-        print("No experiments directory found.")
-        return
-    
-    experiments = []
-    for exp_dir in experiments_dir.iterdir():
-        if exp_dir.is_dir():
-            exp_info = {
-                'name': exp_dir.name,
-                'path': exp_dir,
-                'created': datetime.fromtimestamp(exp_dir.stat().st_mtime),
-                'checkpoints': len(list(exp_dir.glob("*.pt"))),
-                'size_mb': sum(f.stat().st_size for f in exp_dir.rglob("*") if f.is_file()) / (1024*1024)
-            }
-            
-            # Check for summary file
-            summary_file = exp_dir / "training_summary.json"
-            if summary_file.exists():
-                try:
-                    with open(summary_file, 'r') as f:
-                        summary = json.load(f)
-                        exp_info['status'] = 'completed'
-                        exp_info['epochs'] = summary.get('total_epochs', 'unknown')
-                        exp_info['final_loss'] = summary.get('final_metrics', {}).get('final_train_loss', 'unknown')
-                except:
-                    exp_info['status'] = 'unknown'
-            else:
-                exp_info['status'] = 'in_progress' if exp_info['checkpoints'] > 0 else 'started'
-            
-            experiments.append(exp_info)
-    
-    # Sort by creation time
-    experiments.sort(key=lambda x: x['created'], reverse=True)
-    
-    if not experiments:
-        print("No experiments found.")
-        return
-    
-    print(f"{'Name':<30} {'Status':<12} {'Checkpoints':<12} {'Size':<10} {'Created':<16}")
-    print("-" * 90)
-    
-    for exp in experiments:
-        print(f"{exp['name']:<30} {exp['status']:<12} {exp['checkpoints']:<12} {exp['size_mb']:8.1f}MB {exp['created'].strftime('%Y-%m-%d %H:%M')}")
-
-
-def compare_experiments(experiment_names: List[str]):
-    """Compare multiple experiments."""
-    print("\n" + "="*60)
-    print("EXPERIMENT COMPARISON")
-    print("="*60)
-    
-    experiments_data = []
-    
-    for exp_name in experiment_names:
-        exp_dir = Path(f"experiments/{exp_name}")
-        if not exp_dir.exists():
-            print(f"Experiment '{exp_name}' not found")
-            continue
-        
-        summary_file = exp_dir / "training_summary.json"
-        if summary_file.exists():
-            try:
-                with open(summary_file, 'r') as f:
-                    summary = json.load(f)
-                    experiments_data.append({
-                        'name': exp_name,
-                        'summary': summary
-                    })
-            except Exception as e:
-                print(f"Could not load summary for '{exp_name}': {e}")
-        else:
-            print(f"No summary found for '{exp_name}'")
-    
-    if len(experiments_data) < 2:
-        print("Need at least 2 experiments to compare")
-        return
-    
-    # Compare key metrics
-    print(f"\n{'Metric':<25} " + " ".join(f"{exp['name']:<15}" for exp in experiments_data))
-    print("-" * (25 + 16 * len(experiments_data)))
-    
-    metrics_to_compare = [
-        ('Total Training Time (h)', lambda x: x.get('total_training_time_hours', 'N/A')),
-        ('Final Train Loss', lambda x: x.get('final_metrics', {}).get('final_train_loss', 'N/A')),
-        ('Best Eval Loss', lambda x: x.get('final_metrics', {}).get('best_eval_loss', 'N/A')),
-        ('Total Epochs', lambda x: x.get('total_epochs', 'N/A')),
-        ('Total Steps', lambda x: x.get('total_steps', 'N/A')),
-        ('Avg Throughput', lambda x: x.get('final_metrics', {}).get('avg_throughput', 'N/A')),
-    ]
-    
-    for metric_name, extractor in metrics_to_compare:
-        values = []
-        for exp in experiments_data:
-            value = extractor(exp['summary'])
-            if isinstance(value, float):
-                values.append(f"{value:.4f}")
-            else:
-                values.append(str(value))
-        
-        print(f"{metric_name:<25} " + " ".join(f"{val:<15}" for val in values))
-
-
-def clean_old_checkpoints():
-    """Clean up old checkpoints keeping only best and latest."""
-    print("\n" + "="*60)
-    print("CLEANING OLD CHECKPOINTS")
-    print("="*60)
-    
-    checkpoints_dir = Path("checkpoints")
-    if not checkpoints_dir.exists():
-        print("No checkpoints directory found.")
-        return
-    
-    # Find all checkpoints
-    all_checkpoints = list(checkpoints_dir.glob("checkpoint_*.pt"))
-    if not all_checkpoints:
-        print("No checkpoints to clean.")
-        return
-    
-    print(f"Found {len(all_checkpoints)} checkpoints")
-    
-    # Find latest (by modification time)
-    latest_checkpoint = max(all_checkpoints, key=lambda p: p.stat().st_mtime)
-    
-    # Find best checkpoint (if exists)
-    best_checkpoint = checkpoints_dir / "best_checkpoint.pt"
-    
-    # Checkpoints to keep
-    keep_checkpoints = {latest_checkpoint}
-    if best_checkpoint.exists():
-        keep_checkpoints.add(best_checkpoint)
-    
-    # Also keep emergency and backup checkpoints
-    for checkpoint in all_checkpoints:
-        if 'emergency' in checkpoint.name or 'backup' in checkpoint.name:
-            keep_checkpoints.add(checkpoint)
-    
-    # Delete the rest
-    deleted_count = 0
-    total_size_freed = 0
-    
-    for checkpoint in all_checkpoints:
-        if checkpoint not in keep_checkpoints:
-            size_mb = checkpoint.stat().st_size / (1024*1024)
-            try:
-                checkpoint.unlink()
-                deleted_count += 1
-                total_size_freed += size_mb
-                print(f"  Deleted: {checkpoint.name} ({size_mb:.1f}MB)")
-            except Exception as e:
-                print(f"  Failed to delete {checkpoint.name}: {e}")
-    
-    print(f"\nCleaned {deleted_count} checkpoints, freed {total_size_freed:.1f}MB")
-    print(f"Kept {len(keep_checkpoints)} important checkpoints:")
-    for checkpoint in keep_checkpoints:
-        if checkpoint.exists():
-            size_mb = checkpoint.stat().st_size / (1024*1024)
-            print(f"  {checkpoint.name} ({size_mb:.1f}MB)")
-
-
-def archive_experiment(experiment_name: str):
-    """Archive an experiment to compressed backup."""
-    print(f"\n" + "="*60)
-    print(f"ARCHIVING EXPERIMENT: {experiment_name}")
-    print("="*60)
-    
-    exp_dir = Path(f"experiments/{experiment_name}")
-    if not exp_dir.exists():
-        print(f"Experiment '{experiment_name}' not found")
-        return
-    
-    archive_dir = Path("archived_experiments")
-    archive_dir.mkdir(exist_ok=True)
-    
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    archive_name = f"{experiment_name}_{timestamp}"
-    
-    try:
-        import shutil
-        
-        # Create compressed archive
-        archive_path = archive_dir / archive_name
-        shutil.make_archive(str(archive_path), 'zip', str(exp_dir))
-        
-        archive_file = Path(f"{archive_path}.zip")
-        size_mb = archive_file.stat().st_size / (1024*1024)
-        
-        print(f"Experiment archived to: {archive_file}")
-        print(f"Archive size: {size_mb:.1f}MB")
-        
-        # Create archive metadata
-        metadata = {
-            'original_name': experiment_name,
-            'archive_date': datetime.now().isoformat(),
-            'original_size_mb': sum(f.stat().st_size for f in exp_dir.rglob("*") if f.is_file()) / (1024*1024),
-            'archive_size_mb': size_mb,
-            'compression_ratio': f"{(1 - size_mb / max(1, sum(f.stat().st_size for f in exp_dir.rglob('*') if f.is_file()) / (1024*1024))) * 100:.1f}%"
-        }
-        
-        metadata_file = archive_dir / f"{archive_name}_metadata.json"
-        with open(metadata_file, 'w') as f:
-            json.dump(metadata, f, indent=2)
-        
-        print(f"Archive metadata saved to: {metadata_file}")
-        
-        # Ask if user wants to delete original
-        response = input(f"\nDelete original experiment directory? (y/N): ").strip().lower()
-        if response == 'y':
-            shutil.rmtree(exp_dir)
-            print(f"Original experiment directory deleted")
-        
-    except Exception as e:
-        print(f"Archive error: {e}")
-        traceback.print_exc()
-
-
-def test_deepspeed_setup(config):
-    """Test DeepSpeed configuration and setup."""
-    print("\n" + "="*60)
-    print("TESTING DEEPSPEED SETUP")
-    print("="*60)
-    
-    if not DEEPSPEED_AVAILABLE:
-        print("DeepSpeed not available - cannot test setup")
-        return
-    
-    # Check environment variables
-    print("Environment Variables:")
-    env_vars = ['WORLD_SIZE', 'LOCAL_RANK', 'RANK', 'MASTER_ADDR', 'MASTER_PORT']
-    for var in env_vars:
-        value = os.environ.get(var, 'Not set')
-        print(f"  {var}: {value}")
-    
-    # Test basic DeepSpeed import and version
-    try:
-        import deepspeed
-        print(f"\nDeepSpeed version: {deepspeed.__version__}")
-    except Exception as e:
-        print(f"DeepSpeed import error: {e}")
-        return
-    
-    # Test model creation
-    try:
-        print("\nTesting model creation...")
-        tokenizer = ConversationTokenizer()
-        model_config = config_to_deepseek_config(config)
-        model = DeepSeekTransformer(model_config)
-        print(f"Model created successfully: {sum(p.numel() for p in model.parameters()):,} parameters")
-    except Exception as e:
-        print(f"Model creation error: {e}")
-        return
-    
-    # Test DeepSpeed config generation
-    try:
-        print("\nTesting DeepSpeed configuration...")
-        from training.trainer import EnhancedConversationTrainer
-        
-        # Create a temporary trainer to test config generation
-        trainer = EnhancedConversationTrainer(model, tokenizer, config, logging.getLogger())
-        ds_config = trainer._create_deepspeed_config()
-        
-        print("DeepSpeed configuration generated successfully")
-        print(f"  Train batch size: {ds_config.get('train_batch_size', 'N/A')}")
-        print(f"  Micro batch size: {ds_config.get('train_micro_batch_size_per_gpu', 'N/A')}")
-        print(f"  ZeRO stage: {ds_config.get('zero_optimization', {}).get('stage', 'N/A')}")
-        print(f"  CPU offload: {ds_config.get('zero_optimization', {}).get('offload_optimizer', {}).get('device', 'none') == 'cpu'}")
-        
-    except Exception as e:
-        print(f"DeepSpeed configuration error: {e}")
-        traceback.print_exc()
-        return
-    
-    # Test DeepSpeed initialization (dry run)
-    try:
-        print("\nTesting DeepSpeed initialization (dry run)...")
-        
-        # This would normally initialize DeepSpeed, but we'll just validate the config
-        world_size = int(os.environ.get('WORLD_SIZE', 1))
-        if world_size > 1:
-            print(f"Distributed setup detected: {world_size} processes")
-        else:
-            print("Single process setup")
-        
-        print("DeepSpeed setup test completed successfully")
-        
-    except Exception as e:
-        print(f"DeepSpeed initialization test error: {e}")
-        traceback.print_exc()
-
-
-def profile_memory_usage(config):
-    """Profile memory usage during model operations."""
-    print("\n" + "="*60)
-    print("MEMORY PROFILING")
-    print("="*60)
-    
-    if not torch.cuda.is_available():
-        print("CUDA not available - limited memory profiling")
-    
-    def print_memory_stats(stage: str):
-        """Print current memory statistics."""
-        print(f"\n{stage}:")
-        
-        # System memory
-        memory = psutil.virtual_memory()
-        print(f"  System Memory: {memory.used / (1024**3):.1f}GB used / {memory.total / (1024**3):.1f}GB total ({memory.percent:.1f}%)")
-        
-        # GPU memory
-        if torch.cuda.is_available():
-            allocated = torch.cuda.memory_allocated() / (1024**3)
-            reserved = torch.cuda.memory_reserved() / (1024**3)
-            print(f"  GPU Memory: {allocated:.1f}GB allocated, {reserved:.1f}GB reserved")
-        
-        # Python process memory
-        process = psutil.Process()
-        process_memory = process.memory_info().rss / (1024**3)
-        print(f"  Process Memory: {process_memory:.1f}GB")
-    
-    print_memory_stats("Initial Memory State")
-    
-    # Create tokenizer
-    print("\nCreating tokenizer...")
-    tokenizer = ConversationTokenizer()
-    print_memory_stats("After Tokenizer Creation")
-    
-    # Create model
-    print("\nCreating model...")
-    model_config = config_to_deepseek_config(config)
-    model = DeepSeekTransformer(model_config)
-    print_memory_stats("After Model Creation")
-    
-    # Move to GPU if available
-    if torch.cuda.is_available():
-        print("\nMoving model to GPU...")
-        model = model.to('cuda')
-        print_memory_stats("After Moving to GPU")
-    
-    # Create optimizer
-    print("\nCreating optimizer...")
-    optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate)
-    print_memory_stats("After Optimizer Creation")
-    
-    # Test forward pass
-    print("\nTesting forward pass...")
-    device = next(model.parameters()).device
-    batch_size = min(config.batch_size, 2)  # Reduce batch size for profiling
-    seq_len = min(config.seq_length, 1024)  # Reduce sequence length
-    
-    dummy_input = torch.randint(0, min(tokenizer.get_vocab_size(), 1000), (batch_size, seq_len), device=device)
-    
-    with torch.no_grad():
-        output = model(dummy_input)
-    print_memory_stats("After Forward Pass")
-    
-    # Test backward pass
-    print("\nTesting backward pass...")
-    if isinstance(output, tuple):
-        logits = output[0]
-    else:
-        logits = output
-    
-    # Simple loss for backward pass
-    labels = dummy_input
-    shift_logits = logits[..., :-1, :].contiguous()
-    shift_labels = labels[..., 1:].contiguous()
-    
-    loss = torch.nn.functional.cross_entropy(
-        shift_logits.view(-1, shift_logits.size(-1)),
-        shift_labels.view(-1)
-    )
-    
-    loss.backward()
-    print_memory_stats("After Backward Pass")
-    
-    # Optimizer step
-    print("\nTesting optimizer step...")
-    optimizer.step()
-    optimizer.zero_grad()
-    print_memory_stats("After Optimizer Step")
-    
-    # Cleanup
-    print("\nCleaning up...")
-    del model, optimizer, dummy_input, output, logits, loss
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-    print_memory_stats("After Cleanup")
 
 
 def safe_model_memory_footprint(model):
@@ -1934,173 +914,8 @@ def validate_deepspeed_config(config):
     return issues
 
 
-def load_checkpoint_for_resume(checkpoint_path: Path, model, optimizer=None, scheduler=None):
-    """Load checkpoint for resuming training."""
-    print(f"Loading checkpoint: {checkpoint_path}")
-    
-    try:
-        checkpoint_data = torch.load(checkpoint_path, map_location='cpu')
-        
-        # Load model state
-        if 'model_state_dict' in checkpoint_data:
-            missing_keys, unexpected_keys = model.load_state_dict(checkpoint_data['model_state_dict'], strict=False)
-            if missing_keys:
-                print(f"Warning: Missing keys in checkpoint: {missing_keys[:5]}...")  # Show first 5
-            if unexpected_keys:
-                print(f"Warning: Unexpected keys in checkpoint: {unexpected_keys[:5]}...")  # Show first 5
-        
-        # Load optimizer state
-        if optimizer and 'optimizer_state_dict' in checkpoint_data:
-            try:
-                optimizer.load_state_dict(checkpoint_data['optimizer_state_dict'])
-                print("Optimizer state loaded")
-            except Exception as e:
-                print(f"Warning: Could not load optimizer state: {e}")
-        
-        # Load scheduler state
-        if scheduler and 'scheduler_state_dict' in checkpoint_data and checkpoint_data['scheduler_state_dict']:
-            try:
-                scheduler.load_state_dict(checkpoint_data['scheduler_state_dict'])
-                print("Scheduler state loaded")
-            except Exception as e:
-                print(f"Warning: Could not load scheduler state: {e}")
-        
-        # Return training state
-        current_epoch = checkpoint_data.get('current_epoch', 0)
-        global_step = checkpoint_data.get('global_step', 0)
-        
-        print(f"Resuming from epoch {current_epoch}, step {global_step}")
-        
-        return {
-            'current_epoch': current_epoch,
-            'global_step': global_step,
-            'metrics': checkpoint_data.get('metrics', {}),
-            'config': checkpoint_data.get('config', {})
-        }
-        
-    except Exception as e:
-        print(f"Error loading checkpoint: {e}")
-        traceback.print_exc()
-        return None
-
-
-def debug_training_setup(config):
-    """Debug training setup and configuration."""
-    print("\n" + "="*60)
-    print("DEBUG TRAINING SETUP")
-    print("="*60)
-    
-    print("Configuration:")
-    config_dict = {}
-    for attr in dir(config):
-        if not attr.startswith('_') and not callable(getattr(config, attr)):
-            config_dict[attr] = getattr(config, attr)
-    
-    for key, value in sorted(config_dict.items()):
-        print(f"  {key}: {value}")
-    
-    print("\nEnvironment:")
-    important_env_vars = ['CUDA_VISIBLE_DEVICES', 'WORLD_SIZE', 'LOCAL_RANK', 'RANK', 'MASTER_ADDR', 'MASTER_PORT']
-    for var in important_env_vars:
-        print(f"  {var}: {os.environ.get(var, 'Not set')}")
-    
-    print("\nSystem Info:")
-    print(f"  Python version: {sys.version}")
-    print(f"  PyTorch version: {torch.__version__}")
-    if DEEPSPEED_AVAILABLE:
-        print(f"  DeepSpeed version: {deepspeed.__version__}")
-    else:
-        print("  DeepSpeed: Not available")
-    
-    print(f"  CUDA available: {torch.cuda.is_available()}")
-    if torch.cuda.is_available():
-        print(f"  GPU count: {torch.cuda.device_count()}")
-        for i in range(torch.cuda.device_count()):
-            props = torch.cuda.get_device_properties(i)
-            print(f"    GPU {i}: {props.name} ({props.total_memory / 1e9:.1f}GB)")
-    
-    # Test component initialization
-    print("\nTesting Component Initialization:")
-    
-    try:
-        print("  Creating tokenizer...")
-        tokenizer = ConversationTokenizer()
-        print(f"    Success: vocab_size={tokenizer.get_vocab_size()}")
-    except Exception as e:
-        print(f"    Failed: {e}")
-    
-    try:
-        print("  Creating model config...")
-        model_config = config_to_deepseek_config(config)
-        print(f"    Success: {model_config.hidden_size}d, {model_config.num_layers} layers")
-    except Exception as e:
-        print(f"    Failed: {e}")
-    
-    try:
-        print("  Creating model...")
-        model = DeepSeekTransformer(model_config)
-        param_count = sum(p.numel() for p in model.parameters())
-        print(f"    Success: {param_count:,} parameters")
-    except Exception as e:
-        print(f"    Failed: {e}")
-    
-    # Test data loading
-    print("\nTesting Data Loading:")
-    train_data_path = Path(config.train_data_path)
-    if train_data_path.exists():
-        print(f"  Training data found: {train_data_path}")
-        file_size = train_data_path.stat().st_size / (1024*1024)
-        print(f"    Size: {file_size:.1f}MB")
-    else:
-        print(f"  Training data missing: {train_data_path}")
-        print("    Will create dummy data for testing")
-
-
 def main():
-    """Enhanced main function with comprehensive command-line features."""
-    
-    # Parse arguments
-    parser = create_argument_parser()
-    args = parser.parse_args()
-    
-    # Set logging level
-    log_levels = {'DEBUG': logging.DEBUG, 'INFO': logging.INFO, 'WARNING': logging.WARNING, 'ERROR': logging.ERROR}
-    logging.basicConfig(level=log_levels.get(args.log_level, logging.INFO))
-    
-    # Handle special commands that don't require full setup
-    if args.list_checkpoints:
-        list_available_checkpoints()
-        return
-    
-    if args.list_experiments:
-        list_experiments()
-        return
-    
-    if args.compare_experiments:
-        compare_experiments(args.compare_experiments)
-        return
-    
-    if args.clean_checkpoints:
-        clean_old_checkpoints()
-        return
-    
-    if args.archive_experiment:
-        archive_experiment(args.archive_experiment)
-        return
-    
-    if args.create_backup:
-        print("Creating backup...")
-        backup_dir = Path("backups") / datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_dir.mkdir(parents=True, exist_ok=True)
-        import shutil
-        
-        # Backup important directories
-        for source_dir in ['checkpoints', 'experiments', 'logs']:
-            if Path(source_dir).exists():
-                shutil.copytree(source_dir, backup_dir / source_dir, ignore_errors=True)
-        
-        print(f"Backup created: {backup_dir}")
-        return
+    """Enhanced main function with comprehensive error handling and CPU offloading fixes."""
     
     # HARDCODED CONFIGURATION - MODIFY THESE PARAMETERS
     # =================================================
@@ -2110,15 +925,72 @@ def main():
     
     # Override specific parameters (set to None to use preset defaults)
     override_params = {
-        'use_moe': True,        # Enable MoE
-        'num_epochs': 3,        # Training epochs (reduced for testing)
-        'learning_rate': 1e-4,  # Learning rate
-        'batch_size': 1,        # Micro batch size
-        'gradient_accumulation_steps': 16,  # Reduced for testing
+        # Core MoE and Training Settings
+        'use_moe': True,                            # Enable MoE
+        'num_epochs': 3,                            # Training epochs (reduced for testing)
+        'learning_rate': 1e-4,                      # Learning rate
+        'batch_size': 1,                            # Micro batch size
+        'gradient_accumulation_steps': 16,          # Reduced for testing
         'train_data_path': 'oasst1_data/oasst1_train.jsonl',
         'eval_data_path': 'oasst1_data/oasst1_train.jsonl',
         'capacity_factor': 1.25,
         'load_balancing_weight': 0.08,
+    
+        # Data Loading Hardcodes
+        'num_workers': 8,                           # Force 8 data loading workers
+        'pin_memory': True,                         # Always pin memory for GPU transfers
+        'prefetch_factor': 8,                       # Hardcode prefetch buffer size
+        'persistent_workers': True,                 # Keep workers alive between epochs
+    
+        # Memory Management Hardcodes
+        'max_memory_usage': 0.85,                   # Cap GPU memory usage at 85%
+        'memory_cleanup_interval': 500,             # Clean memory every 500 steps
+        'streaming_threshold_gb': 5.0,              # Force streaming for files >5GB
+
+        # Logging and Monitoring Hardcodes
+        'eval_every_n_batches': 100,                # Force evaluation frequency
+        'save_every_n_batches': 500,                # Force checkpoint frequency
+        'health_check_interval': 50,                # Force health check frequency
+        'log_level': 'INFO',                        # Force specific log level
+        'steps_per_print': 10,                      # Log every 10 steps
+
+        # Precision and Stability Hardcodes
+        'precision': 'fp32',                        # Force BF16 precision
+        'inference_precision': 'fp32',              # Force BF16 for inference
+        'auto_tune_precision': False,               # Disable auto precision tuning
+        'compile': True,                           # Disable model compilation for stability
+        'gradient_checkpointing': True,             # Force gradient checkpointing
+        'use_flash_attention': False,               # Disable for compatibility
+        'max_grad_norm': 1.0,                       # Force gradient clipping
+
+        # Checkpoint and Recovery Hardcodes
+        'save_total_limit': 8,                      # Keep 8 checkpoints
+        'backup_every_n_hours': 2,                  # Backup every 2 hours
+        'checkpoint_compression': False,             # No compression for speed
+        'async_save': False,                        # Synchronous saves for reliability
+        'early_stopping_patience': 10,             # Early stopping after 10 eval steps
+
+        # Sequence and Token Hardcodes
+        'seq_length': 2048,                         # Hard cap sequence length
+        'max_new_tokens': 512,                      # Max generation tokens
+        'temperature': 0.8,                         # Generation temperature
+        'top_p': 0.9,                              # Nucleus sampling
+
+        # Optimizer Hardcodes
+        'weight_decay': 0.01,                       # Force weight decay
+        'warmup_ratio': 0.1,                        # Force warmup ratio
+        'min_lr': 1e-6,                            # Minimum learning rate
+        'lr_scheduler': 'cosine',                   # Force cosine scheduler
+
+        # MoE Routing Hardcodes
+        'moe_top_k': 1,                            # Force top-1 routing for efficiency
+        'num_experts': 8,                          # Force 8 experts
+        'expert_parallel_size': 2,                 # Force expert parallelism
+
+        # Error Handling Hardcodes
+        'max_retries': 3,                          # Max retries on failure
+        'skip_nan_batches': True,                  # Skip batches with NaN
+        'emergency_lr_factor': 0.1,                # Emergency LR reduction factor
     }
     
     # DeepSpeed and optimization settings - THESE ARE MANUAL OVERRIDES
@@ -2127,41 +999,41 @@ def main():
         'cpu_offload': True,             # FORCE CPU offloading
         'cpu_offload_optimizer': True,   # FORCE CPU optimizer offloading
         'cpu_offload_parameters': True,  # FORCE CPU parameter offloading
-        'zero_stage': 2,                 # FORCE ZeRO-2
+        'zero_stage': 2,                 # FORCE ZeRO-3
         'nvme_path': "Deepspeed/Tmp",               # Set to NVMe path if available
+    
+            'communication_data_type': 'fp32',          # Force FP32 for communication
+        'bucket_size': 100000000,                   # Fixed bucket size
+        'overlap_alltoall': True,                   # For MoE communication overlap
+        'enable_expert_tensor_parallelism': True,   # For MoE expert parallelism
+
+        # ZeRO-3 specific hardcodes
+        'stage3_prefetch_bucket_size': 50000000,    # Control prefetch size
+        'stage3_param_persistence_threshold': 10000, # Parameter persistence
+        'stage3_max_live_parameters': 1000000000,   # Max live parameters
+        'stage3_max_reuse_distance': 1000,          # Memory reuse distance
+    
+        # Stability hardcodes
+        'round_robin_gradients': True,              # Distribute gradients evenly
+        'ignore_unused_parameters': True,           # Ignore unused params
+        'find_unused_parameters': False,            # Don't auto-find unused params
     }
+    
+    # Optimization flags
+    optimize_for_long_sequences = True
+    check_environment = True
+    estimate_time = True
+    dry_run = False  # Set to True to test configuration without training
+    
+    # Data processing flags
+    validate_data_path = 'oasst1_data/oasst1_validation_sample.jsonl'  # Set to data file path to validate
+    process_oasst = None      # Set to (input_file, output_file) tuple to process
+    create_report = True
     
     # =================================================
     # END HARDCODED CONFIGURATION
     
-    # Generate experiment name
-    if args.continue_as:
-        experiment_name = args.continue_as
-    else:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        if args.resume:
-            experiment_name = f'Resumed_DeepSpeed_MoE_{timestamp}'
-        else:
-            experiment_name = f'DeepSpeed_MoE_{override_params.get("num_experts", 8)}E_CPU_Offload_Fixed_{timestamp}'
-    
-    # Handle data processing commands
-    if args.process_data:
-        input_file, output_file = args.process_data
-        print(f"Processing data: {input_file} -> {output_file}")
-        try:
-            result = process_oasst_data(input_file, output_file)
-            if result:
-                print("Data processing completed successfully")
-            else:
-                print("Data processing failed")
-        except Exception as e:
-            print(f"Data processing error: {e}")
-        return
-    
-    if args.create_shards:
-        train_data_path = Path(override_params['train_data_path'])
-        create_data_shards(train_data_path, args.create_shards)
-        return
+    experiment_name = f'DeepSpeed_MoE_{override_params.get("num_experts", 8)}E_CPU_Offload_Fixed_{datetime.now().strftime("%Y%m%d_%H%M%S")}'
     
     # Setup distributed environment first
     dist_manager = DeepSpeedIntegrationManager()
@@ -2178,7 +1050,7 @@ def main():
         setup_deepspeed_logging()
         
         print("\n" + "="*80)
-        print("ENHANCED DEEPSPEED TRAINING SYSTEM - VERSION 2.0")
+        print("FIXED CPU OFFLOADING DEEPSPEED TRAINING SYSTEM - VERSION 2.0")
         print("="*80)
         print(f"Experiment: {experiment_name}")
         print(f"DeepSpeed Available: {DEEPSPEED_AVAILABLE}")
@@ -2205,49 +1077,6 @@ def main():
         for key, value in dist_info.items():
             print(f"  {key}: {value}")
     
-    # Handle environment check
-    if args.check_environment:
-        if should_log:
-            env_status = validate_environment()
-            print(f"Environment validation: {env_status}")
-        return
-    
-    # Handle debug setup
-    if args.debug_setup:
-        # Load base configuration for debugging
-        if hasattr(ConfigPresets, config_choice):
-            config = getattr(ConfigPresets, config_choice)()
-        else:
-            print(f"Unknown config preset: {config_choice}")
-            return
-        
-        # Apply overrides
-        for key, value in override_params.items():
-            if hasattr(config, key):
-                setattr(config, key, value)
-        
-        debug_training_setup(config)
-        return
-    
-    # Handle test deepspeed
-    if args.test_deepspeed:
-        # Load base configuration for testing
-        if hasattr(ConfigPresets, config_choice):
-            config = getattr(ConfigPresets, config_choice)()
-        else:
-            print(f"Unknown config preset: {config_choice}")
-            return
-        
-        # Apply overrides
-        for key, value in {**override_params, **manual_deepspeed_overrides}.items():
-            if hasattr(config, key):
-                setattr(config, key, value)
-            else:
-                setattr(config, key, value)
-        
-        test_deepspeed_setup(config)
-        return
-    
     try:
         # STEP 1: Create base configuration
         if should_log:
@@ -2261,393 +1090,354 @@ def main():
         else:
             raise ValueError(f"Unknown config preset: {config_choice}")
         
-        # Handle resume functionality
-        resume_state = None
-        if args.resume and not args.force_restart:
-            checkpoint_path = find_checkpoint_path(args.resume, experiment_name)
-            if checkpoint_path:
-                if should_log:
-                    print(f"Found checkpoint for resume: {checkpoint_path}")
-                
-                # Analyze checkpoint if requested
-                if args.analyze_model:
-                    analyze_model_checkpoint(checkpoint_path)
-                    return
-                
-                # For resume, we'll load the checkpoint after model creation
-                # but we can extract some config info now
-                try:
-                    checkpoint_data = torch.load(checkpoint_path, map_location='cpu')
-                    if 'config' in checkpoint_data:
-                        checkpoint_config = checkpoint_data['config']
-                        if should_log:
-                            print("Using configuration from checkpoint")
-                        # Update config with checkpoint values for compatibility
-                        for key, value in checkpoint_config.items():
-                            if hasattr(config, key):
-                                setattr(config, key, value)
-                except Exception as e:
-                    if should_log:
-                        print(f"Could not load config from checkpoint: {e}")
-                        print("Using default configuration")
-            else:
-                if should_log:
-                    print(f"Checkpoint '{args.resume}' not found, starting fresh training")
-                args.resume = None
+        if should_log:
+            print(f"Base configuration loaded: {config_choice}")
+            print(f"  Default use_deepspeed: {getattr(config, 'use_deepspeed', False)}")
+            print(f"  Default cpu_offload: {getattr(config, 'cpu_offload', False)}")
+            print(f"  Default zero_stage: {getattr(config, 'zero_stage', 0)}")
         
-        
-        # Apply parameter overrides
+        # STEP 2: Apply parameter overrides
         if should_log:
             print(f"\n{'='*60}")
             print("STEP 2: APPLYING PARAMETER OVERRIDES")
             print(f"{'='*60}")
         
-        for key, value in override_params.items():
-            if value is not None:
+        if override_params:
+            for key, value in override_params.items():
                 if hasattr(config, key):
                     old_value = getattr(config, key)
                     setattr(config, key, value)
                     if should_log:
-                        print(f"OVERRIDE: {key}: {old_value} -> {value}")
+                        print(f"  {key}: {old_value} -> {value}")
                 else:
-                    setattr(config, key, value)
                     if should_log:
-                        print(f"NEW PARAM: {key} = {value}")
+                        print(f"  WARNING: Unknown parameter '{key}' ignored")
         
-        # STEP 3: Auto-configure DeepSpeed optimizations
+        # Update experiment name
+        config.experiment_name = experiment_name
+        
+        # STEP 3: Apply DeepSpeed overrides BEFORE auto-configuration
         if should_log:
             print(f"\n{'='*60}")
-            print("STEP 3: AUTO-CONFIGURING DEEPSPEED OPTIMIZATIONS")
+            print("STEP 3: APPLYING DEEPSPEED MANUAL OVERRIDES")
             print(f"{'='*60}")
         
-        # Create DeepSpeed configuration wizard
-        wizard = AdaptiveDeepSpeedWizard(resource_manager)
+        # Apply manual DeepSpeed overrides
+        for key, value in manual_deepspeed_overrides.items():
+            if hasattr(config, key):
+                old_value = getattr(config, key)
+                setattr(config, key, value)
+                if should_log:
+                    print(f"  MANUAL OVERRIDE: {key}: {old_value} -> {value}")
+            else:
+                # Create new attribute for DeepSpeed-specific settings
+                setattr(config, key, value)
+                if should_log:
+                    print(f"  NEW ATTRIBUTE: {key} = {value}")
         
-        # Apply DeepSpeed auto-configuration with manual overrides
+        # STEP 4: Auto-configure with resource manager (should preserve manual overrides)
+        if should_log:
+            print(f"\n{'='*60}")
+            print("STEP 4: AUTO-CONFIGURING WITH RESOURCE MANAGER")
+            print(f"{'='*60}")
+        
+        wizard = AdaptiveDeepSpeedWizard(resource_manager)
         config = wizard.auto_configure_deepspeed(
             config, 
-            natural_description="MoE training with CPU offloading for memory efficiency",
+            natural_description=f"Training {config_choice} model with forced CPU offloading",
             manual_overrides=manual_deepspeed_overrides
         )
         
-        # Validate configuration
-        config_issues = validate_deepspeed_config(config)
-        if config_issues and should_log:
-            print(f"\n⚠️  Configuration Issues Detected:")
-            for issue in config_issues:
-                print(f"   • {issue}")
-        
-        # STEP 4: Create training components
+        # STEP 5: Validate configuration
         if should_log:
             print(f"\n{'='*60}")
-            print("STEP 4: CREATING TRAINING COMPONENTS")
+            print("STEP 5: CONFIGURATION VALIDATION")
+            print(f"{'='*60}")
+            
+            # Validate DeepSpeed configuration
+            config_issues = validate_deepspeed_config(config)
+            if config_issues:
+                print("Configuration Issues Found:")
+                for issue in config_issues:
+                    print(f"  WARNING: {issue}")
+            else:
+                print("Configuration validation passed")
+            
+            # Show final critical settings
+            critical_settings = [
+                'use_deepspeed', 'cpu_offload', 'cpu_offload_optimizer', 
+                'cpu_offload_parameters', 'zero_stage', 'precision',
+                'batch_size', 'gradient_accumulation_steps'
+            ]
+            
+            print("\nFinal Critical Settings:")
+            for setting in critical_settings:
+                value = getattr(config, setting, "NOT SET")
+                print(f"  {setting}: {value}")
+        
+        # Environment validation
+        if check_environment:
+            if should_log:
+                print(f"\n{'='*60}")
+                print("ENVIRONMENT VALIDATION")
+                print(f"{'='*60}")
+            
+            try:
+                env_status = validate_environment()  # Fixed: removed config parameter
+                if should_log:
+                    print(f"Environment validation: {env_status}")
+            except Exception as e:
+                if should_log:
+                    print(f"Environment validation failed: {e}")
+                # Continue anyway - not critical
+                env_status = "validation_failed"
+        
+        # Initialize training components
+        if should_log:
+            print(f"\n{'='*60}")
+            print("INITIALIZING TRAINING COMPONENTS")
             print(f"{'='*60}")
         
-        # Create tokenizer
-        if should_log:
-            print("Creating tokenizer...")
+        # Initialize tokenizer
         try:
             tokenizer = ConversationTokenizer()
+            if hasattr(config, 'vocab_size'):
+                config.vocab_size = tokenizer.vocab_size
             if should_log:
-                print(f"   ✓ Tokenizer created: vocab_size={tokenizer.get_vocab_size()}")
+                print(f"Tokenizer initialized: vocab_size={config.vocab_size}")
         except Exception as e:
-            print(f"   ✗ Tokenizer creation failed: {e}")
-            return
+            if should_log:
+                print(f"Tokenizer initialization failed: {e}")
+            raise
         
-        # Create model configuration
-        if should_log:
-            print("Creating model configuration...")
+        # Initialize model with safe memory calculation
         try:
             model_config = config_to_deepseek_config(config)
-            if should_log:
-                print(f"   ✓ Model config: {model_config.hidden_size}d, {model_config.num_layers} layers")
-                if model_config.use_moe:
-                    print(f"      MoE enabled: {model_config.num_experts} experts, top-{model_config.moe_top_k}")
-        except Exception as e:
-            print(f"   ✗ Model config creation failed: {e}")
-            traceback.print_exc()
-            return
-        
-        # Create model
-        if should_log:
-            print("Creating model...")
-        try:
             model = DeepSeekTransformer(model_config)
-            param_count = sum(p.numel() for p in model.parameters())
-            trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
             
+            # Get model info safely
             if should_log:
-                print(f"   ✓ Model created successfully")
-                print(f"      Total parameters: {param_count:,}")
-                print(f"      Trainable parameters: {trainable_params:,}")
-                
-                # Memory footprint estimation
-                memory_info = safe_model_memory_footprint(model)
-                if 'total_size_mb' in memory_info:
-                    print(f"      Estimated memory: {memory_info['total_size_mb']:.1f} MB")
+                try:
+                    memory_info = safe_model_memory_footprint(model)
+                    print(f"Model initialized:")
+                    print(f"  Total parameters: {memory_info.get('total_parameters', 'Unknown')}")
+                    if 'total_size_mb' in memory_info and memory_info['total_size_mb'] != 'unknown':
+                        print(f"  Memory footprint: {memory_info['total_size_mb']:.1f} MB")
+                    if 'method' in memory_info:
+                        print(f"  Calculation method: {memory_info['method']}")
+                    if 'error' in memory_info:
+                        print(f"  Calculation error: {memory_info['error']}")
+                except Exception as mem_error:
+                    print(f"Model initialized, but memory calculation failed: {mem_error}")
+                    print(f"  Model type: {type(model)}")
         except Exception as e:
-            print(f"   ✗ Model creation failed: {e}")
-            traceback.print_exc()
-            return
+            if should_log:
+                print(f"Model initialization failed: {e}")
+            raise
         
-        # Handle benchmark performance
-        if args.benchmark_performance:
-            benchmark_training_performance(config)
-            return
-        
-        # Handle memory analysis
-        if args.memory_analysis:
-            profile_memory_usage(config)
-            return
-        
-        # Handle model analysis without checkpoint
-        if args.analyze_model and not args.checkpoint:
-            print("\nModel Analysis (Current Configuration):")
-            print(f"  Architecture: {model_config.hidden_size}d, {model_config.num_layers} layers")
-            print(f"  Parameters: {param_count:,}")
-            print(f"  MoE: {'Yes' if model_config.use_moe else 'No'}")
-            if model_config.use_moe:
-                print(f"    Experts: {model_config.num_experts}")
-                print(f"    Top-K: {model_config.moe_top_k}")
-            return
-        
-        # Handle model export
-        if args.export_model:
-            if args.checkpoint:
-                checkpoint_path = find_checkpoint_path(args.checkpoint, experiment_name)
-                if checkpoint_path:
-                    export_model_for_inference(checkpoint_path, Path(args.output_dir), args.format)
+        # Performance benchmarking
+        if estimate_time and not dry_run:
+            if should_log:
+                print(f"\n{'='*60}")
+                print("PERFORMANCE BENCHMARKING")
+                print(f"{'='*60}")
+            
+            try:
+                performance_stats = benchmark_actual_performance(
+                    model, tokenizer, config, dist_manager, samples=5  # Reduced samples
+                )
+                
+                # Estimate total training time
+                if 'error' not in performance_stats:
+                    total_batches = 100  # Rough estimate for testing
+                    estimated_total_time = performance_stats['single_step_time'] * total_batches
+                    
+                    if should_log:
+                        print(f"Training time estimate: {estimated_total_time/3600:.2f} hours")
                 else:
-                    print(f"Checkpoint '{args.checkpoint}' not found for export")
-            else:
-                print("No checkpoint specified for export")
-            return
+                    if should_log:
+                        print(f"Performance benchmarking had errors: {performance_stats.get('error', 'Unknown')}")
+                        
+            except Exception as e:
+                if should_log:
+                    print(f"Performance benchmarking failed: {e}")
         
-        # STEP 5: Prepare training data
+        # Data validation and creation
         if should_log:
             print(f"\n{'='*60}")
-            print("STEP 5: PREPARING TRAINING DATA")
+            print("DATA SETUP")
             print(f"{'='*60}")
         
-        # Check if training data exists, create dummy data if not
+        # Check if training data exists, create if not
         train_data_path = Path(config.train_data_path)
         if not train_data_path.exists():
             if should_log:
-                print(f"Training data not found at {train_data_path}")
-                print("Creating dummy training data for testing...")
-            create_dummy_training_data(train_data_path, num_samples=100)
-        
-        # Validate and report on data
-        if args.validate_data or args.data_report:
+                print(f"Training data not found at {config.train_data_path}")
+            create_dummy_training_data(train_data_path, num_samples=20)
+        else:
             if should_log:
-                print("Validating training data...")
+                print(f"Training data found: {train_data_path}")
+        
+        # Validate data if requested
+        if validate_data_path and Path(validate_data_path).exists():
             try:
-                validation_result = validate_data_comprehensive(str(train_data_path))
+                validation_results = validate_data_comprehensive(validate_data_path, tokenizer)
                 if should_log:
-                    print(f"Data validation: {validation_result.get('status', 'unknown')}")
-                
-                if args.data_report:
-                    report = create_data_summary_report(str(train_data_path))
-                    print(f"Data summary report: {report}")
+                    print(f"Data validation completed: {validation_results}")
             except Exception as e:
                 if should_log:
                     print(f"Data validation failed: {e}")
-            
-            if args.validate_data or args.data_report:
-                return
         
-        # Create datasets
-        if should_log:
-            print("Creating datasets...")
-        try:
-            # Use streaming dataset for large data
-            train_dataset = StreamingConversationDataset(
-                data_path=str(train_data_path),
-                tokenizer=tokenizer,
-                max_length=config.seq_length,
-                conversation_format="oasst"
-            )
-            
-            # Create eval dataset if path exists
-            eval_dataset = None
-            eval_data_path = Path(config.eval_data_path) if hasattr(config, 'eval_data_path') else train_data_path
-            if eval_data_path.exists() and eval_data_path != train_data_path:
-                eval_dataset = StreamingConversationDataset(
-                    data_path=str(eval_data_path),
-                    tokenizer=tokenizer,
-                    max_length=config.seq_length,
-                    conversation_format="oasst"
-                )
-            
+        # Training execution
+        if not dry_run:
             if should_log:
-                print(f"   ✓ Training dataset created")
-                if eval_dataset:
-                    print(f"   ✓ Evaluation dataset created")
-                else:
-                    print(f"   • Using training data for evaluation")
-        except Exception as e:
-            print(f"   ✗ Dataset creation failed: {e}")
-            traceback.print_exc()
-            return
-        
-        # STEP 6: Initialize trainer
-        if should_log:
-            print(f"\n{'='*60}")
-            print("STEP 6: INITIALIZING TRAINER")
-            print(f"{'='*60}")
-        
-        trainer = None
-        if EnhancedConversationTrainer is not None:
+                print(f"\n{'='*80}")
+                print("STARTING TRAINING EXECUTION")
+                print(f"{'='*80}")
+            
+            # Initialize trainer with enhanced capabilities and fallback
+            trainer = None
             try:
-                if should_log:
-                    print("Creating enhanced trainer...")
-                
-                trainer = EnhancedConversationTrainer(
-                    model=model,
-                    tokenizer=tokenizer,
-                    config=config,
-                    logger=logging.getLogger(__name__),
-                    experiment_name=experiment_name,
-                    distributed_manager=dist_manager
-                )
-                
-                if should_log:
-                    print("   ✓ Enhanced trainer created successfully")
-            except Exception as e:
-                if should_log:
-                    print(f"   ✗ Enhanced trainer creation failed: {e}")
-                    print("   • Falling back to basic trainer...")
-                trainer = None
-        
-        # Fallback to basic trainer if enhanced trainer failed
-        if trainer is None:
-            try:
-                trainer = create_fallback_trainer(model, tokenizer, config)
-                if should_log:
-                    print("   ✓ Basic fallback trainer created")
-            except Exception as e:
-                print(f"   ✗ All trainer creation failed: {e}")
-                traceback.print_exc()
-                return
-        
-        # Handle resume state loading
-        if args.resume and resume_state is None:
-            checkpoint_path = find_checkpoint_path(args.resume, experiment_name)
-            if checkpoint_path and hasattr(trainer, 'load_checkpoint'):
-                try:
-                    resume_state = trainer.load_checkpoint(checkpoint_path)
+                if EnhancedConversationTrainer:
+                    trainer = EnhancedConversationTrainer(model, tokenizer, config, logging.getLogger(__name__))
                     if should_log:
-                        print(f"   ✓ Checkpoint loaded for resume")
+                        print("Enhanced trainer initialized successfully")
+                else:
+                    raise ImportError("Enhanced trainer not available")
+                    
+            except Exception as e:
+                if should_log:
+                    print(f"Enhanced trainer failed, creating fallback trainer: {e}")
+                trainer = create_fallback_trainer(model, tokenizer, config)
+            
+            # Debug training setup if available
+            if hasattr(trainer, 'debug_training_setup'):
+                try:
+                    trainer.debug_training_setup()
                 except Exception as e:
                     if should_log:
-                        print(f"   ✗ Failed to load checkpoint: {e}")
-        
-        # STEP 7: Performance estimation
-        if should_log:
-            print(f"\n{'='*60}")
-            print("STEP 7: PERFORMANCE ESTIMATION")
-            print(f"{'='*60}")
-        
-        if not args.dry_run:
+                        print(f"Debug setup failed: {e}")
+            
+            # Setup datasets
             try:
-                # Estimate training time
-                perf_stats = benchmark_actual_performance(model, tokenizer, config, dist_manager, samples=5)
+                train_dataset = ConversationDataset(
+                    str(train_data_path), tokenizer, config, "train"
+                )
+                if should_log:
+                    print(f"Training dataset loaded: {len(train_dataset)} samples")
                 
-                if 'single_step_time' in perf_stats:
-                    estimated_time = estimate_training_time(
-                        config.num_epochs, 
-                        len(train_dataset) if hasattr(train_dataset, '__len__') else 1000,
-                        config.batch_size,
-                        config.gradient_accumulation_steps,
-                        perf_stats['single_step_time']
+                # Load evaluation dataset if available
+                eval_dataset = None
+                eval_data_path = Path(config.eval_data_path)
+                if eval_data_path.exists():
+                    eval_dataset = ConversationDataset(
+                        str(eval_data_path), tokenizer, config, "eval"
                     )
-                    
                     if should_log:
-                        print(f"   Estimated training time: {estimated_time.get('estimated_hours', 'unknown')} hours")
-                        print(f"   Step time: {perf_stats['single_step_time']:.3f}s")
-                        print(f"   Memory usage: {perf_stats.get('current_memory_gb', 0):.1f}GB")
+                        print(f"Evaluation dataset loaded: {len(eval_dataset)} samples")
+                else:
+                    if should_log:
+                        print("No evaluation dataset found, skipping")
+                        
             except Exception as e:
                 if should_log:
-                    print(f"   Performance estimation failed: {e}")
-        
-        # STEP 8: Start training or dry run
-        if should_log:
-            print(f"\n{'='*60}")
-            print("STEP 8: STARTING TRAINING")
-            print(f"{'='*60}")
-        
-        if args.dry_run:
-            print("DRY RUN COMPLETED - Configuration validated successfully")
-            print(f"Experiment: {experiment_name}")
-            print("Ready to start actual training")
-            return
-        
-        # Actual training
-        try:
-            if should_log:
-                print(f"Starting training for experiment: {experiment_name}")
-                print(f"Configuration: {config_choice} + overrides")
-                print(f"DeepSpeed: {'Enabled' if getattr(config, 'use_deepspeed', False) else 'Disabled'}")
-                print(f"MoE: {'Enabled' if getattr(config, 'use_moe', False) else 'Disabled'}")
+                    print(f"Dataset loading failed: {e}")
+                raise
+            
+            # Create data loaders for debugging if available
+            if should_log and debug_dataloader:
+                try:
+                    from torch.utils.data import DataLoader
+                    test_loader = DataLoader(train_dataset, batch_size=1, shuffle=False)
+                    debug_dataloader(test_loader, tokenizer, max_batches=2)
+                except Exception as e:
+                    print(f"Dataloader debugging failed: {e}")
             
             # Start training
-            trainer.train(
-                train_dataset=train_dataset,
-                eval_dataset=eval_dataset,
-                resume_state=resume_state
-            )
-            
-            if should_log:
-                print(f"\n{'='*60}")
-                print("TRAINING COMPLETED SUCCESSFULLY")
-                print(f"{'='*60}")
-                print(f"Experiment: {experiment_name}")
-                print("Check the experiments directory for results and checkpoints")
-        
-        except KeyboardInterrupt:
-            if should_log:
-                print(f"\n{'='*60}")
-                print("TRAINING INTERRUPTED BY USER")
-                print(f"{'='*60}")
-                print("Attempting to save emergency checkpoint...")
-            
-            # Try to save emergency checkpoint
             try:
-                if hasattr(trainer, 'save_emergency_checkpoint'):
-                    trainer.save_emergency_checkpoint()
-                    print("Emergency checkpoint saved")
+                if should_log:
+                    print(f"\nStarting training with:")
+                    print(f"  CPU offloading: {getattr(config, 'cpu_offload', False)}")
+                    print(f"  DeepSpeed enabled: {getattr(config, 'use_deepspeed', False)}")
+                    print(f"  ZeRO stage: {getattr(config, 'zero_stage', 'N/A')}")
+                    print(f"  Trainer type: {type(trainer).__name__}")
+                
+                trainer.train(train_dataset, eval_dataset)
+                
+                if should_log:
+                    print("Training completed successfully!")
+                    
+            except KeyboardInterrupt:
+                if should_log:
+                    print("Training interrupted by user")
             except Exception as e:
-                print(f"Failed to save emergency checkpoint: {e}")
+                if should_log:
+                    print(f"Training failed: {e}")
+                    traceback.print_exc()
+                raise
         
-        except Exception as e:
+        else:
             if should_log:
-                print(f"\n{'='*60}")
-                print("TRAINING FAILED")
-                print(f"{'='*60}")
-                print(f"Error: {e}")
-                traceback.print_exc()
+                print(f"\n{'='*80}")
+                print("DRY RUN COMPLETED - NO TRAINING EXECUTED")
+                print("Configuration successfully validated and components initialized")
+                print(f"{'='*80}")
+        
+        # Save final configuration
+        if should_log:
+            config_save_path = f"experiments/{experiment_name}/final_config.yaml"
+            Path(config_save_path).parent.mkdir(parents=True, exist_ok=True)
             
-            # Try to save emergency checkpoint
             try:
-                if hasattr(trainer, 'save_emergency_checkpoint'):
-                    trainer.save_emergency_checkpoint()
-                    print("Emergency checkpoint saved")
-            except:
-                pass
-        
-        finally:
-            # Cleanup
-            cleanup_memory()
-            
-            if should_log:
-                print(f"\n{'='*60}")
-                print("CLEANUP COMPLETED")
-                print(f"{'='*60}")
+                if hasattr(config, 'save'):
+                    config.save(config_save_path)
+                    print(f"Final configuration saved: {config_save_path}")
+                else:
+                    # Manual save as JSON if YAML save not available
+                    import json
+                    config_dict = {
+                        attr: getattr(config, attr) 
+                        for attr in dir(config) 
+                        if not attr.startswith('_') and not callable(getattr(config, attr))
+                    }
+                    with open(config_save_path.replace('.yaml', '.json'), 'w') as f:
+                        json.dump(config_dict, f, indent=2, default=str)
+                    print(f"Final configuration saved as JSON: {config_save_path.replace('.yaml', '.json')}")
+            except Exception as e:
+                print(f"Failed to save configuration: {e}")
+                
+            # Print configuration summary
+            print(f"\n{'='*60}")
+            print("CONFIGURATION SUMMARY")
+            print(f"{'='*60}")
+            print(f"Experiment: {experiment_name}")
+            print(f"Model: {config_choice} with {getattr(config, 'num_experts', 8)} MoE experts")
+            print(f"CPU Offloading: {getattr(config, 'cpu_offload', False)}")
+            print(f"CPU Optimizer Offloading: {getattr(config, 'cpu_offload_optimizer', False)}")
+            print(f"CPU Parameter Offloading: {getattr(config, 'cpu_offload_parameters', False)}")
+            print(f"ZeRO Stage: {getattr(config, 'zero_stage', 'N/A')}")
+            print(f"Precision: {getattr(config, 'precision', 'auto')}")
+            print(f"Micro Batch Size: {getattr(config, 'batch_size', 'N/A')}")
+            print(f"Gradient Accumulation: {getattr(config, 'gradient_accumulation_steps', 'N/A')}")
+            print(f"Learning Rate: {getattr(config, 'learning_rate', 'N/A')}")
+            print(f"Epochs: {getattr(config, 'num_epochs', 'N/A')}")
+            print(f"{'='*60}")
     
     except Exception as e:
-        print(f"Critical error in main: {e}")
-        traceback.print_exc()
-        sys.exit(1)
+        if should_log:
+            print(f"CRITICAL ERROR: {e}")
+            print("Full traceback:")
+            traceback.print_exc()
+        
+        # Emergency cleanup
+        cleanup_memory()
+        raise
+    
+    finally:
+        # Final cleanup
+        cleanup_memory()
+        if should_log:
+            print("Final cleanup completed")
 
 
 if __name__ == "__main__":
