@@ -919,9 +919,9 @@ def main():
         'batch_size': 1,        # Micro batch size
         'gradient_accumulation_steps': 16,  # Reduced for testing
         'train_data_path': 'oasst1_data/oasst1_train.jsonl',
-        'eval_data_path': 'data/eval.jsonl',
+        'eval_data_path': 'oasst1_data/oasst1_train.jsonl',
 
-        'capacity_factor': 1.0,
+        'capacity_factor': 1.25,
         'load_balancing_weight': 0.08,
     }
     
@@ -932,7 +932,7 @@ def main():
         'cpu_offload_optimizer': True,   # FORCE CPU optimizer offloading
         'cpu_offload_parameters': True,  # FORCE CPU parameter offloading
         'zero_stage': 2,                 # FORCE ZeRO-3
-        'nvme_path': None,               # Set to NVMe path if available
+        'nvme_path': "Deepspeed/Tmp",               # Set to NVMe path if available
     }
     
     # Optimization flags
@@ -942,7 +942,7 @@ def main():
     dry_run = False  # Set to True to test configuration without training
     
     # Data processing flags
-    validate_data_path = None  # Set to data file path to validate
+    validate_data_path = 'oasst1_data/oasst1_validation_sample.jsonl'  # Set to data file path to validate
     process_oasst = None      # Set to (input_file, output_file) tuple to process
     create_report = True
     
