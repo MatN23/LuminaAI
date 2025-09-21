@@ -15,6 +15,7 @@
 - [Installation](#installation)
 - [Configuration](#configuration)
 - [Training Models](#training-models)
+- [Command Line Interface](#command-line-interface)
 - [Monitoring and Analytics](#monitoring-and-analytics)
 - [Advanced Features](#advanced-features)
 - [API Reference](#api-reference)
@@ -28,14 +29,16 @@
 
 ### Core Capabilities
 
-- **🔥 DeepSeek-Style Transformers**: Advanced transformer architecture with optimized attention mechanisms
-- **🧠 Mixture of Experts (MoE)**: Scalable MoE implementation with intelligent routing
-- **⚡ DeepSpeed Integration**: Full DeepSpeed support with ZeRO optimization stages
-- **🚀 Production Ready**: Enterprise-grade reliability with comprehensive error handling
-- **📊 Advanced Monitoring**: Real-time metrics, health monitoring, and performance tracking
-- **🎯 Adaptive Training**: Intelligent training orchestration with automated optimization
-- **💾 Smart Checkpointing**: Universal checkpoint format with automatic recovery
-- **🔧 Flexible Configuration**: YAML-based configuration with validation and presets
+- **DeepSeek-Style Transformers**: Advanced transformer architecture with optimized attention mechanisms
+- **Mixture of Experts (MoE)**: Scalable MoE implementation with intelligent routing
+- **DeepSpeed Integration**: Full DeepSpeed support with ZeRO optimization stages
+- **Production Ready**: Enterprise-grade reliability with comprehensive error handling
+- **Advanced Monitoring**: Real-time metrics, health monitoring, and performance tracking
+- **Adaptive Training**: Intelligent training orchestration with automated optimization
+- **Smart Checkpointing**: Universal checkpoint format with automatic recovery
+- **Flexible Configuration**: Python-based configuration with validation and presets
+- **Enhanced CLI**: Comprehensive command-line interface with over 40 commands
+- **Interactive Chat**: Advanced chat interface for model testing and evaluation
 
 ### Model Architectures
 
@@ -60,34 +63,31 @@ LuminaAI follows a modular architecture designed for scalability and maintainabi
 
 ```
 LuminaAI/
-├── Src/
-│   └── Main_Scripts/
-│       ├── main.py                 # Enhanced CLI with DeepSpeed integration
-│       ├── chat.py                 # Interactive chat interface for testing
-│       ├── core/                   # Core model and data components
-│       │   ├── model.py           # DeepSeek transformer with MoE
-│       │   ├── tokenizer.py       # GPT-4 compatible tokenization
-│       │   └── dataset.py         # Advanced dataset handling
-│       ├── training/              # Enhanced training system
-│       │   ├── trainer.py         # DeepSpeed-enabled trainer
-│       │   ├── orchestrator.py    # Training coordination and monitoring
-│       │   ├── checkpoint.py      # Advanced checkpoint management
-│       │   ├── config_manager.py  # Configuration presets and validation
-│       │   └── training_loops.py  # Optimized training loops
-│       ├── monitoring/            # Comprehensive monitoring
-│       │   ├── logger.py          # Enhanced logging with DeepSpeed metrics
-│       │   ├── visualizations.py  # Real-time training visualizations
-│       │   └── moe_analytics.py   # MoE routing analysis
-│       ├── utils/                 # Enhanced utilities
-│       │   ├── data_processing.py # Data validation and processing
-│       │   ├── environment.py     # System validation and optimization
-│       │   ├── reporting.py       # Performance analysis and reporting
-│       │   └── deepspeed_utils.py # DeepSpeed helper functions
-│       └── config/               # Configuration management
-│           ├── model_configs.yaml    # Model architecture presets
-│           ├── deepspeed_configs.yaml # DeepSpeed optimization templates
-│           └── training_configs.yaml  # Training parameter templates
-├── configs/                      # User configuration files
+├── Main.py                       # Enhanced main script with comprehensive CLI
+├── Readme.md                    # This documentation
+├── config/
+│   ├── config_manager.py        # Configuration classes and presets
+│   └── __init__.py
+├── core/                        # Core model and data components
+│   ├── model.py                 # DeepSeek transformer with MoE
+│   ├── tokenizer.py             # GPT-4 compatible tokenization
+│   ├── dataset.py               # Advanced dataset handling
+│   └── __init__.py
+├── training/                    # Enhanced training system
+│   ├── trainer.py               # DeepSpeed-enabled trainer
+│   ├── orchestrator.py          # Training coordination and monitoring
+│   ├── checkpoint.py            # Advanced checkpoint management
+│   └── __init__.py
+├── monitoring/                  # Comprehensive monitoring
+│   ├── logger.py                # Enhanced logging with health metrics
+│   ├── visualizations.py        # Real-time training visualizations
+│   ├── moe_analytics.py         # MoE routing analysis
+│   └── __init__.py
+├── utils/                       # Enhanced utilities
+│   ├── data_processing.py       # Data validation and processing
+│   ├── environment.py           # System validation and optimization
+│   ├── reporting.py             # Performance analysis and reporting
+│   └── __init__.py
 ├── data/                        # Training data and caches
 │   ├── shards/                  # Data sharding for large datasets
 │   ├── processed/               # Processed and validated data
@@ -97,69 +97,18 @@ LuminaAI/
 │   ├── emergency/               # Emergency recovery checkpoints
 │   └── deepspeed/               # DeepSpeed universal checkpoints
 ├── experiments/                 # Experiment tracking and results
-├── logs/                       # Comprehensive logging
-│   ├── deepspeed/              # DeepSpeed-specific logs
-│   ├── moe/                    # MoE routing logs
-│   └── performance/            # Performance profiling logs
-├── reports/                    # Analysis and performance reports
-├── monitoring/                 # Real-time monitoring data
-│   └── metrics/                # Training metrics
-├── requirements.txt            # Python dependencies
-├── .gitignore                  # Git ignore rules
-├── LICENSE                     # License file
-└── README.md                   # This documentation
+├── logs/                        # Comprehensive logging
+│   ├── deepspeed/               # DeepSpeed-specific logs
+│   ├── moe/                     # MoE routing logs
+│   └── performance/             # Performance profiling logs
+├── reports/                     # Analysis and performance reports
+├── monitoring/                  # Real-time monitoring data
+│   └── metrics/                 # Training metrics
+├── requirements.txt             # Python dependencies
+├── .gitignore                   # Git ignore rules
+├── LICENSE                      # License file
+└── README.md                    # This documentation
 ```
-
-### Core Components
-
-#### Model Core (`core/`)
-
-- **`model.py`**: DeepSeek-style transformer implementation with MoE support
-  - Optimized attention mechanisms with GQA and Flash Attention
-  - SwiGLU feed-forward networks
-  - RMSNorm for improved stability
-  - Mixture of Experts with intelligent routing
-
-- **`tokenizer.py`**: Advanced tokenization system
-  - GPT-4 compatible tokenizer with extended vocabulary
-  - Conversation-aware tokenization
-  - Streaming tokenization for large datasets
-  - Multi-threading support
-
-- **`dataset.py`**: Sophisticated data handling
-  - Memory-mapped datasets for efficiency
-  - Streaming datasets for arbitrarily large data
-  - Automatic sharding and load balancing
-  - Data validation and preprocessing
-
-#### Training System (`training/`)
-
-- **`trainer.py`**: Production-grade trainer with DeepSpeed integration
-  - Multi-GPU distributed training
-  - Automatic mixed precision
-  - Gradient accumulation and clipping
-  - Memory optimization strategies
-
-- **`orchestrator.py`**: Training coordination and monitoring
-  - Experiment management
-  - Resource allocation
-  - Performance monitoring
-  - Fault tolerance and recovery
-
-- **`checkpoint.py`**: Advanced checkpoint management
-  - Universal checkpoint format
-  - Automatic backup and recovery
-  - Checkpoint compression
-  - Cross-platform compatibility
-
-#### Monitoring (`monitoring/`)
-
-- **`logger.py`**: Comprehensive training health monitoring system
-  - Real-time performance metrics collection
-  - Automated anomaly detection and alerts
-  - Health scoring and diagnostics
-  - Training stability analysis
-  - Resource usage tracking with recommendations
 
 ## Quick Start
 
@@ -173,24 +122,24 @@ cd luminaai
 # Install dependencies
 pip install -r requirements.txt
 
-# Train a model with default settings
-python Src/Main_Scripts/main.py
+# Train a model with default settings (debug configuration)
+python Main.py
 
-# Train with specific configuration
-python Src/Main_Scripts/main.py --config configs/my_model.yaml
+# Train with specific preset
+python Main.py --config b7  # 7B active parameter model
 
 # Interactive chat with trained model
-python Src/Main_Scripts/chat.py --checkpoint checkpoints/best_model.pt
+python Main.py --analyze-model --checkpoint best
 ```
 
 ### Multi-GPU Training
 
 ```bash
 # Single node, multiple GPUs
-deepspeed --num_gpus=4 Src/Main_Scripts/main.py --deepspeed
+deepspeed --num_gpus=4 Main.py
 
 # Multi-node training
-deepspeed --num_gpus=4 --num_nodes=2 --master_addr=10.0.0.1 Src/Main_Scripts/main.py --deepspeed
+deepspeed --num_gpus=4 --num_nodes=2 --master_addr=10.0.0.1 Main.py
 ```
 
 ## Installation
@@ -283,108 +232,173 @@ config = ConfigPresets.b300()
 | **b200** | ~200B | ~1.6T (8x200B) | 16384 | 100 | 128 | 1000000 | Frontier research |
 | **b300** | ~300B | ~2.4T (8x300B) | 20480 | 120 | 160 | 204800 | State-of-the-art models |
 
-### Model Architecture Details
+### Hardcoded Configuration Override
 
-All models follow the **8x Mixture of Experts pattern** with consistent design principles:
-
-#### Core Architecture Features
-- **Attention**: Grouped Query Attention (GQA) with configurable KV heads
-- **Activation**: SwiGLU activation function for improved performance  
-- **Normalization**: RMSNorm for training stability
-- **Position Encoding**: Rotary Position Embedding (RoPE) for long sequences
-- **MoE Routing**: Top-1 routing (configurable to top-2) with load balancing
-
-#### Scaling Pattern
-- **Parameter Efficiency**: 8x total parameters, but only 1x active per forward pass
-- **Expert Distribution**: 8 experts consistently across all model sizes
-- **Memory Efficiency**: ~12.5% parameter efficiency (1/8 active at any time)
-- **Training Speed**: Significantly faster than dense models of equivalent quality
-
-#### Hardware Requirements by Model Size
-
-| Model | Min GPU Memory | Recommended Hardware | Training Time (est.) |
-|-------|----------------|---------------------|---------------------|
-| **debug** | 2GB | Any modern GPU | Minutes |
-| **b1** | 8GB | RTX 3090/4090 | Hours |
-| **b7** | 40GB | A100-40GB/80GB | 1-3 days |
-| **b14** | 80GB | Multiple A100-80GB | 3-7 days |
-| **b50** | 200GB+ | Multi-node H100 clusters | 1-2 weeks |
-| **b100** | 400GB+ | Large H100 clusters | 2-4 weeks |
-| **b200** | 800GB+ | Massive clusters + NVMe | 1-2 months |
-| **b300** | 1.2TB+ | Supercomputer-scale | 2-3 months |
-
-#### Preset Information and Comparison
+For quick experimentation, you can modify the hardcoded configuration section in `Main.py`:
 
 ```python
-# Get information about all available presets
-preset_info = ConfigPresets.get_preset_info()
-for preset_name, info in preset_info.items():
-    print(f"{preset_name}: {info['description']}")
-    print(f"  Active params: {info['active_params']}")
-    print(f"  Hardware: {info['hardware']}")
-    print(f"  Memory usage: {info['memory_usage']}")
+# Base model configuration - select from ConfigPresets
+config_choice = 'debug'  # Options: 'debug', 'b1', 'b7', 'b14', 'b50', 'b100', 'b200', 'b300'
 
-# Compare presets side by side
-comparison = ConfigPresets.compare_presets()
-for preset, stats in comparison.items():
-    print(f"{preset}: {stats['parameter_efficiency']} efficiency")
-```
-
-### Advanced Configuration Options
-
-#### Model Architecture
-
-```python
-config = Config(
-    # Core architecture
-    hidden_size=4096,
-    num_layers=32,
-    num_heads=32,
-    num_kv_heads=8,
-    seq_length=4096,
-    
-    # MoE settings
-    use_moe=True,
-    num_experts=8,
-    moe_top_k=2,
-    capacity_factor=1.25,
-    load_balancing_weight=0.01,
-    
-    # Training parameters
-    batch_size=16,
-    gradient_accumulation_steps=8,
-    learning_rate=1e-4,
-    weight_decay=0.01,
-    
-    # Optimization
-    precision="mixed_bf16",
-    gradient_checkpointing=True,
-    use_flash_attention=True,
-    
-    # DeepSpeed
-    use_deepspeed=True,
-    zero_stage=3,
-    cpu_offload=True
-)
-```
-
-#### DeepSpeed Configuration
-
-```python
-deepspeed_config = {
-    "train_batch_size": 128,
-    "gradient_accumulation_steps": 8,
-    "fp16": {"enabled": True},
-    "zero_optimization": {
-        "stage": 3,
-        "offload_optimizer": {"device": "cpu"},
-        "offload_param": {"device": "cpu"},
-        "overlap_comm": True,
-        "contiguous_gradients": True,
-        "reduce_bucket_size": 200000000,
-        "stage3_prefetch_bucket_size": 50000000
-    }
+# Override specific parameters
+override_params = {
+    'use_moe': True,
+    'num_epochs': 3,
+    'learning_rate': 1e-4,
+    'batch_size': 1,
+    'gradient_accumulation_steps': 16,
+    'train_data_path': 'oasst1_data/oasst1_train.jsonl',
+    'eval_data_path': 'oasst1_data/oasst1_train.jsonl',
 }
+
+# DeepSpeed and optimization settings - MANUAL OVERRIDES
+manual_deepspeed_overrides = {
+    'use_deepspeed': True,
+    'cpu_offload': True,
+    'cpu_offload_optimizer': True,
+    'zero_stage': 2,
+    'nvme_path': "Deepspeed/Tmp",
+}
+```
+
+## Command Line Interface
+
+LuminaAI provides a comprehensive CLI with over 40 commands organized into functional groups:
+
+### Training Workflow
+
+```bash
+# Resume training from checkpoints
+python Main.py --resume                    # Resume from latest checkpoint
+python Main.py --resume best               # Resume from best checkpoint
+python Main.py --resume path/to/checkpoint # Resume from specific checkpoint
+
+# Continue with new experiment name
+python Main.py --resume --continue-as new_experiment_name
+
+# Test configuration without training
+python Main.py --dry-run
+
+# Force restart ignoring existing checkpoints
+python Main.py --force-restart
+```
+
+### Model Analysis
+
+```bash
+# Analyze model architecture and parameters
+python Main.py --analyze-model
+python Main.py --analyze-model --checkpoint best
+
+# Show detailed model statistics
+python Main.py --model-stats
+
+# Analyze memory requirements
+python Main.py --memory-analysis
+```
+
+### Data Management
+
+```bash
+# Validate training data quality
+python Main.py --validate-data
+
+# Process raw data files
+python Main.py --process-data input.jsonl output.jsonl
+
+# Generate data summary report
+python Main.py --data-report
+
+# Split data into shards for distributed training
+python Main.py --create-shards 8
+```
+
+### System Diagnostics
+
+```bash
+# Validate training environment and dependencies
+python Main.py --check-environment
+
+# Benchmark training performance
+python Main.py --benchmark-performance
+
+# Profile memory usage during training
+python Main.py --profile-memory
+
+# Debug training setup and configuration
+python Main.py --debug-setup
+
+# Test DeepSpeed configuration
+python Main.py --test-deepspeed
+```
+
+### Model Export
+
+```bash
+# Export trained model for inference
+python Main.py --export-model --checkpoint best --format pytorch
+python Main.py --export-model --format huggingface --output-dir exported_models
+```
+
+### Checkpoint Management
+
+```bash
+# List all available checkpoints
+python Main.py --list-checkpoints
+
+# Create backup of current training state
+python Main.py --create-backup
+
+# Clean up old checkpoints (keep best and latest)
+python Main.py --clean-checkpoints
+
+# Merge multiple checkpoints (experimental)
+python Main.py --merge-checkpoints checkpoint1.pt checkpoint2.pt
+```
+
+### Experiment Management
+
+```bash
+# List all experiments
+python Main.py --list-experiments
+
+# Archive an experiment
+python Main.py --archive-experiment experiment_name
+
+# Compare multiple experiments
+python Main.py --compare-experiments exp1 exp2 exp3
+```
+
+### Monitoring and Logging
+
+```bash
+# Enable TensorBoard logging
+python Main.py --tensorboard
+
+# Enable Weights & Biases logging
+python Main.py --wandb
+
+# Set logging level
+python Main.py --log-level DEBUG
+
+# Increase verbosity
+python Main.py --verbose -vv
+```
+
+### Advanced Features
+
+```bash
+# Enable automatic hyperparameter tuning
+python Main.py --auto-tune
+
+# Set distributed training backend
+python Main.py --distributed-backend nccl
+
+# Set mixed precision mode
+python Main.py --mixed-precision bf16
+
+# Use torch.compile for model optimization
+python Main.py --compile-model
 ```
 
 ## Training Models
@@ -394,8 +408,6 @@ deepspeed_config = {
 ```python
 from config.config_manager import ConfigPresets
 from training.orchestrator import AdaptiveTrainingOrchestrator
-from core.tokenizer import ConversationTokenizer
-from core.model import DeepSeekTransformer
 
 # Load configuration
 config = ConfigPresets.b7()
@@ -415,13 +427,12 @@ orchestrator.run_adaptive_training()
 #### Converting Data to JSONL Format
 
 ```python
-from utils.data_processing import convert_to_conversation_format
+from utils.data_processing import process_oasst_data
 
-# Convert from various formats
-convert_to_conversation_format(
+# Convert OASST data to conversation format
+process_oasst_data(
     input_file="data/raw_conversations.json",
-    output_file="data/train.jsonl",
-    format_type="oasst"  # or "alpaca", "sharegpt"
+    output_file="data/train.jsonl"
 )
 ```
 
@@ -442,47 +453,11 @@ print(f"Average tokens per conversation: {stats['avg_tokens']}")
 print(f"Data quality score: {stats['quality_score']:.2f}")
 ```
 
-### Advanced Training Features
-
-#### Curriculum Learning
-
-```python
-# Progressive sequence length training
-config.curriculum_learning = True
-config.min_seq_length = 1024
-config.max_seq_length = 4096
-config.curriculum_steps = 1000
-```
-
-#### Dynamic Batch Sizing
-
-```python
-# Automatic batch size optimization
-config.dynamic_batching = True
-config.target_memory_usage = 0.9
-config.min_batch_size = 1
-config.max_batch_size = 32
-```
-
-#### Multi-Task Training
-
-```python
-# Train on multiple datasets simultaneously
-config.multi_task = True
-config.task_weights = {
-    "conversation": 1.0,
-    "instruction": 0.5,
-    "code": 0.3
-}
-```
-
 ## Monitoring and Analytics
 
-### Real-Time Monitoring
+### Real-Time Health Monitoring
 
-LuminaAI provides comprehensive monitoring capabilities:
-
-#### Training Metrics Dashboard
+LuminaAI includes a sophisticated health monitoring system that tracks training progress and automatically detects issues:
 
 ```python
 from monitoring.logger import TrainingHealthMonitor
@@ -490,49 +465,7 @@ from monitoring.logger import TrainingHealthMonitor
 # Initialize health monitor
 health_monitor = TrainingHealthMonitor(log_dir="logs/health")
 
-# Log training step
-health_monitor.log_step({
-    'global_step': step,
-    'loss': loss.item(),
-    'learning_rate': lr,
-    'grad_norm': grad_norm,
-    'tokens_per_sec': throughput,
-    'memory_usage': memory_stats
-})
-
-# Get health summary
-health_summary = health_monitor.get_health_summary()
-print(f"Training health: {health_summary['health_status']}")
-```
-
-#### MoE Routing Analysis
-
-```python
-from training.trainer import MoEOptimizationManager
-
-# Analyze expert utilization (basic metrics only)
-moe_optimizer = MoEOptimizationManager(config)
-routing_diagnostics = moe_optimizer.get_routing_diagnostics()
-
-print(f"Expert balance score: {routing_diagnostics['expert_balance_score']}")
-print(f"Load balance trend: {routing_diagnostics['load_balance_trend']}")
-
-# Get recommendations for routing improvement
-if routing_diagnostics['recommendations']:
-    print("Routing recommendations:")
-    for rec in routing_diagnostics['recommendations']:
-        print(f"  - {rec}")
-```
-
-#### Performance Profiling
-
-```python
-from monitoring.logger import TrainingHealthMonitor
-
-# Monitor training health and performance
-health_monitor = TrainingHealthMonitor(log_dir="logs/health")
-
-# Log training metrics
+# Log training step with automatic health analysis
 health_monitor.log_step({
     'global_step': step,
     'loss': loss.item(),
@@ -547,42 +480,31 @@ diagnostics = health_monitor.get_training_diagnostics()
 print(f"Training stability: {diagnostics['training_stability']['status']}")
 print(f"Performance efficiency: {diagnostics['performance_efficiency']['efficiency_status']}")
 
-# Save detailed health report
-health_monitor.save_health_report("reports/health_report.json")
-```
-
-### Logging and Monitoring
-
-#### Structured Logging
-
-```python
-import logging
-from monitoring.logger import TrainingHealthMonitor
-
-# Configure comprehensive health monitoring
-health_monitor = TrainingHealthMonitor(log_dir="logs/training")
-
-# Log training metrics with health analysis
-health_monitor.log_step({
-    'global_step': step,
-    'loss': loss.item(),
-    'learning_rate': lr,
-    'grad_norm': grad_norm,
-    'tokens_per_sec': throughput,
-    'memory_usage': memory_stats
-})
-
-# Get health summary with recommendations
-health_summary = health_monitor.get_health_summary()
-print(f"Health status: {health_summary['health_status']}")
-print(f"Health score: {health_summary['overall_health_score']:.2f}")
-
-# Check for training alerts
+# Check for automated alerts and recommendations
 recent_alerts = health_monitor.metrics_collector.get_recent_alerts(minutes=10)
 for alert in recent_alerts:
     print(f"Alert [{alert.severity}]: {alert.message}")
     if alert.recommendation:
         print(f"  Recommendation: {alert.recommendation}")
+```
+
+### MoE Routing Analysis
+
+```python
+from training.trainer import MoEOptimizationManager
+
+# Analyze expert utilization
+moe_optimizer = MoEOptimizationManager(config)
+routing_diagnostics = moe_optimizer.get_routing_diagnostics()
+
+print(f"Expert balance score: {routing_diagnostics['expert_balance_score']}")
+print(f"Load balance trend: {routing_diagnostics['load_balance_trend']}")
+
+# Get recommendations for routing improvement
+if routing_diagnostics['recommendations']:
+    print("Routing recommendations:")
+    for rec in routing_diagnostics['recommendations']:
+        print(f"  - {rec}")
 ```
 
 ## Advanced Features
@@ -601,23 +523,6 @@ config.load_balancing_weight = 0.01
 
 # Expert parallel configuration
 config.expert_parallel_size = 2  # Distribute experts across 2 GPUs
-```
-
-#### MoE Optimization
-
-```python
-from training.trainer import MoEOptimizationManager
-
-# Initialize MoE optimizer
-moe_optimizer = MoEOptimizationManager(config)
-
-# Create optimized DeepSpeed configuration
-deepspeed_config = moe_optimizer.create_deepspeed_moe_config(base_config)
-
-# Monitor routing balance
-routing_diagnostics = moe_optimizer.get_routing_diagnostics()
-if routing_diagnostics['expert_balance_score'] < 0.7:
-    print("Warning: Poor expert load balancing detected")
 ```
 
 ### DeepSpeed Integration
@@ -652,106 +557,57 @@ config.nvme_offload_parameters = True
 config.nvme_path = "/tmp/deepspeed_nvme"
 ```
 
-#### Communication Optimization
+### Interactive Chat Interface
 
-```python
-# Overlap communication and computation
-config.overlap_comm = True
-config.contiguous_gradients = True
+LuminaAI includes a sophisticated chat interface for testing and interacting with trained models:
 
-# Optimize bucket sizes
-config.allgather_bucket_size = 200000000
-config.reduce_bucket_size = 200000000
+#### Features
 
-# Use efficient communication backend
-config.communication_backend = "nccl"
+- **Automatic Checkpoint Detection**: Finds and loads the best available checkpoint automatically
+- **Multi-Shard Support**: Handles ZeRO checkpoint shards and merges them seamlessly  
+- **Conversation Modes**: Multiple generation strategies for different use cases
+- **Real-time Statistics**: Token counts, response timing, and session analytics
+- **Command System**: Built-in commands for configuration and management
+
+#### Usage
+
+```bash
+# Auto-detect and load best checkpoint
+python chat.py
+
+# Load specific checkpoint file
+python chat.py --checkpoint model.pt
+
+# Load ZeRO checkpoint directory 
+python chat.py --checkpoint ./checkpoints/deepspeed_epoch_5/
+
+# Start with creative mode and show timing
+python chat.py --mode creative --show-timing
+
+# Set system prompt and conversation history limit
+python chat.py --system-prompt "You are a helpful AI assistant" --max-history 20
 ```
 
-### Checkpoint Management
+#### Conversation Modes
 
-#### Universal Checkpoints
+| Mode | Temperature | Top-p | Top-k | Best For |
+|------|-------------|-------|-------|----------|
+| **standard** | 0.8 | 0.9 | 50 | General conversation |
+| **creative** | 1.0 | 0.95 | 100 | Creative writing, brainstorming |
+| **analytical** | 0.3 | 0.7 | 20 | Technical analysis, reasoning |
+| **precise** | 0.1 | 0.5 | 10 | Factual responses, coding |
 
-```python
-from training.checkpoint import CheckpointManager
+#### Interactive Commands
 
-# Initialize checkpoint manager
-checkpoint_manager = CheckpointManager(config)
-
-# Save checkpoint with metadata
-checkpoint_path = checkpoint_manager.save_checkpoint(
-    model=model,
-    optimizer=optimizer,
-    scheduler=scheduler,
-    global_step=step,
-    current_epoch=epoch,
-    metrics=training_metrics,
-    is_best=True
-)
-
-# Load checkpoint with automatic compatibility checking
-epoch = checkpoint_manager.load_checkpoint(
-    checkpoint_path="checkpoints/best_model.pt",
-    model=model,
-    optimizer=optimizer,
-    scheduler=scheduler,
-    strict=False
-)
-```
-
-#### Automatic Backup and Recovery
-
-```python
-# Configure automatic backup
-config.backup_every_n_hours = 6
-config.max_backup_count = 5
-config.enable_emergency_save = True
-
-# Emergency checkpoint on interruption
-checkpoint_manager.emergency_save(
-    model=model,
-    optimizer=optimizer,
-    scheduler=scheduler,
-    global_step=step,
-    current_epoch=epoch,
-    metrics=metrics
-)
-```
-
-### Adaptive Training
-
-#### Hyperparameter Optimization
-
-```python
-from training.orchestrator import AdaptiveHyperparameterOptimizer
-
-# Initialize adaptive optimizer
-adaptive_optimizer = AdaptiveHyperparameterOptimizer()
-
-# Check if learning rate should be adjusted
-lr_adjustment = adaptive_optimizer.should_adjust_learning_rate(current_metrics)
-if lr_adjustment:
-    new_lr = current_lr * lr_adjustment['factor']
-    trainer.adjust_learning_rate(new_lr)
-    print(f"Learning rate adjusted: {current_lr} -> {new_lr}")
-```
-
-#### Dynamic Architecture Optimization
-
-```python
-from training.orchestrator import ArchitectureEvolution
-
-# Initialize architecture evolution
-arch_evolution = ArchitectureEvolution()
-
-# Check if experts should be added/removed
-expert_suggestion = arch_evolution.should_add_expert(
-    expert_utilization=expert_stats,
-    performance_metrics=training_metrics
-)
-
-if expert_suggestion:
-    print(f"Suggestion: {expert_suggestion['action']}")
-    print(f"Reasoning: {expert_suggestion['reasoning']}")
+```bash
+# Available commands during chat
+/help          # Show command help
+/quit, /exit   # Exit chat session
+/clear         # Clear conversation history  
+/stats         # Show session statistics
+/mode <mode>   # Change conversation mode
+/system <text> # Set system prompt
+/save [name]   # Save conversation to file
 ```
 
 ## API Reference
@@ -792,23 +648,6 @@ class ConversationTokenizer:
         
     def get_vocab_size(self) -> int:
         """Get total vocabulary size."""
-```
-
-#### EnhancedConversationTrainer
-
-```python
-class EnhancedConversationTrainer:
-    def __init__(self, model, tokenizer, config, logger):
-        """Initialize trainer with DeepSpeed support."""
-        
-    def train(self, train_dataset, eval_dataset=None):
-        """Main training loop."""
-        
-    def evaluate(self, eval_dataset, max_batches: int = 100) -> Dict[str, float]:
-        """Evaluate model on validation set."""
-        
-    def get_memory_stats(self) -> Dict[str, Any]:
-        """Get comprehensive memory usage statistics."""
 ```
 
 ### Configuration System
@@ -852,35 +691,6 @@ class Config:
         """Load configuration from YAML file."""
 ```
 
-### Utility Functions
-
-#### Data Processing
-
-```python
-def process_oasst_data(input_file: str, output_file: str) -> int:
-    """Process OASST dataset into conversation format."""
-    
-def validate_data_comprehensive(data_path: str, tokenizer, 
-                               sample_size: int = 1000) -> Dict[str, Any]:
-    """Comprehensive data validation with statistics."""
-    
-def create_data_summary_report(data_path: str, output_path: str):
-    """Generate comprehensive data analysis report."""
-```
-
-#### Environment Optimization
-
-```python
-def validate_environment() -> List[str]:
-    """Validate training environment and return issues."""
-    
-def optimize_cuda_settings():
-    """Optimize CUDA settings for training."""
-    
-def estimate_training_time(config: Config, dataset_size: int) -> float:
-    """Estimate training time in hours."""
-```
-
 ## Examples
 
 ### Training a Small Conversation Model
@@ -919,250 +729,44 @@ if __name__ == "__main__":
     main()
 ```
 
-### Multi-GPU MoE Training
-
-```python
-#!/usr/bin/env python3
-"""Example: Multi-GPU MoE model training."""
-
-import os
-import torch.distributed as dist
-from config.config_manager import ConfigPresets
-
-def setup_distributed():
-    """Setup distributed training."""
-    if 'RANK' in os.environ:
-        dist.init_process_group(backend='nccl')
-
-def main():
-    setup_distributed()
-    
-    # Load large MoE configuration
-    config = ConfigPresets.b7()  # 7B active parameter model
-    config.use_moe = True
-    config.num_experts = 8
-    config.moe_top_k = 2
-    
-    # DeepSpeed configuration
-    config.use_deepspeed = True
-    config.zero_stage = 3
-    config.cpu_offload = True
-    
-    # Training settings
-    config.batch_size = 4  # Micro batch size
-    config.gradient_accumulation_steps = 16
-    config.num_epochs = 3
-    config.experiment_name = "mixtral_style_moe"
-    
-    # Data paths
-    config.train_data_path = "data/large_conversations.jsonl"
-    config.eval_data_path = "data/eval_conversations.jsonl"
-    
-    # Initialize and run training
-    from training.orchestrator import AdaptiveTrainingOrchestrator
-    orchestrator = AdaptiveTrainingOrchestrator(config)
-    orchestrator.run_adaptive_training()
-
-if __name__ == "__main__":
-    main()
-```
-
-### Custom Training Loop
-
-```python
-#!/usr/bin/env python3
-"""Example: Custom training loop with monitoring."""
-
-import torch
-from core.model import DeepSeekTransformer, DeepSeekConfig
-from core.tokenizer import ConversationTokenizer
-from core.dataset import ConversationDataset
-from training.trainer import EnhancedConversationTrainer
-from monitoring.logger import TrainingHealthMonitor
-
-def custom_training():
-    # Model configuration
-    model_config = DeepSeekConfig(
-        vocab_size=50304,
-        hidden_size=1024,
-        num_layers=24,
-        num_heads=16,
-        num_kv_heads=4,
-        seq_length=2048,
-        use_moe=True,
-        num_experts=8,
-        moe_top_k=2
-    )
-    
-    # Initialize components
-    model = DeepSeekTransformer(model_config)
-    tokenizer = ConversationTokenizer(model_name="gpt-4")
-    
-    # Load dataset
-    train_dataset = ConversationDataset(
-        data_path="data/train.jsonl",
-        tokenizer=tokenizer,
-        config=model_config
-    )
-    
-    # Initialize health monitor
-    health_monitor = TrainingHealthMonitor(log_dir="logs/custom_training")
-    
-    # Create trainer
-    from config.config_manager import Config
-    training_config = Config(
-        batch_size=8,
-        gradient_accumulation_steps=4,
-        learning_rate=1e-4,
-        num_epochs=3,
-        use_deepspeed=True,
-        zero_stage=2
-    )
-    
-    trainer = EnhancedConversationTrainer(
-        model=model,
-        tokenizer=tokenizer,
-        config=training_config,
-        logger=health_monitor
-    )
-    
-    # Custom training loop
-    trainer.train(train_dataset)
-    
-    # Generate final report
-    health_monitor.save_health_report("reports/training_health.json")
-    
-    print("Custom training completed!")
-
-if __name__ == "__main__":
-    custom_training()
-```
-
-### Interactive Chat Interface
-
-LuminaAI includes a sophisticated chat interface (`chat.py`) for testing and interacting with trained models:
-
-#### Features
-
-- **Automatic Checkpoint Detection**: Finds and loads the best available checkpoint automatically
-- **Multi-Shard Support**: Handles ZeRO checkpoint shards and merges them seamlessly  
-- **Conversation Modes**: Multiple generation strategies for different use cases
-- **Real-time Statistics**: Token counts, response timing, and session analytics
-- **Command System**: Built-in commands for configuration and management
-
-#### Usage
+### Using the CLI for Complete Workflow
 
 ```bash
-# Auto-detect and load best checkpoint
-python chat.py
+#!/bin/bash
+# Complete training workflow using CLI commands
 
-# Load specific checkpoint file
-python chat.py --checkpoint model.pt
+# Step 1: Validate environment
+echo "Checking environment..."
+python Main.py --check-environment
 
-# Load ZeRO checkpoint directory 
-python chat.py --checkpoint ./checkpoints/deepspeed_epoch_5/
+# Step 2: Process and validate data
+echo "Processing training data..."
+python Main.py --process-data raw_data.json processed_data.jsonl
+python Main.py --validate-data
 
-# Start with creative mode and show timing
-python chat.py --mode creative --show-timing
+# Step 3: Debug training setup
+echo "Testing training setup..."
+python Main.py --debug-setup
 
-# Set system prompt and conversation history limit
-python chat.py --system-prompt "You are a helpful AI assistant" --max-history 20
-```
+# Step 4: Run training with monitoring
+echo "Starting training..."
+python Main.py --tensorboard --log-level INFO
 
-#### Conversation Modes
+# Step 5: Analyze results
+echo "Analyzing trained model..."
+python Main.py --analyze-model --checkpoint best
+python Main.py --export-model --checkpoint best --format pytorch
 
-The chat interface supports multiple generation modes optimized for different scenarios:
+# Step 6: Test with chat interface
+echo "Testing model..."
+python chat.py --checkpoint best --mode standard
 
-| Mode | Temperature | Top-p | Top-k | Best For |
-|------|-------------|-------|-------|----------|
-| **standard** | 0.8 | 0.9 | 50 | General conversation |
-| **creative** | 1.0 | 0.95 | 100 | Creative writing, brainstorming |
-| **analytical** | 0.3 | 0.7 | 20 | Technical analysis, reasoning |
-| **precise** | 0.1 | 0.5 | 10 | Factual responses, coding |
-
-#### Interactive Commands
-
-```bash
-# Available commands during chat
-/help          # Show command help
-/quit, /exit   # Exit chat session
-/clear         # Clear conversation history  
-/stats         # Show session statistics
-/mode <mode>   # Change conversation mode
-/system <text> # Set system prompt
-/save [name]   # Save conversation to file
-```
-
-#### Advanced Features
-
-**Automatic Configuration Inference**: 
-- Detects model architecture from checkpoint
-- Handles missing configuration gracefully
-- Supports both single files and ZeRO checkpoint directories
-
-**Robust Error Handling**:
-- Recovers from invalid token generation
-- Handles out-of-vocabulary tokens gracefully  
-- Provides helpful error messages and fallbacks
-
-**Session Analytics**:
-```python
-# Statistics tracked during chat session
-{
-    'messages_sent': 15,
-    'tokens_generated': 2847,
-    'avg_response_time': 1.23,
-    'session_duration': '00:15:42',
-    'current_mode': 'standard'
-}
-```
-
-**Conversation Persistence**:
-```bash
-# Conversations saved in JSON format with metadata
-{
-    "name": "chat_20250120_143022", 
-    "conversation": [...],
-    "mode": "standard",
-    "system_prompt": "You are a helpful assistant"
-}
-```
-        
-        # Add user message to history
-        conversation_history.append({
-            'role': 'user',
-            'content': user_input
-        })
-        
-        # Encode conversation
-        tokens = tokenizer.encode_conversation({
-            'messages': conversation_history
-        })
-        
-        # Generate response (simplified for example)
-        with torch.no_grad():
-            input_ids = torch.tensor([tokens], dtype=torch.long)
-            output = model(input_ids)
-            # Response generation logic would go here
-            
-        # Add assistant response to history
-        response = "This is a placeholder response."
-        conversation_history.append({
-            'role': 'assistant', 
-            'content': response
-        })
-        
-        print(f"Assistant: {response}")
-
-if __name__ == "__main__":
-    chat_interface()
+echo "Training workflow completed!"
 ```
 
 ## Performance Optimization
 
 ### Memory Optimization
-
-LuminaAI implements several strategies to handle large models efficiently:
 
 #### ZeRO Optimization Stages
 
@@ -1180,14 +784,6 @@ config.nvme_offload_optimizer = True     # Offload to NVMe for maximum capacity
 config.nvme_path = "/tmp/deepspeed_nvme" # NVMe mount point
 ```
 
-#### Gradient Checkpointing
-
-```python
-# Reduce activation memory usage
-config.gradient_checkpointing = True
-config.partition_activations = True  # Advanced activation partitioning
-```
-
 ### Compute Optimization
 
 #### Mixed Precision Training
@@ -1199,13 +795,6 @@ config.auto_tune_precision = True
 config.dynamic_precision = False
 ```
 
-#### Model Compilation
-
-```python
-# PyTorch 2.0 compilation for faster training
-config.compile = True
-```
-
 ### MoE-Specific Optimizations
 
 #### Expert Parallelism
@@ -1214,15 +803,6 @@ config.compile = True
 # Distribute experts across GPUs for optimal communication
 config.expert_parallel_size = 2  # Use 2 GPUs for expert parallelism
 config.overlap_alltoall = True    # Overlap communication with computation
-```
-
-#### Capacity and Load Balancing
-
-```python
-# Optimize token routing for better expert utilization
-config.capacity_factor = 1.25       # Buffer for token distribution
-config.load_balancing_weight = 0.01 # Encourage balanced expert usage
-config.router_jitter_noise = 0.01   # Prevent hot expert concentration
 ```
 
 ## Troubleshooting
@@ -1238,52 +818,32 @@ pip install deepspeed
 # Verify CUDA compatibility
 python -c "import deepspeed; print(deepspeed.__version__)"
 
-# Run with verbose logging
-DEEPSPEED_LOG_LEVEL=INFO python main.py --deepspeed
+# Run diagnostic tests
+python Main.py --test-deepspeed
 ```
 
 #### Memory Issues
 
-```python
-# Reduce batch size and enable offloading
-config.batch_size = 1
-config.gradient_accumulation_steps = 32
-config.cpu_offload = True
-config.gradient_checkpointing = True
-```
+```bash
+# Use built-in memory profiling
+python Main.py --profile-memory
 
-#### MoE Training Instability
+# Analyze memory requirements
+python Main.py --memory-analysis
 
-```python
-# Increase capacity factor and adjust load balancing
-config.capacity_factor = 2.0
-config.load_balancing_weight = 0.02
-config.moe_top_k = 1  # Use top-1 routing for stability
+# Enable aggressive memory optimization
+python Main.py --cpu-offload --zero-stage 3 --gradient-checkpointing
 ```
 
 #### Data Loading Problems
 
-```python
-# Enable streaming for large datasets
-config.streaming_threshold_gb = 5.0
-config.num_workers = 0  # Disable multiprocessing if causing issues
+```bash
+# Validate data format and quality
+python Main.py --validate-data
+
+# Check data processing
+python Main.py --data-report
 ```
-
-### Performance Troubleshooting
-
-#### Low Throughput
-
-1. **Check GPU utilization**: Use `nvidia-smi` to monitor GPU usage
-2. **Optimize batch size**: Use the largest batch size that fits in memory
-3. **Enable compilation**: Set `config.compile = True` 
-4. **Check data loading**: Ensure data loading isn't the bottleneck
-
-#### High Memory Usage
-
-1. **Enable gradient checkpointing**: `config.gradient_checkpointing = True`
-2. **Use CPU offloading**: `config.cpu_offload = True`
-3. **Reduce sequence length**: Lower `config.seq_length`
-4. **Use smaller precision**: Switch to `fp16` or `bf16`
 
 ### Debugging Tools
 
@@ -1297,22 +857,19 @@ diagnostics = health_monitor.get_training_diagnostics()
 print(f"Training stability: {diagnostics['training_stability']}")
 print(f"Performance efficiency: {diagnostics['performance_efficiency']}")
 print(f"Resource utilization: {diagnostics['resource_utilization']}")
-
-# Get specific recommendations
-recommendations = diagnostics['recommendations']
-for rec in recommendations:
-    print(f"Recommendation: {rec}")
 ```
 
-#### DeepSpeed Debugging
+#### Built-in Debugging Commands
 
-```python
-# Enable detailed DeepSpeed logging
-import deepspeed
-deepspeed.init_distributed()
+```bash
+# Complete system diagnostics
+python Main.py --debug-setup
 
-# Check DeepSpeed configuration
-trainer.debug_training_setup()  # Built-in debugging method
+# Test all components
+python Main.py --check-environment --test-deepspeed --benchmark-performance
+
+# Monitor training in real-time
+python Main.py --verbose --log-level DEBUG
 ```
 
 ## Contributing
@@ -1353,16 +910,6 @@ pre-commit install
 5. Update documentation if needed
 6. Submit a pull request
 
-### Reporting Issues
-
-When reporting bugs, please include:
-
-- Python and PyTorch versions
-- Hardware specifications (GPU model, memory)
-- Complete error traceback
-- Minimal reproduction case
-- Configuration used
-
 ## License
 
 LuminaAI is licensed under a custom license. See the [LICENSE](LICENSE) file for full details.
@@ -1371,23 +918,26 @@ LuminaAI is licensed under a custom license. See the [LICENSE](LICENSE) file for
 
 **LuminaAI** is a production-ready framework for training large language models with advanced features:
 
-- **🚀 Quick Start**: `python main.py` to begin training with sensible defaults
-- **🧠 Smart Architecture**: DeepSeek transformers with MoE support (8x efficiency gains)
-- **⚡ Enterprise Scale**: DeepSpeed integration for multi-GPU/multi-node training  
-- **📊 Built-in Monitoring**: Real-time health monitoring with automatic issue detection
-- **🔧 Zero Config**: Intelligent presets from 1B to 300B+ parameter models
-- **💾 Fault Tolerant**: Automatic checkpointing with universal format compatibility
+- **Quick Start**: `python Main.py` to begin training with sensible defaults
+- **Smart Architecture**: DeepSeek transformers with MoE support (8x efficiency gains)
+- **Enterprise Scale**: DeepSpeed integration for multi-GPU/multi-node training  
+- **Built-in Monitoring**: Real-time health monitoring with automatic issue detection
+- **Zero Config**: Intelligent presets from 1B to 300B+ parameter models
+- **Fault Tolerant**: Automatic checkpointing with universal format compatibility
+- **Comprehensive CLI**: 40+ commands for every aspect of training and analysis
+- **Interactive Testing**: Advanced chat interface for model evaluation
 
 **Perfect for**: Researchers, ML engineers, and organizations training conversational AI models who need production reliability without configuration complexity.
 
+**Key Commands**:
+```bash
+python Main.py                    # Start training with defaults
+python Main.py --analyze-model    # Analyze model architecture
+python Main.py --debug-setup      # Test system configuration
+python Main.py --list-experiments # Manage experiments
+python chat.py                    # Interactive model testing
+```
+
 ---
-
-## Summary
-
-LuminaAI represents a comprehensive solution for modern large language model training, combining cutting-edge techniques with production-grade reliability. Built from the ground up with DeepSpeed integration and Mixture of Experts support, it enables training of models from 1B to 300B+ active parameters on everything from single GPUs to massive clusters.
-
-The framework's adaptive training orchestrator continuously monitors training health, automatically detects issues, and provides actionable recommendations - reducing the expertise barrier for training large models while maintaining the flexibility experts need. With features like universal checkpointing, automatic precision optimization, and intelligent resource management, LuminaAI bridges the gap between research experimentation and production deployment.
-
-Whether you're training a small conversational model for specific tasks or scaling to frontier-class models, LuminaAI provides the tools, monitoring, and optimizations needed to succeed. The framework's modular architecture ensures extensibility while its comprehensive configuration system offers both simplicity for beginners and deep customization for advanced users.
 
 **LuminaAI: Making large-scale language model training accessible, reliable, and efficient.**
