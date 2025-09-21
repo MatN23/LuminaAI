@@ -104,13 +104,13 @@ class MoEOptimizationManager:
                 "top_k": getattr(self.config, 'moe_top_k', 2),
                 
                 # ROUTING BALANCE OPTIMIZATIONS
-                "capacity_factor": getattr(self.config, 'capacity_factor', 2.8),  # Increased from default 1.25
+                "capacity_factor": getattr(self.config, 'capacity_factor', 1),  # Increased from default 1.25
                 "eval_capacity_factor": 3.2,  # Higher for evaluation
                 "min_capacity": 16,  # Ensure minimum tokens per expert
                 "use_residual": True,  # Handle dropped tokens
                 
                 # LOAD BALANCING
-                "load_balance_loss_coef": getattr(self.config, 'load_balancing_weight', 0.02),  # Increased
+                "load_balance_loss_coef": getattr(self.config, 'load_balancing_weight', 0.08),  # Increased
                 "load_balance_type": "aux_loss",  # Use auxiliary loss for better balance
                 "router_jitter_noise": 0.01,  # Add noise to prevent hot experts
                 
@@ -118,7 +118,7 @@ class MoEOptimizationManager:
                 "enable_expert_tensor_parallelism": True,
                 "all_to_all_dispatch": True,
                 "overlap_alltoall": True,  # Critical for multi-node
-                "comm_dtype": "fp16" if self.config.precision in ["fp16", "mixed_fp16"] else "bf16",
+                "comm_dtype": "fp32" if self.config.precision in ["fp16", "mixed_fp16"] else "bf16",
                 
                 # MEMORY OPTIMIZATIONS  
                 "pad_expert_input_to_capacity": True,  # Better GPU utilization
@@ -1458,7 +1458,7 @@ class DeepSpeedConfigGenerator:
         elif sequence_length > 20000:
             capacity_factor = 2.8
         else:
-            capacity_factor = 2.5
+            capacity_factor = 1
         
         config = {
             "moe": {

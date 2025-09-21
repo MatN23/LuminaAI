@@ -279,7 +279,7 @@ class OptimizedMoELayer(nn.Module):
         self.experts = nn.ModuleList([SwiGLUExpert(config) for _ in range(config.num_experts)])
         
         # Load balancing
-        self.load_balancing_weight = getattr(config, 'load_balancing_weight', 0.01)
+        self.load_balancing_weight = getattr(config, 'load_balancing_weight', 0.075)
         
         self._init_weights()
     
@@ -312,7 +312,8 @@ class OptimizedMoELayer(nn.Module):
         top_k_probs = top_k_probs / (top_k_probs.sum(dim=-1, keepdim=True) + 1e-8)
         
         # Calculate expert capacity (with overflow handling)
-        expert_capacity = math.ceil((total_tokens * self.top_k / self.num_experts) * self.capacity_factor)
+        base_capacity = total_tokens * self.top_k // self.num_experts
+        expert_capacity = max(4, int(base_capacity * self.capacity_factor))
         
         # Initialize output and tracking tensors
         output = torch.zeros_like(x_flat)

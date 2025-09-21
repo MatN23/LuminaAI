@@ -920,6 +920,9 @@ def main():
         'gradient_accumulation_steps': 2,  # Reduced for testing
         'train_data_path': 'oasst1_data/oasst1_train.jsonl',
         'eval_data_path': 'data/eval.jsonl',
+
+        'capacity_factor': 1.0,
+        'load_balancing_weight': 0.08,
     }
     
     # DeepSpeed and optimization settings - THESE ARE MANUAL OVERRIDES
