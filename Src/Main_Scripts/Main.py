@@ -328,7 +328,7 @@ class EnhancedResourceManager:
                                              sequence_length: int) -> Dict[str, Any]:
         """Create comprehensive DeepSpeed optimization strategy."""
         strategy = {
-            'use_deepspeed': DEEPSPEED_AVAILABLE and getattr(config, 'use_deepspeed', True),
+            'use_deepspeed': DEEPSPEED_AVAILABLE and getattr(config, 'use_deepspeed', False),
             'zero_stage': 3,  # Default to ZeRO-3
             'cpu_offload': False,
             'nvme_offload': False,
@@ -463,8 +463,25 @@ class AdaptiveDeepSpeedWizard:
         self.resource_manager = resource_manager
     
     def auto_configure_deepspeed(self, config: Config, 
-                                natural_description: Optional[str] = None) -> Config:
-        """Automatically configure DeepSpeed based on system analysis."""
+                                natural_description: Optional[str] = None,
+                                manual_overrides: Dict[str, Any] = None) -> Config:
+        """Automatically configure DeepSpeed based on system analysis, with proper override handling."""
+        
+        # Apply manual overrides BEFORE auto-configuration
+        if manual_overrides:
+            print("="*60)
+            print("APPLYING MANUAL CONFIGURATION OVERRIDES")
+            print("="*60)
+            
+            for param, value in manual_overrides.items():
+                if hasattr(config, param):
+                    old_value = getattr(config, param)
+                    setattr(config, param, value)
+                    print(f"OVERRIDE: {param}: {old_value} -> {value}")
+                else:
+                    print(f"WARNING: Unknown parameter '{param}' in manual overrides")
+            
+            print("="*60)
         
         # Estimate model size from config
         try:
@@ -475,25 +492,48 @@ class AdaptiveDeepSpeedWizard:
             model_size_gb = 10.0  # Default estimate
             sequence_length = 2048
         
-        # Analyze system and create strategy
+        # Analyze system and create strategy (ONLY if no manual overrides for these specific params)
         strategy = self.resource_manager.create_deepspeed_optimization_strategy(
             config, model_size_gb, sequence_length
         )
         
-        # Apply optimizations to config
+        # Apply optimizations to config, but RESPECT manual overrides
+        original_cpu_offload = getattr(config, 'cpu_offload', None)
+        original_cpu_offload_optimizer = getattr(config, 'cpu_offload_optimizer', None)
+        original_zero_stage = getattr(config, 'zero_stage', None)
+        original_nvme_path = getattr(config, 'nvme_path', None)
+        
         apply_deepspeed_optimizations(config, strategy)
         
-        # Log strategy
-        logging.info("DeepSpeed Optimization Strategy:")
-        logging.info(f"  Model size estimate: {model_size_gb:.1f}GB")
-        logging.info(f"  ZeRO stage: {strategy['zero_stage']}")
-        logging.info(f"  CPU offload: {strategy['cpu_offload']}")
-        logging.info(f"  Precision: {strategy['precision_strategy']}")
+        # RESTORE manual overrides if they were set
+        if manual_overrides:
+            if 'cpu_offload' in manual_overrides:
+                config.cpu_offload = manual_overrides['cpu_offload']
+                print(f"PRESERVED MANUAL OVERRIDE: cpu_offload = {config.cpu_offload}")
+                
+            if 'cpu_offload_optimizer' in manual_overrides:
+                config.cpu_offload_optimizer = manual_overrides['cpu_offload_optimizer']
+                print(f"PRESERVED MANUAL OVERRIDE: cpu_offload_optimizer = {config.cpu_offload_optimizer}")
+                
+            if 'zero_stage' in manual_overrides:
+                config.zero_stage = manual_overrides['zero_stage']
+                print(f"PRESERVED MANUAL OVERRIDE: zero_stage = {config.zero_stage}")
+                
+            if 'nvme_path' in manual_overrides:
+                config.nvme_path = manual_overrides['nvme_path']
+                print(f"PRESERVED MANUAL OVERRIDE: nvme_path = {config.nvme_path}")
         
-        if strategy.get('moe_optimizations'):
-            moe = strategy['moe_optimizations']
-            logging.info(f"  MoE experts: {moe.get('num_experts', 'N/A')}")
-            logging.info(f"  Expert parallel size: {moe.get('expert_parallel_size', 'N/A')}")
+        # Log final strategy
+        print("="*60)
+        print("FINAL DEEPSPEED CONFIGURATION")
+        print("="*60)
+        print(f"Model size estimate: {model_size_gb:.1f}GB")
+        print(f"ZeRO stage: {config.zero_stage}")
+        print(f"CPU offload: {config.cpu_offload}")
+        print(f"CPU offload optimizer: {getattr(config, 'cpu_offload_optimizer', False)}")
+        print(f"Precision: {getattr(config, 'precision', 'auto')}")
+        print(f"Use DeepSpeed: {getattr(config, 'use_deepspeed', False)}")
+        print("="*60)
         
         return config
 
@@ -608,7 +648,7 @@ def config_to_deepseek_config(config: Config):
 
 
 def main():
-    """Enhanced main function with comprehensive DeepSpeed integration and accurate timing calculation."""
+    """Enhanced main function with FIXED CPU offloading configuration."""
     
     # HARDCODED CONFIGURATION - MODIFY THESE PARAMETERS
     # =================================================
@@ -620,19 +660,22 @@ def main():
     override_params = {
         'use_moe': True,        # Enable MoE
         'num_epochs': 10,       # Training epochs
-        'learning_rate': 1e-4, # Learning rate
-        'batch_size': 1,       # Micro batch size
+        'learning_rate': 1e-4,  # Learning rate
+        'batch_size': 1,        # Micro batch size
         'gradient_accumulation_steps': 4,
         'train_data_path': 'oasst1_data/oasst1_train.jsonl',
         'eval_data_path': 'data/eval.jsonl',
     }
     
-    # DeepSpeed and optimization settings
-    enable_deepspeed = DEEPSPEED_AVAILABLE
-    enable_cpu_offload = True
-    enable_aggressive_optimization = True
-    nvme_path = None  # Set to NVMe path if available, e.g., '/tmp/deepspeed_nvme'
-    zero_stage = 3    # ZeRO optimization stage (1, 2, or 3)
+    # DeepSpeed and optimization settings - THESE ARE MANUAL OVERRIDES
+    manual_deepspeed_overrides = {
+        'use_deepspeed': DEEPSPEED_AVAILABLE,
+        'cpu_offload': True,             # FORCE CPU offloading
+        'cpu_offload_optimizer': True,   # FORCE CPU optimizer offloading
+        'cpu_offload_parameters': True,  # FORCE CPU parameter offloading
+        'zero_stage': 3,                 # FORCE ZeRO-3
+        'nvme_path': None,               # Set to NVMe path if available
+    }
     
     # Optimization flags
     optimize_for_long_sequences = True
@@ -648,14 +691,14 @@ def main():
     # =================================================
     # END HARDCODED CONFIGURATION
     
-    experiment_name = f'DeepSpeed_MoE_{override_params.get("num_experts", 8)}E_Experiment_{datetime.now().strftime("%Y%m%d_%H%M%S")}'
+    experiment_name = f'DeepSpeed_MoE_{override_params.get("num_experts", 8)}E_CPU_Offload_Fixed_{datetime.now().strftime("%Y%m%d_%H%M%S")}'
     
     # Setup distributed environment first
     dist_manager = DeepSpeedIntegrationManager()
     dist_manager.setup_distributed_environment()
     
     # Only log from rank 0 in distributed training
-    should_log = True
+    should_log = dist_manager.should_log()
     
     if should_log:
         # Create enhanced directory structure
@@ -665,558 +708,342 @@ def main():
         setup_deepspeed_logging()
         
         print("\n" + "="*80)
-        print("ADAPTIVE AI TRAINING SYSTEM WITH DEEPSPEED INTEGRATION")
-        print("   Self-Improving • Intelligent • Production-Ready • Distributed")
+        print("FIXED CPU OFFLOADING DEEPSPEED TRAINING SYSTEM")
         print("="*80)
-    
-    # Initialize enhanced resource manager
-    resource_manager = EnhancedResourceManager(dist_manager)
-    
-    if should_log:
-        # Display comprehensive system information
-        print(f"\nDistributed Training Information:")
-        dist_info = dist_manager.get_device_info()
-        print(f"   World size: {dist_info['world_size']}")
-        print(f"   Global rank: {dist_info['rank']}")
-        print(f"   Local rank: {dist_info['local_rank']}")
-        print(f"   Device: {dist_info.get('device', 'cpu')}")
+        print(f"Experiment: {experiment_name}")
+        print(f"DeepSpeed Available: {DEEPSPEED_AVAILABLE}")
+        print(f"CUDA Available: {torch.cuda.is_available()}")
+        print(f"GPU Count: {torch.cuda.device_count() if torch.cuda.is_available() else 0}")
+        print("="*80)
         
-        if 'gpu_name' in dist_info:
-            print(f"   GPU: {dist_info['gpu_name']} ({dist_info['gpu_memory_gb']:.1f}GB)")
+        # System information
+        resource_manager = EnhancedResourceManager(dist_manager)
+        print("\nSystem Information:")
+        for key, value in resource_manager.system_info.items():
+            if key == 'gpu_info' and isinstance(value, list):
+                print(f"  {key}:")
+                for i, gpu in enumerate(value):
+                    print(f"    GPU {i}: {gpu['name']} ({gpu['memory_gb']:.1f}GB)")
+            elif key != 'distributed_info':
+                print(f"  {key}: {value}")
         
-        print(f"\nSystem Resources:")
-        system_info = resource_manager.system_info
-        print(f"   RAM: {system_info['memory_gb']:.1f}GB ({system_info['memory_usage_percent']:.1f}% used)")
-        print(f"   CPU cores: {system_info['cpu_count']}")
-        print(f"   Storage: {system_info['disk_free_gb']:.1f}GB free")
-        
-        if system_info.get('gpu_info'):
-            print(f"   Total GPUs: {len(system_info['gpu_info'])}")
-            for gpu in system_info['gpu_info']:
-                print(f"     GPU {gpu['device_id']}: {gpu['name']} ({gpu['memory_gb']:.1f}GB)")
+        print("\nDistributed Information:")
+        dist_info = resource_manager.system_info['distributed_info']
+        for key, value in dist_info.items():
+            print(f"  {key}: {value}")
     
     try:
-        # Environment validation
-        if check_environment and should_log:
-            logging.info("Validating training environment...")
-            issues = validate_environment()
-            if issues:
-                logging.warning("Environment issues found:")
-                for issue in issues:
-                    logging.warning(f"     - {issue}")
-            else:
-                logging.info("Environment validation passed!")
-            
-            if dry_run:
-                return 0
+        # STEP 1: Create base configuration
+        if should_log:
+            print(f"\n{'='*60}")
+            print("STEP 1: CREATING BASE CONFIGURATION")
+            print(f"{'='*60}")
         
-        # Data processing
-        if process_oasst:
-            input_file, output_file = process_oasst
-            try:
-                count = process_oasst_data(input_file, output_file)
+        # Get base preset
+        if hasattr(ConfigPresets, config_choice):
+            config = getattr(ConfigPresets, config_choice)()
+        else:
+            raise ValueError(f"Unknown config preset: {config_choice}")
+        
+        if should_log:
+            print(f"Base configuration loaded: {config_choice}")
+            print(f"  Default use_deepspeed: {getattr(config, 'use_deepspeed', False)}")
+            print(f"  Default cpu_offload: {getattr(config, 'cpu_offload', False)}")
+            print(f"  Default zero_stage: {getattr(config, 'zero_stage', 0)}")
+        
+        # STEP 2: Apply parameter overrides
+        if should_log:
+            print(f"\n{'='*60}")
+            print("STEP 2: APPLYING PARAMETER OVERRIDES")
+            print(f"{'='*60}")
+        
+        if override_params:
+            for key, value in override_params.items():
+                if hasattr(config, key):
+                    old_value = getattr(config, key)
+                    setattr(config, key, value)
+                    if should_log:
+                        print(f"  {key}: {old_value} -> {value}")
+                else:
+                    if should_log:
+                        print(f"  WARNING: Unknown parameter '{key}' ignored")
+        
+        # Update experiment name
+        config.experiment_name = experiment_name
+        
+        # STEP 3: Apply DeepSpeed overrides BEFORE auto-configuration
+        if should_log:
+            print(f"\n{'='*60}")
+            print("STEP 3: APPLYING DEEPSPEED MANUAL OVERRIDES")
+            print(f"{'='*60}")
+        
+        # Apply manual DeepSpeed overrides
+        for key, value in manual_deepspeed_overrides.items():
+            if hasattr(config, key):
+                old_value = getattr(config, key)
+                setattr(config, key, value)
                 if should_log:
-                    logging.info(f"Successfully processed {count:,} conversations")
-                return 0
+                    print(f"  MANUAL OVERRIDE: {key}: {old_value} -> {value}")
+            else:
+                # Create new attribute for DeepSpeed-specific settings
+                setattr(config, key, value)
+                if should_log:
+                    print(f"  NEW ATTRIBUTE: {key} = {value}")
+        
+        # STEP 4: Auto-configure with resource manager (should preserve manual overrides)
+        if should_log:
+            print(f"\n{'='*60}")
+            print("STEP 4: AUTO-CONFIGURING WITH RESOURCE MANAGER")
+            print(f"{'='*60}")
+        
+        wizard = AdaptiveDeepSpeedWizard(resource_manager)
+        config = wizard.auto_configure_deepspeed(
+            config, 
+            natural_description=f"Training {config_choice} model with forced CPU offloading",
+            manual_overrides=manual_deepspeed_overrides
+        )
+        
+        # STEP 5: Verify final configuration
+        if should_log:
+            print(f"\n{'='*60}")
+            print("STEP 5: FINAL CONFIGURATION VERIFICATION")
+            print(f"{'='*60}")
+            
+            critical_settings = [
+                'use_deepspeed', 'cpu_offload', 'cpu_offload_optimizer', 
+                'cpu_offload_parameters', 'zero_stage', 'precision'
+            ]
+            
+            for setting in critical_settings:
+                value = getattr(config, setting, "NOT SET")
+                print(f"  {setting}: {value}")
+        
+        # Environment validation
+        if check_environment:
+            if should_log:
+                print(f"\n{'='*60}")
+                print("ENVIRONMENT VALIDATION")
+                print(f"{'='*60}")
+            
+            try:
+                env_status = validate_environment(config)
+                if should_log:
+                    print(f"Environment validation: {env_status}")
             except Exception as e:
                 if should_log:
-                    logging.error(f"Data processing failed: {e}")
-                return 1
+                    print(f"Environment validation failed: {e}")
         
-        # Load and configure base model
-        try:
-            # Get base configuration from preset
-            config_map = {
-                'debug': ConfigPresets.debug,
-                'b1': ConfigPresets.b1,
-                'b7': ConfigPresets.b7,
-                'b14': ConfigPresets.b14,
-                'b50': ConfigPresets.b50,
-                'b100': ConfigPresets.b100,
-                'b200': ConfigPresets.b200,
-                'b300': ConfigPresets.b300,
-            }
-            
-            if config_choice not in config_map:
-                raise ValueError(f"Invalid config choice: {config_choice}")
-            
-            config = config_map[config_choice]()
-
-            # Apply parameter overrides
-            if override_params:
-                for param, value in override_params.items():
-                    if value is not None and hasattr(config, param):
-                        setattr(config, param, value)
-                        if should_log:
-                            logging.info(f"Override: {param} = {value}")
-            
-            # Set experiment name
-            config.experiment_name = experiment_name
-            
-            # Add DeepSpeed-specific attributes if not present
-            if not hasattr(config, 'use_deepspeed'):
-                config.use_deepspeed = enable_deepspeed
-            if not hasattr(config, 'zero_stage'):
-                config.zero_stage = zero_stage
-            if not hasattr(config, 'cpu_offload'):
-                config.cpu_offload = enable_cpu_offload
-            if nvme_path and not hasattr(config, 'nvme_path'):
-                config.nvme_path = nvme_path
-            
-            # Enhanced DeepSpeed configuration
-            if enable_deepspeed and config.use_deepspeed:
-                wizard = AdaptiveDeepSpeedWizard(resource_manager)
-                config = wizard.auto_configure_deepspeed(config)
-                
-                if should_log:
-                    logging.info(f"DeepSpeed optimization applied")
-            
-            config.validate()
-            if should_log:
-                logging.info(f"Configuration loaded and optimized: {config_choice}")
-            
-        except Exception as e:
-            if should_log:
-                logging.error(f"Configuration error: {e}")
-                logging.error(traceback.format_exc())
-            return 1
+        # Initialize training components
+        if should_log:
+            print(f"\n{'='*60}")
+            print("INITIALIZING TRAINING COMPONENTS")
+            print(f"{'='*60}")
         
         # Initialize tokenizer
         try:
-            tokenizer = ConversationTokenizer(model_name="gpt-4")
-            config.vocab_size = tokenizer.get_vocab_size()
+            tokenizer = ConversationTokenizer()
+            if hasattr(config, 'vocab_size'):
+                config.vocab_size = tokenizer.vocab_size
             if should_log:
-                logging.info("Tokenizer initialized successfully")
+                print(f"Tokenizer initialized: vocab_size={config.vocab_size}")
         except Exception as e:
             if should_log:
-                logging.error(f"Failed to initialize tokenizer: {e}")
-            return 1
+                print(f"Tokenizer initialization failed: {e}")
+            raise
         
-        # Data validation
-        if validate_data_path:
-            try:
-                if should_log:
-                    logging.info(f"Validating data: {validate_data_path}")
-                
-                validate_path = Path(validate_data_path)
-                if not validate_path.exists():
-                    shard_files = list(validate_path.parent.glob(f"{validate_path.stem}_shard_*.jsonl"))
-                    if shard_files:
-                        if should_log:
-                            logging.info(f"Found {len(shard_files)} shard files")
-                        validate_data_path = str(shard_files[0])
-                    else:
-                        if should_log:
-                            logging.error(f"File not found: {validate_data_path}")
-                        return 1
-                
-                stats = validate_data_comprehensive(validate_data_path, tokenizer)
-                
-                if stats and should_log:
-                    logging.info("Validation Results:")
-                    for key, value in stats.items():
-                        if isinstance(value, dict):
-                            continue
-                        elif isinstance(value, float) and 0 <= value <= 1:
-                            logging.info(f"   {key.replace('_', ' ').title()}: {value:.2%}")
-                        elif isinstance(value, (int, float)):
-                            logging.info(f"   {key.replace('_', ' ').title()}: {value:,}")
-                
-                return 0
-                
-            except Exception as e:
-                if should_log:
-                    logging.error(f"Data validation failed: {e}")
-                return 1
-        
-        # Initialize model for benchmarking
+        # Initialize model
         try:
-            if should_log:
-                print(f"\nInitializing model for performance measurement...")
+            model_config = config_to_deepseek_config(config)
+            model = DeepSeekTransformer(model_config)
             
-            # Create model
-            deepseek_config = config_to_deepseek_config(config)
-            model = DeepSeekTransformer(deepseek_config)
-            
+            # Get model info
             if should_log:
-                print(f"   Model: ~{estimate_parameters(deepseek_config):,} parameters")
-                if config.use_moe:
-                    print(f"   MoE: {config.num_experts} experts, top-{config.moe_top_k} routing")
-        
+                memory_info = model.get_memory_footprint()
+                print(f"Model initialized:")
+                print(f"  Total parameters: {memory_info['total_parameters']:,}")
+                print(f"  Memory footprint: {memory_info['total_size_mb']:.1f} MB")
+                if hasattr(config, 'use_moe') and config.use_moe:
+                    print(f"  Active parameters: {memory_info.get('expert_params_active', 'N/A'):,}")
+                    print(f"  Parameter efficiency: {memory_info.get('parameter_efficiency', 'N/A'):.1%}")
         except Exception as e:
             if should_log:
-                logging.error(f"Model initialization failed: {e}")
-                logging.error(traceback.format_exc())
-            return 1
+                print(f"Model initialization failed: {e}")
+            raise
         
-        # Initialize variables for time estimation
-        estimated_seconds = None
-        dataset_size = 0
-        steps_per_epoch = 0
-        total_training_steps = 0
-        
-        # MEASURED PERFORMANCE TIME ESTIMATION
-        if estimate_time and should_log:
+        # Performance benchmarking
+        if estimate_time and not dry_run:
+            if should_log:
+                print(f"\n{'='*60}")
+                print("PERFORMANCE BENCHMARKING")
+                print(f"{'='*60}")
+            
             try:
-                # Analyze real dataset
-                print("\nAnalyzing dataset...")
-                total_file_size = 0
-                avg_conversation_length = 0
-                
-                try:
-                    dataset_path = Path(config.train_data_path)
-                    if dataset_path.exists():
-                        total_file_size = dataset_path.stat().st_size / (1024**2)  # MB
-                        
-                        with open(config.train_data_path, 'r') as f:
-                            sample_lengths = []
-                            for i, line in enumerate(f):
-                                dataset_size += 1
-                                if i < 100:  # Sample first 100 for length estimation
-                                    try:
-                                        data = json.loads(line)
-                                        conv_text = str(data)
-                                        sample_lengths.append(len(conv_text))
-                                    except:
-                                        sample_lengths.append(1000)
-                            
-                            if sample_lengths:
-                                avg_conversation_length = sum(sample_lengths) / len(sample_lengths)
-                    else:
-                        # Check for sharded files
-                        shard_files = list(dataset_path.parent.glob(f"{dataset_path.stem}_shard_*.jsonl"))
-                        if shard_files:
-                            if should_log:
-                                logging.info(f"Found {len(shard_files)} shard files")
-                            with open(shard_files[0], 'r') as f:
-                                dataset_size = sum(1 for _ in f) * len(shard_files)  # Estimate
-                                total_file_size = sum(f.stat().st_size for f in shard_files) / (1024**2)
-                        else:
-                            dataset_size = 10000
-                            total_file_size = 100
-                            avg_conversation_length = 1000
-                            
-                except Exception as e:
-                    logging.warning(f"Dataset analysis failed: {e}")
-                    dataset_size = 10000
-                    total_file_size = 100
-                    avg_conversation_length = 1000
-                
-                print(f"   Dataset: {dataset_size:,} samples ({total_file_size:.1f}MB)")
-                print(f"   Average conversation: {avg_conversation_length:.0f} chars")
-                
-                # Calculate training structure first
-                effective_batch_size = (config.batch_size * 
-                                      config.gradient_accumulation_steps * 
-                                      dist_manager.world_size)
-                
-                steps_per_epoch = max(1, dataset_size // effective_batch_size)
-                total_training_steps = steps_per_epoch * config.num_epochs
-                
-                print(f"   Steps per epoch: {steps_per_epoch:,}")
-                print(f"   Total training steps: {total_training_steps:,}")
-                print(f"   Effective batch size: {effective_batch_size}")
-                
-                # MEASURE actual performance - this measures ONE STEP that doesn't count for training
-                print("\nBenchmarking actual training performance...")
-                perf_stats = benchmark_actual_performance(model, tokenizer, config, dist_manager, samples=min(32, dataset_size//10))
-                
-                # Extract single step metrics
-                single_step_time = perf_stats['single_step_time']
-                
-                # Scale up to full training - THIS IS THE CRITICAL CALCULATION
-                # Each training step = 1 forward + 1 backward + optimizer step (every gradient_accumulation_steps)
-                # We measured the time for one complete step (including gradient accumulation)
-                
-                # Total time = steps_per_epoch * num_epochs * time_per_step
-                estimated_seconds = total_training_steps * single_step_time
-                
-                estimated_hours = estimated_seconds / 3600
-                estimated_days = estimated_hours / 24
-                
-                # Calculate confidence intervals
-                confidence_factor = 1.2  # 20% uncertainty
-                best_case_hours = estimated_hours / confidence_factor
-                worst_case_hours = estimated_hours * confidence_factor
-                
-                # Throughput analysis
-                tokens_per_step = perf_stats['tokens_per_step']
-                samples_per_step = perf_stats['samples_per_step']
-                
-                tokens_per_second = tokens_per_step / single_step_time if single_step_time > 0 else 0
-                samples_per_second = samples_per_step / single_step_time if single_step_time > 0 else 0
-                
-                # Scale for distributed training
-                effective_tokens_per_sec = tokens_per_second * dist_manager.world_size
-                effective_samples_per_sec = samples_per_second * dist_manager.world_size
-                
-                print(f"\nTRAINING TIME ANALYSIS:")
-                print(f"{'='*60}")
-                print(f"Dataset Analysis:")
-                print(f"   Total samples: {dataset_size:,}")
-                print(f"   Epochs: {config.num_epochs}")
-                print(f"   Steps per epoch: {steps_per_epoch:,}")
-                print(f"   Total training steps: {total_training_steps:,}")
-                print(f"   Effective batch size: {effective_batch_size}")
-                
-                print(f"\nMeasured Performance (Single Step):")
-                print(f"   Time per step: {single_step_time:.3f}s")
-                print(f"   Tokens per step: {tokens_per_step:,.0f}")
-                print(f"   Samples per step: {samples_per_step:.0f}")
-                print(f"   Peak memory: {perf_stats['peak_memory_gb']:.1f}GB")
-                
-                print(f"\nScaled Performance ({dist_manager.world_size}x GPUs):")
-                print(f"   Effective tokens/second: {effective_tokens_per_sec:,.0f}")
-                print(f"   Effective samples/second: {effective_samples_per_sec:.1f}")
-                
-                print(f"\nTime Estimates:")
-                print(f"   CALCULATED estimate: {estimated_hours:.1f}h ({estimated_days:.2f} days)")
-                print(f"   Best case: {best_case_hours:.1f}h ({best_case_hours/24:.2f} days)")
-                print(f"   Worst case: {worst_case_hours:.1f}h ({worst_case_hours/24:.2f} days)")
-                
-                # Performance factors analysis
-                print(f"\nConfiguration Impact:")
-                if config.use_moe:
-                    print(f"   MoE: {config.num_experts} experts, top-{config.moe_top_k}")
-                    print(f"   MoE overhead: ~20-40% typical")
-                
-                if getattr(config, 'cpu_offload', False):
-                    print(f"   CPU offload: ENABLED (expect 40-60% slowdown)")
-                
-                if getattr(config, 'zero_stage', 0) >= 2:
-                    print(f"   ZeRO-{config.zero_stage}: Communication overhead present")
-                
-                print(f"   Sequence length: {config.seq_length:,} tokens")
-                print(f"   Mixed precision: {getattr(config, 'precision', 'fp32')}")
-                
-                # Cost estimation (if applicable)
-                if torch.cuda.is_available():
-                    gpu_name = torch.cuda.get_device_name(0)
-                    # Rough cloud cost estimates (per GPU-hour)
-                    gpu_costs = {
-                        'A100': 2.00, 'H100': 3.50, 'V100': 1.20, 
-                        '4090': 0.80, '3090': 0.60, 'T4': 0.35
-                    }
-                    
-                    gpu_cost_per_hour = 1.00  # default
-                    for gpu_type, cost in gpu_costs.items():
-                        if gpu_type in gpu_name:
-                            gpu_cost_per_hour = cost
-                            break
-                    
-                    total_gpu_hours = estimated_hours * dist_manager.world_size
-                    estimated_cost = total_gpu_hours * gpu_cost_per_hour
-                    cost_range_low = best_case_hours * dist_manager.world_size * gpu_cost_per_hour
-                    cost_range_high = worst_case_hours * dist_manager.world_size * gpu_cost_per_hour
-                    
-                    print(f"\nEstimated Cloud Cost:")
-                    print(f"   GPU type: {gpu_name}")
-                    print(f"   Cost per GPU-hour: ${gpu_cost_per_hour:.2f}")
-                    print(f"   Total GPU-hours: {total_gpu_hours:.1f}")
-                    print(f"   Estimated cost: ${estimated_cost:.2f}")
-                    print(f"   Range: ${cost_range_low:.2f} - ${cost_range_high:.2f}")
-                
-                # Recommendations
-                print(f"\nOPTIMIZATION RECOMMENDATIONS:")
-                if estimated_hours > 24:
-                    print(f"   Training >24h - consider reducing model size or dataset")
-                if perf_stats['peak_memory_gb'] > 20:
-                    print(f"   High memory usage - consider gradient checkpointing")
-                if config.batch_size == 1:
-                    print(f"   Small batch size - increase if memory allows")
-                if not config.use_moe and estimated_hours > 48:
-                    print(f"   Consider MoE for faster training with large models")
-                if dist_manager.world_size == 1 and torch.cuda.device_count() > 1:
-                    print(f"   Multiple GPUs detected - consider distributed training")
-                
-                print(f"{'='*60}")
-                
-            except Exception as e:
-                if should_log:
-                    logging.error(f"Performance measurement failed: {e}")
-                    logging.error(traceback.format_exc())
-                    
-                # Fallback to simple estimation
-                print(f"\nFALLBACK TIME ESTIMATION:")
-                try:
-                    if dataset_size > 0 and steps_per_epoch > 0:
-                        # Conservative fallback calculation
-                        fallback_step_time = 1.0  # 1 second per step estimate
-                        estimated_seconds = total_training_steps * fallback_step_time
-                        fallback_hours = estimated_seconds / 3600
-                        print(f"   Conservative estimate: {fallback_hours:.1f} hours")
-                    else:
-                        print(f"   Unable to estimate training time")
-                        estimated_seconds = None
-                except:
-                    print(f"   Unable to estimate training time")
-                    estimated_seconds = None
-        
-        # Dry run summary
-        if dry_run:
-            if should_log:
-                model_size_gb = resource_manager._estimate_model_memory_usage(config)
-                print(f"\nDRY RUN COMPLETE - CONFIGURATION SUMMARY:")
-                print(f"{'='*60}")
-                print(f"   Configuration: {config_choice}")
-                print(f"   Model parameters: ~{estimate_parameters(deepseek_config):,}")
-                print(f"   Estimated size: {model_size_gb:.1f}GB")
-                print(f"   MoE: {'Enabled' if config.use_moe else 'Disabled'}")
-                if config.use_moe:
-                    print(f"   MoE experts: {config.num_experts}")
-                print(f"   DeepSpeed: {'Enabled' if getattr(config, 'use_deepspeed', False) else 'Disabled'}")
-                print(f"   CPU offload: {'Enabled' if getattr(config, 'cpu_offload', False) else 'Disabled'}")
-                print(f"   Sequence length: {config.seq_length:,}")
-                print(f"   Batch size: {config.batch_size}")
-                print(f"   Gradient accumulation: {config.gradient_accumulation_steps}")
-                print(f"   World size: {dist_manager.world_size}")
-                print(f"   Training epochs: {config.num_epochs}")
-                print(f"   Learning rate: {config.learning_rate}")
-                if dataset_size > 0:
-                    print(f"   Dataset size: {dataset_size:,} samples")
-                    print(f"   Steps per epoch: {steps_per_epoch:,}")
-                    print(f"   Total training steps: {total_training_steps:,}")
-                if estimated_seconds:
-                    print(f"   Estimated training time: {estimated_seconds/3600:.1f} hours")
-                print(f"{'='*60}")
-                print(f"   Ready for training!")
-            return 0
-        
-        # Initialize trainer and run training
-        try:
-            if should_log:
-                print(f"\nINITIALIZING TRAINING SYSTEM...")
-            
-            # Create enhanced trainer with DeepSpeed support
-            trainer = EnhancedConversationTrainer(
-                model=model,
-                tokenizer=tokenizer,
-                config=config,
-                logger=None  # We'll use the built-in logging
-            )
-            
-            if should_log:
-                print(f"\nTRAINING CONFIGURATION:")
-                print(f"   Experiment: {config.experiment_name}")
-                print(f"   Model: ~{estimate_parameters(deepseek_config):,} parameters")
-                print(f"   Training mode: {'DeepSpeed' if getattr(trainer, 'use_deepspeed', False) else 'Standard PyTorch'}")
-                print(f"   World size: {dist_manager.world_size}")
-                print(f"   Sequence length: {config.seq_length:,}")
-                print(f"   Effective batch size: {config.batch_size * config.gradient_accumulation_steps * dist_manager.world_size}")
-                
-                if config.use_moe:
-                    print(f"   MoE experts: {config.num_experts}")
-                    print(f"   MoE routing: top-{config.moe_top_k}")
-                    if hasattr(config, 'capacity_factor'):
-                        print(f"   Capacity factor: {config.capacity_factor}")
-                
-                if getattr(trainer, 'use_deepspeed', False):
-                    print(f"   CPU offload: {'Enabled' if getattr(config, 'cpu_offload', False) else 'Disabled'}")
-                    print(f"   ZeRO stage: {getattr(config, 'zero_stage', 'Not set')}")
-            
-            # Load datasets
-            train_dataset = ConversationDataset(
-                config.train_data_path,
-                tokenizer,
-                config,
-            )
-            
-            eval_dataset = None
-            if Path(config.eval_data_path).exists():
-                eval_dataset = ConversationDataset(
-                    config.eval_data_path,
-                    tokenizer,
-                    config,
+                performance_stats = benchmark_actual_performance(
+                    model, tokenizer, config, dist_manager, samples=10
                 )
-            
-            # Run training
-            if should_log:
-                print(f"\n" + "="*80)
-                print(f"STARTING ENHANCED TRAINING WITH MEASURED OPTIMIZATIONS")
-                print(f"="*80)
-            
-            start_time = datetime.now()
-            
-            # Optimize for long sequences if enabled
-            if optimize_for_long_sequences and getattr(trainer, 'use_deepspeed', False):
-                trainer.optimize_for_sequence_length(config.seq_length)
-            
-            trainer.train(train_dataset, eval_dataset)
-            
-            end_time = datetime.now()
-            training_duration = (end_time - start_time).total_seconds()
-            
-            if should_log:
-                print(f"\nTRAINING COMPLETED SUCCESSFULLY!")
-                print(f"   Actual duration: {training_duration:.1f}s ({training_duration/3600:.2f}h)")
                 
-                # Compare with prediction if we had one
-                if estimate_time and estimated_seconds is not None:
-                    try:
-                        accuracy = abs(training_duration - estimated_seconds) / estimated_seconds
-                        print(f"   Prediction accuracy: {(1-accuracy)*100:.1f}% (off by {accuracy*100:.1f}%)")
-                    except Exception as e:
-                        logging.debug(f"Could not calculate prediction accuracy: {e}")
+                # Estimate total training time
+                total_batches = 1000  # Rough estimate
+                estimated_total_time = performance_stats['single_step_time'] * total_batches
                 
-                # Get MoE diagnostics if available
-                if config.use_moe and getattr(trainer, 'use_deepspeed', False):
-                    try:
-                        moe_diagnostics = trainer.get_moe_diagnostics()
-                        if 'recommendations' in moe_diagnostics and moe_diagnostics['recommendations']:
-                            print(f"\nMoE Routing Analysis:")
-                            for rec in moe_diagnostics['recommendations']:
-                                print(f"   - {rec}")
-                    except Exception as e:
-                        logging.debug(f"Could not get MoE diagnostics: {e}")
-                
-                # Final memory statistics
-                try:
-                    memory_stats = trainer.get_memory_stats()
-                    if 'gpu' in memory_stats:
-                        gpu_stats = memory_stats['gpu']
-                        print(f"\nFinal Memory Usage:")
-                        print(f"   GPU allocated: {gpu_stats['allocated_gb']:.2f}GB")
-                        print(f"   GPU reserved: {gpu_stats['reserved_gb']:.2f}GB")
-                        print(f"   Peak GPU usage: {gpu_stats['max_allocated_gb']:.2f}GB")
-                except Exception as e:
-                    logging.debug(f"Could not get memory stats: {e}")
-            
-            return 0
-            
-        except KeyboardInterrupt:
-            if should_log:
-                print(f"\nTraining interrupted by user")
-            return 1
-        except Exception as e:
-            if should_log:
-                logging.error(f"Training failed: {e}")
-                logging.error(traceback.format_exc())
-            return 1
+                if should_log:
+                    print(f"Training time estimate: {estimated_total_time/3600:.2f} hours")
+                    
+            except Exception as e:
+                if should_log:
+                    print(f"Performance benchmarking failed: {e}")
         
+        # Data validation (if requested)
+        if validate_data_path and should_log:
+            print(f"\n{'='*60}")
+            print("DATA VALIDATION")
+            print(f"{'='*60}")
+            try:
+                if Path(validate_data_path).exists():
+                    validation_results = validate_data_comprehensive(validate_data_path, tokenizer)
+                    print(f"Data validation completed: {validation_results}")
+                else:
+                    print(f"Validation data file not found: {validate_data_path}")
+            except Exception as e:
+                print(f"Data validation failed: {e}")
+        
+        # Training execution
+        if not dry_run:
+            if should_log:
+                print(f"\n{'='*80}")
+                print("STARTING TRAINING EXECUTION")
+                print(f"{'='*80}")
+            
+            # Initialize trainer with enhanced capabilities
+            trainer = EnhancedConversationTrainer(model, tokenizer, config, logging.getLogger(__name__))
+            
+            # Debug training setup
+            if hasattr(trainer, 'debug_training_setup'):
+                trainer.debug_training_setup()
+            
+            # Setup datasets
+            train_data_path = Path(config.train_data_path)
+            if not train_data_path.exists():
+                raise FileNotFoundError(f"Training data not found: {config.train_data_path}")
+            
+            # Load dataset
+            try:
+                train_dataset = ConversationDataset(
+                    str(train_data_path), tokenizer, config, "train"
+                )
+                if should_log:
+                    print(f"Training dataset loaded: {len(train_dataset)} samples")
+                
+                # Load evaluation dataset if available
+                eval_dataset = None
+                if (hasattr(config, 'eval_data_path') and 
+                    config.eval_data_path and 
+                    Path(config.eval_data_path).exists()):
+                    eval_dataset = ConversationDataset(
+                        config.eval_data_path, tokenizer, config, "eval"
+                    )
+                    if should_log:
+                        print(f"Evaluation dataset loaded: {len(eval_dataset)} samples")
+            except Exception as e:
+                if should_log:
+                    print(f"Dataset loading failed: {e}")
+                raise
+            
+            # Create data loaders for debugging
+            if should_log:
+                try:
+                    from training.trainer import debug_dataloader
+                    debug_dataloader(
+                        create_dataloader(train_dataset, config, shuffle=False), 
+                        tokenizer, 
+                        max_batches=2
+                    )
+                except Exception as e:
+                    print(f"Dataloader debugging failed: {e}")
+            
+            # Start training
+            try:
+                if should_log:
+                    print(f"Starting training with CPU offloading: {config.cpu_offload}")
+                    print(f"DeepSpeed enabled: {config.use_deepspeed}")
+                    print(f"ZeRO stage: {config.zero_stage}")
+                
+                trainer.train(train_dataset, eval_dataset)
+                
+                if should_log:
+                    print("Training completed successfully!")
+                    
+            except KeyboardInterrupt:
+                if should_log:
+                    print("Training interrupted by user")
+            except Exception as e:
+                if should_log:
+                    print(f"Training failed: {e}")
+                    traceback.print_exc()
+                raise
+        
+        else:
+            if should_log:
+                print(f"\n{'='*80}")
+                print("DRY RUN COMPLETED - NO TRAINING EXECUTED")
+                print("Configuration successfully validated and components initialized")
+                print(f"{'='*80}")
+        
+        # Save final configuration
+        if should_log:
+            config_save_path = f"experiments/{experiment_name}/final_config.yaml"
+            Path(config_save_path).parent.mkdir(parents=True, exist_ok=True)
+            
+            try:
+                if hasattr(config, 'save'):
+                    config.save(config_save_path)
+                    print(f"Final configuration saved: {config_save_path}")
+            except Exception as e:
+                print(f"Failed to save configuration: {e}")
+                
+            # Print configuration summary
+            print(f"\n{'='*60}")
+            print("CONFIGURATION SUMMARY")
+            print(f"{'='*60}")
+            print(f"Experiment: {experiment_name}")
+            print(f"Model: {config_choice} with {getattr(config, 'num_experts', 8)} MoE experts")
+            print(f"CPU Offloading: {config.cpu_offload}")
+            print(f"CPU Optimizer Offloading: {getattr(config, 'cpu_offload_optimizer', False)}")
+            print(f"CPU Parameter Offloading: {getattr(config, 'cpu_offload_parameters', False)}")
+            print(f"ZeRO Stage: {config.zero_stage}")
+            print(f"Precision: {getattr(config, 'precision', 'auto')}")
+            print(f"Micro Batch Size: {config.batch_size}")
+            print(f"Gradient Accumulation: {config.gradient_accumulation_steps}")
+            print(f"Learning Rate: {config.learning_rate}")
+            print(f"Epochs: {config.num_epochs}")
+            print(f"{'='*60}")
+    
     except Exception as e:
         if should_log:
-            logging.error(f"Main execution failed: {e}")
-            logging.error(traceback.format_exc())
-        return 1
+            print(f"CRITICAL ERROR: {e}")
+            print("Full traceback:")
+            traceback.print_exc()
+        
+        # Emergency cleanup
+        if torch.cuda.is_available():
+            try:
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+        
+        raise
+    
+    finally:
+        # Final cleanup
+        if torch.cuda.is_available():
+            try:
+                torch.cuda.empty_cache()
+                if should_log:
+                    print("GPU memory cleared")
+            except Exception as e:
+                if should_log:
+                    print(f"Failed to clear GPU memory: {e}")
 
 
 if __name__ == "__main__":
-    # For DeepSpeed, we need to handle the distributed launch
-    if DEEPSPEED_AVAILABLE and len(sys.argv) > 1 and '--local_rank' in ' '.join(sys.argv):
-        # DeepSpeed distributed launch
-        import torch
-        if not torch.distributed.is_initialized():
-            deepspeed.init_distributed()
-    
-    exit_code = main()
-    
-    # Clean up distributed training
-    if DEEPSPEED_AVAILABLE:
-        try:
-            import torch
-            if torch.distributed.is_initialized():
-                torch.distributed.destroy_process_group()
-        except:
-            pass
-    
-    exit(exit_code)
+    main()

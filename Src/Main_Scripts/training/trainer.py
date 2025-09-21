@@ -521,7 +521,7 @@ class EnhancedConversationTrainer:
         self.scaler = GradScaler() if self.use_amp and self.training_precision in ["fp16", "mixed_fp16"] else None
         
         # Model compilation
-        if getattr(self.config, 'compile', False) and hasattr(torch, 'compile'):
+        if getattr(self.config, 'compile', True) and hasattr(torch, 'compile'):
             try:
                 self.model = torch.compile(self.model, mode='default')
                 print("Model compiled successfully")

@@ -48,7 +48,7 @@ class Config:
     assistant_loss_weight: float = 1.5
     max_conversations_per_file: int = 10000
     streaming_threshold_gb: float = 10.0  # Auto-enable streaming for large datasets
-    prefetch_factor: int = 2
+    prefetch_factor: int = 4
     pin_memory: bool = True
     
     # Generation parameters
@@ -194,6 +194,8 @@ class Config:
             self.gradient_compression = True
             self.cpu_offload_optimizer = True
             self.cpu_offload_parameters = True
+        if self._estimate_parameters() > 1e9:  # 1B+ parameters
+            self.enable_cpu_adam = True
             
         # Auto-configure precision based on hardware
         if self.precision == "auto":
