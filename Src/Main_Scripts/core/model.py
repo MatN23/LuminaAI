@@ -288,7 +288,8 @@ class OptimizedMoELayer(nn.Module):
         std = self.config.init_std
         
         # Initialize gate with smaller std for better routing stability
-        nn.init.normal_(self.gate.weight, mean=0.0, std=0.001) 
+        # Better initialization for routing stability
+        nn.init.normal_(self.gate.weight, mean=0.0, std=0.02)
         
         # Initialize expert weights
         for expert in self.experts:
@@ -382,7 +383,7 @@ class OptimizedMoELayer(nn.Module):
         
         # Load balancing loss: encourage uniform distribution
         # L_aux = α * Σ(f_i * P_i) * N where f_i is usage, P_i is importance, N is num_experts
-        load_balancing_loss = torch.sum(expert_usage * gate_importance) * self.num_experts
+        load_balancing_loss = self.num_experts * torch.sum(expert_usage * gate_importance)
         
         return load_balancing_loss * self.load_balancing_weight
 
