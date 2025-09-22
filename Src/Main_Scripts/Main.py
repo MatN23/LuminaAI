@@ -971,7 +971,6 @@ def main():
         'early_stopping_patience': 10,             # Early stopping after 10 eval steps
 
         # Sequence and Token Hardcodes
-        'seq_length': 2048,                         # Hard cap sequence length
         'max_new_tokens': 512,                      # Max generation tokens
         'temperature': 0.8,                         # Generation temperature
         'top_p': 0.9,                              # Nucleus sampling
