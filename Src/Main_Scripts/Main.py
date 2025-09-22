@@ -13,12 +13,6 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 
-os.environ['TOKENIZERS_PARALLELISM'] = 'false'     # Avoid tokenizer warnings
-os.environ['CUDA_LAUNCH_BLOCKING'] = '1'           # Synchronous CUDA for debugging
-os.environ['TORCH_SHOW_CPP_STACKTRACES'] = '1'     # Better error messages
-os.environ['NCCL_DEBUG'] = 'INFO'                  # NCCL communication debug
-os.environ['PYTHONPATH'] = '.'  
-
 # Add the current directory to Python path for imports
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -26,12 +20,6 @@ sys.path.insert(0, str(Path(__file__).parent))
 try:
     import deepspeed
     import torch
-
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True  
-    torch.backends.cudnn.benchmark = False
-    torch.backends.cudnn.deterministic = True
-
     DEEPSPEED_AVAILABLE = True
 except ImportError:
     DEEPSPEED_AVAILABLE = False
@@ -925,71 +913,31 @@ def main():
     
     # Override specific parameters (set to None to use preset defaults)
     override_params = {
-        # Core MoE and Training Settings
-        'use_moe': True,                            # Enable MoE
-        'num_epochs': 3,                            # Training epochs (reduced for testing)
-        'learning_rate': 1e-4,                      # Learning rate
-        'batch_size': 1,                            # Micro batch size
-        'gradient_accumulation_steps': 16,          # Reduced for testing
+        'use_moe': True,
+        'num_epochs': 3, 
+        'learning_rate': 1e-4, 
+        'min_lr': 1e-6,
+        'lr_scheduler': "cosine",
+        'batch_size': 1,        
+        'gradient_accumulation_steps': 16, 
         'train_data_path': 'oasst1_data/oasst1_train.jsonl',
         'eval_data_path': 'oasst1_data/oasst1_train.jsonl',
+        'max_conversations_per_file': 100000,
+        'backup_every_n_hours': 6,
+
         'capacity_factor': 1.25,
         'load_balancing_weight': 0.08,
-    
-        # Data Loading Hardcodes
-        'num_workers': 8,                           # Force 8 data loading workers
-        'pin_memory': True,                         # Always pin memory for GPU transfers
-        'prefetch_factor': 8,                       # Hardcode prefetch buffer size
-        'persistent_workers': True,                 # Keep workers alive between epochs
-    
-        # Memory Management Hardcodes
-        'max_memory_usage': 0.85,                   # Cap GPU memory usage at 85%
-        'memory_cleanup_interval': 500,             # Clean memory every 500 steps
-        'streaming_threshold_gb': 5.0,              # Force streaming for files >5GB
+        'num_workers': 2,
+        'compile': True,
+        'max_memory_usage': 0.9,
+        'save_every_n_batches': 1000,
+        'eval_every_n_batches': 500,
+        'use_flash_attention': True,
 
-        # Logging and Monitoring Hardcodes
-        'eval_every_n_batches': 100,                # Force evaluation frequency
-        'save_every_n_batches': 500,                # Force checkpoint frequency
-        'health_check_interval': 50,                # Force health check frequency
-        'log_level': 'INFO',                        # Force specific log level
-        'steps_per_print': 10,                      # Log every 10 steps
-
-        # Precision and Stability Hardcodes
-        'precision': 'fp32',                        # Force BF16 precision
-        'inference_precision': 'fp32',              # Force BF16 for inference
-        'auto_tune_precision': False,               # Disable auto precision tuning
-        'compile': True,                           # Disable model compilation for stability
-        'gradient_checkpointing': True,             # Force gradient checkpointing
-        'use_flash_attention': False,               # Disable for compatibility
-        'max_grad_norm': 1.0,                       # Force gradient clipping
-
-        # Checkpoint and Recovery Hardcodes
-        'save_total_limit': 8,                      # Keep 8 checkpoints
-        'backup_every_n_hours': 2,                  # Backup every 2 hours
-        'checkpoint_compression': False,             # No compression for speed
-        'async_save': False,                        # Synchronous saves for reliability
-        'early_stopping_patience': 10,             # Early stopping after 10 eval steps
-
-        # Sequence and Token Hardcodes
-        'max_new_tokens': 512,                      # Max generation tokens
-        'temperature': 0.8,                         # Generation temperature
-        'top_p': 0.9,                              # Nucleus sampling
-
-        # Optimizer Hardcodes
-        'weight_decay': 0.01,                       # Force weight decay
-        'warmup_ratio': 0.1,                        # Force warmup ratio
-        'min_lr': 1e-6,                            # Minimum learning rate
-        'lr_scheduler': 'cosine',                   # Force cosine scheduler
-
-        # MoE Routing Hardcodes
-        'moe_top_k': 1,                            # Force top-1 routing for efficiency
-        'num_experts': 8,                          # Force 8 experts
-        'expert_parallel_size': 2,                 # Force expert parallelism
-
-        # Error Handling Hardcodes
-        'max_retries': 3,                          # Max retries on failure
-        'skip_nan_batches': True,                  # Skip batches with NaN
-        'emergency_lr_factor': 0.1,                # Emergency LR reduction factor
+        'enable_wandb': True, # Or false
+        'wandb_project': None,
+        'wandb_entity': None,
+        'log_level': "DEBUG", # DEBUG or INFO
     }
     
     # DeepSpeed and optimization settings - THESE ARE MANUAL OVERRIDES
@@ -998,24 +946,12 @@ def main():
         'cpu_offload': True,             # FORCE CPU offloading
         'cpu_offload_optimizer': True,   # FORCE CPU optimizer offloading
         'cpu_offload_parameters': True,  # FORCE CPU parameter offloading
+        'aggressive_cpu_offload': True,
         'zero_stage': 2,                 # FORCE ZeRO-3
+        
         'nvme_path': "Deepspeed/Tmp",               # Set to NVMe path if available
-    
-            'communication_data_type': 'fp32',          # Force FP32 for communication
-        'bucket_size': 100000000,                   # Fixed bucket size
-        'overlap_alltoall': True,                   # For MoE communication overlap
-        'enable_expert_tensor_parallelism': True,   # For MoE expert parallelism
-
-        # ZeRO-3 specific hardcodes
-        'stage3_prefetch_bucket_size': 50000000,    # Control prefetch size
-        'stage3_param_persistence_threshold': 10000, # Parameter persistence
-        'stage3_max_live_parameters': 1000000000,   # Max live parameters
-        'stage3_max_reuse_distance': 1000,          # Memory reuse distance
-    
-        # Stability hardcodes
-        'round_robin_gradients': True,              # Distribute gradients evenly
-        'ignore_unused_parameters': True,           # Ignore unused params
-        'find_unused_parameters': False,            # Don't auto-find unused params
+        'nvme_offload_optimizer': False,
+        'nvme_offload_parameters': True,
     }
     
     # Optimization flags

@@ -118,7 +118,7 @@ class MoEOptimizationManager:
                 "enable_expert_tensor_parallelism": True,
                 "all_to_all_dispatch": True,
                 "overlap_alltoall": True,  # Critical for multi-node
-                "comm_dtype": "fp32" if self.config.precision in ["fp16", "mixed_fp16"] else "bf16",
+                "comm_dtype": "fp16" if self.config.precision in ["fp16", "mixed_fp16"] else "bf16",
                 
                 # MEMORY OPTIMIZATIONS  
                 "pad_expert_input_to_capacity": True,  # Better GPU utilization
