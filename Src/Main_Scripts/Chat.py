@@ -1,8 +1,5 @@
-#!/usr/bin/env python3
-"""
-Complete Interactive Chat Interface for DeepSeek Transformer
-Fixed to properly load multi-shard ZeRO checkpoints
-"""
+# Copyright (c) 2025 MatN23. All rights reserved.
+# Licensed under the Custom License below.
 
 import os
 import sys
