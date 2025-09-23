@@ -27,10 +27,10 @@ except ImportError:
 
 # Import our modules with fallbacks
 try:
-    from config.config_manager import Config, ConfigPresets, ConfigManager
+    from config.config_manager import Config, ConfigPresets
 except ImportError:
     try:
-        from config_manager import Config, ConfigPresets, ConfigManager
+        from config_manager import Config, ConfigPresets
     except ImportError:
         print("ERROR: Could not import config classes")
         sys.exit(1)
@@ -150,7 +150,7 @@ def benchmark_actual_performance(model, tokenizer, config, dist_manager, samples
     from torch.utils.data import DataLoader
     test_loader = DataLoader(
         test_inputs, 
-        batch_size=config.micro_batch_size, 
+        batch_size=config.batch_size, 
         shuffle=False,
         num_workers=0,
         pin_memory=torch.cuda.is_available()
@@ -497,7 +497,7 @@ class EnhancedResourceManager:
             if sequence_length > 100000:  # Very long sequences with MoE
                 strategy['gradient_accumulation_strategy'] = {
                     'recommended_micro_batch_size': 1,
-                    'recommended_gradient_accumulation': max(config.effective_batch_size * 8, 64),
+                    'recommended_gradient_accumulation': max(config.batch_size * 8, 64),
                     'reason': 'Long sequences with MoE require small micro batches'
                 }
         
@@ -514,57 +514,49 @@ class EnhancedResourceManager:
         return strategy
     
     def _estimate_model_memory_usage(self, config: Config) -> float:
-        """Estimate model memory usage in GB using the enhanced config system."""
+        """Estimate model memory usage in GB."""
         try:
-            # Use the enhanced config's built-in memory estimation
-            memory_est = config.get_memory_estimate_gb()
-            return memory_est['total']
-        except Exception as e:
-            logging.debug(f"Enhanced memory estimation failed: {e}")
+            # Basic parameter count
+            hidden_size = getattr(config, 'hidden_size', 768)
+            num_layers = getattr(config, 'num_layers', 12)
+            vocab_size = getattr(config, 'vocab_size', 50257)
             
-            # Fallback to basic estimation
-            try:
-                # Basic parameter count
-                hidden_size = getattr(config, 'hidden_size', 768)
-                num_layers = getattr(config, 'num_layers', 12)
-                vocab_size = getattr(config, 'vocab_size', 50257)
-                
-                # Rough parameter estimation
-                params = (
-                    vocab_size * hidden_size +  # Embeddings
-                    num_layers * (
-                        hidden_size * hidden_size * 4 +  # Attention
-                        hidden_size * getattr(config, 'intermediate_size', hidden_size * 4) * 2  # FFN
-                    )
+            # Rough parameter estimation
+            params = (
+                vocab_size * hidden_size +  # Embeddings
+                num_layers * (
+                    hidden_size * hidden_size * 4 +  # Attention
+                    hidden_size * getattr(config, 'intermediate_size', hidden_size * 4) * 2  # FFN
                 )
-                
-                # Account for MoE if enabled
-                if hasattr(config, 'use_moe') and config.use_moe:
-                    num_experts = getattr(config, 'num_experts', 8)
-                    params += num_layers * num_experts * hidden_size * getattr(config, 'intermediate_size', hidden_size * 4)
-                
-                # Memory usage: parameters + gradients + optimizer states + activations
-                # Parameters: 4 bytes per param (fp32) or 2 bytes (fp16/bf16)
-                param_memory = params * 2 / 1e9  # Assume mixed precision
-                
-                # Gradients: same size as parameters
-                grad_memory = param_memory
-                
-                # Optimizer states (Adam): 8 bytes per parameter
-                optimizer_memory = params * 8 / 1e9
-                
-                # Activations (rough estimate based on sequence length and batch size)
-                batch_size = getattr(config, 'micro_batch_size', 8)
-                seq_length = getattr(config, 'seq_length', 2048)
-                activation_memory = batch_size * seq_length * hidden_size * num_layers * 4 / 1e9
-                
-                total_memory = param_memory + grad_memory + optimizer_memory + activation_memory
-                
-                return total_memory
-                
-            except Exception as e:
-                logging.debug(f"Fallback memory estimation failed: {e}")
-                return 10.0  # Conservative default
+            )
+            
+            # Account for MoE if enabled
+            if hasattr(config, 'use_moe') and config.use_moe:
+                num_experts = getattr(config, 'num_experts', 8)
+                params += num_layers * num_experts * hidden_size * getattr(config, 'intermediate_size', hidden_size * 4)
+            
+            # Memory usage: parameters + gradients + optimizer states + activations
+            # Parameters: 4 bytes per param (fp32) or 2 bytes (fp16/bf16)
+            param_memory = params * 2 / 1e9  # Assume mixed precision
+            
+            # Gradients: same size as parameters
+            grad_memory = param_memory
+            
+            # Optimizer states (Adam): 8 bytes per parameter
+            optimizer_memory = params * 8 / 1e9
+            
+            # Activations (rough estimate based on sequence length and batch size)
+            batch_size = getattr(config, 'batch_size', 8)
+            seq_length = getattr(config, 'seq_length', 2048)
+            activation_memory = batch_size * seq_length * hidden_size * num_layers * 4 / 1e9
+            
+            total_memory = param_memory + grad_memory + optimizer_memory + activation_memory
+            
+            return total_memory
+            
+        except Exception as e:
+            logging.debug(f"Memory estimation failed: {e}")
+            return 10.0  # Conservative default
 
 
 class AdaptiveDeepSpeedWizard:
@@ -663,10 +655,10 @@ def apply_deepspeed_optimizations(config: Config, strategy: Dict[str, Any]):
     grad_strategy = strategy.get('gradient_accumulation_strategy', {})
     if grad_strategy:
         if 'recommended_micro_batch_size' in grad_strategy:
-            config.micro_batch_size = grad_strategy['recommended_micro_batch_size']
+            config.batch_size = grad_strategy['recommended_micro_batch_size']
         if 'recommended_gradient_accumulation' in grad_strategy:
             config.gradient_accumulation_steps = grad_strategy['recommended_gradient_accumulation']
-        logging.info(f"Adjusted batch size to {config.micro_batch_size}, grad accumulation to {config.gradient_accumulation_steps}")
+        logging.info(f"Adjusted batch size to {config.batch_size}, grad accumulation to {config.gradient_accumulation_steps}")
         logging.info(f"Reason: {grad_strategy.get('reason', 'DeepSpeed optimization')}")
     
     # MoE optimizations
@@ -826,7 +818,7 @@ def create_fallback_trainer(model, tokenizer, config):
                 
                 self.model.train()
                 
-                for epoch in range(min(2, getattr(config, 'num_epochs', 1))):  # Limit epochs
+                for epoch in range(min(2, config.num_epochs)):  # Limit epochs
                     print(f"Basic training epoch {epoch + 1}")
                     
                     for batch_idx, batch in enumerate(train_loader):
@@ -897,7 +889,7 @@ def validate_deepspeed_config(config):
         issues.append("ZeRO stages require DeepSpeed")
     
     # Check batch size configuration
-    batch_size = getattr(config, 'micro_batch_size', 1)
+    batch_size = getattr(config, 'batch_size', 1)
     grad_accum = getattr(config, 'gradient_accumulation_steps', 1)
     if batch_size * grad_accum > 64:
         issues.append(f"Very large effective batch size: {batch_size * grad_accum}")
@@ -926,7 +918,7 @@ def main():
         'learning_rate': 1e-4, 
         'min_lr': 1e-6,
         'lr_scheduler': "cosine",
-        'micro_batch_size': 1,        
+        'batch_size': 1,        
         'gradient_accumulation_steps': 16, 
         'train_data_path': 'oasst1_data/oasst1_train.jsonl',
         'eval_data_path': 'oasst1_data/oasst1_train.jsonl',
@@ -955,7 +947,7 @@ def main():
         'cpu_offload_optimizer': True,   # FORCE CPU optimizer offloading
         'cpu_offload_parameters': True,  # FORCE CPU parameter offloading
         'aggressive_cpu_offload': True,
-        'zero_stage': 2,                 # FORCE ZeRO-2
+        'zero_stage': 2,                 # FORCE ZeRO-3
         
         'nvme_path': "Deepspeed/Tmp",               # Set to NVMe path if available
         'nvme_offload_optimizer': False,
@@ -1021,18 +1013,17 @@ def main():
             print(f"  {key}: {value}")
     
     try:
-        # STEP 1: Create base configuration using ConfigManager
+        # STEP 1: Create base configuration
         if should_log:
             print(f"\n{'='*60}")
             print("STEP 1: CREATING BASE CONFIGURATION")
             print(f"{'='*60}")
         
-        # Use ConfigManager to create and optimize configuration
-        config = ConfigManager.create_config(
-            preset=config_choice,
-            overrides=override_params,
-            optimize_for_hardware=True
-        )
+        # Get base preset
+        if hasattr(ConfigPresets, config_choice):
+            config = getattr(ConfigPresets, config_choice)()
+        else:
+            raise ValueError(f"Unknown config preset: {config_choice}")
         
         if should_log:
             print(f"Base configuration loaded: {config_choice}")
@@ -1040,13 +1031,30 @@ def main():
             print(f"  Default cpu_offload: {getattr(config, 'cpu_offload', False)}")
             print(f"  Default zero_stage: {getattr(config, 'zero_stage', 0)}")
         
+        # STEP 2: Apply parameter overrides
+        if should_log:
+            print(f"\n{'='*60}")
+            print("STEP 2: APPLYING PARAMETER OVERRIDES")
+            print(f"{'='*60}")
+        
+        if override_params:
+            for key, value in override_params.items():
+                if hasattr(config, key):
+                    old_value = getattr(config, key)
+                    setattr(config, key, value)
+                    if should_log:
+                        print(f"  {key}: {old_value} -> {value}")
+                else:
+                    if should_log:
+                        print(f"  WARNING: Unknown parameter '{key}' ignored")
+        
         # Update experiment name
         config.experiment_name = experiment_name
         
-        # STEP 2: Apply DeepSpeed overrides BEFORE auto-configuration
+        # STEP 3: Apply DeepSpeed overrides BEFORE auto-configuration
         if should_log:
             print(f"\n{'='*60}")
-            print("STEP 2: APPLYING DEEPSPEED MANUAL OVERRIDES")
+            print("STEP 3: APPLYING DEEPSPEED MANUAL OVERRIDES")
             print(f"{'='*60}")
         
         # Apply manual DeepSpeed overrides
@@ -1062,10 +1070,10 @@ def main():
                 if should_log:
                     print(f"  NEW ATTRIBUTE: {key} = {value}")
         
-        # STEP 3: Auto-configure with resource manager (should preserve manual overrides)
+        # STEP 4: Auto-configure with resource manager (should preserve manual overrides)
         if should_log:
             print(f"\n{'='*60}")
-            print("STEP 3: AUTO-CONFIGURING WITH RESOURCE MANAGER")
+            print("STEP 4: AUTO-CONFIGURING WITH RESOURCE MANAGER")
             print(f"{'='*60}")
         
         wizard = AdaptiveDeepSpeedWizard(resource_manager)
@@ -1075,34 +1083,26 @@ def main():
             manual_overrides=manual_deepspeed_overrides
         )
         
-        # STEP 4: Validate configuration
+        # STEP 5: Validate configuration
         if should_log:
             print(f"\n{'='*60}")
-            print("STEP 4: CONFIGURATION VALIDATION")
+            print("STEP 5: CONFIGURATION VALIDATION")
             print(f"{'='*60}")
-            
-            # Validate using ConfigManager
-            warnings = ConfigManager.validate_config(config)
-            if warnings:
-                print("Configuration Warnings Found:")
-                for warning in warnings[:3]:  # Show first 3 warnings
-                    print(f"  WARNING: {warning}")
             
             # Validate DeepSpeed configuration
             config_issues = validate_deepspeed_config(config)
             if config_issues:
-                print("DeepSpeed Configuration Issues Found:")
+                print("Configuration Issues Found:")
                 for issue in config_issues:
                     print(f"  WARNING: {issue}")
-            
-            if not warnings and not config_issues:
+            else:
                 print("Configuration validation passed")
             
             # Show final critical settings
             critical_settings = [
                 'use_deepspeed', 'cpu_offload', 'cpu_offload_optimizer', 
                 'cpu_offload_parameters', 'zero_stage', 'precision',
-                'micro_batch_size', 'gradient_accumulation_steps'
+                'batch_size', 'gradient_accumulation_steps'
             ]
             
             print("\nFinal Critical Settings:")
@@ -1118,12 +1118,13 @@ def main():
                 print(f"{'='*60}")
             
             try:
-                env_status = validate_environment()
+                env_status = validate_environment()  # Fixed: removed config parameter
                 if should_log:
                     print(f"Environment validation: {env_status}")
             except Exception as e:
                 if should_log:
                     print(f"Environment validation failed: {e}")
+                # Continue anyway - not critical
                 env_status = "validation_failed"
         
         # Initialize training components
@@ -1317,19 +1318,18 @@ def main():
                 print("Configuration successfully validated and components initialized")
                 print(f"{'='*80}")
         
-        # Save final configuration using ConfigManager
+        # Save final configuration
         if should_log:
             config_save_path = f"experiments/{experiment_name}/final_config.yaml"
             Path(config_save_path).parent.mkdir(parents=True, exist_ok=True)
             
             try:
-                ConfigManager.save_config_with_metadata(config, config_save_path)
-                print(f"Final configuration saved: {config_save_path}")
-            except Exception as e:
-                print(f"Failed to save configuration: {e}")
-                
-                # Manual fallback save as JSON
-                try:
+                if hasattr(config, 'save'):
+                    config.save(config_save_path)
+                    print(f"Final configuration saved: {config_save_path}")
+                else:
+                    # Manual save as JSON if YAML save not available
+                    import json
                     config_dict = {
                         attr: getattr(config, attr) 
                         for attr in dir(config) 
@@ -1338,8 +1338,8 @@ def main():
                     with open(config_save_path.replace('.yaml', '.json'), 'w') as f:
                         json.dump(config_dict, f, indent=2, default=str)
                     print(f"Final configuration saved as JSON: {config_save_path.replace('.yaml', '.json')}")
-                except Exception as json_error:
-                    print(f"Failed to save configuration as JSON: {json_error}")
+            except Exception as e:
+                print(f"Failed to save configuration: {e}")
                 
             # Print configuration summary
             print(f"\n{'='*60}")
@@ -1352,7 +1352,7 @@ def main():
             print(f"CPU Parameter Offloading: {getattr(config, 'cpu_offload_parameters', False)}")
             print(f"ZeRO Stage: {getattr(config, 'zero_stage', 'N/A')}")
             print(f"Precision: {getattr(config, 'precision', 'auto')}")
-            print(f"Micro Batch Size: {getattr(config, 'micro_batch_size', 'N/A')}")
+            print(f"Micro Batch Size: {getattr(config, 'batch_size', 'N/A')}")
             print(f"Gradient Accumulation: {getattr(config, 'gradient_accumulation_steps', 'N/A')}")
             print(f"Learning Rate: {getattr(config, 'learning_rate', 'N/A')}")
             print(f"Epochs: {getattr(config, 'num_epochs', 'N/A')}")

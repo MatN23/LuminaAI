@@ -1,461 +1,1089 @@
-# Copyright (c) 2025 MatN23. All rights reserved.
+# Copyright (c) 2025 Matias Nielsen. All rights reserved.
 # Licensed under the Custom License below.
 
-from typing import Dict, Any, List, Optional, Union
+import yaml
+import os
+import psutil
+import torch
 from dataclasses import dataclass, asdict, field
 from datetime import datetime
+from typing import Dict, Any, Optional, List
 from pathlib import Path
-import yaml
-import torch
-import os
-import json
 
 
 @dataclass
 class Config:
-    """Base configuration class for MoE models with comprehensive parameter support."""
-    
+    """Enhanced configuration with validation and serialization."""
     # Model architecture
-    hidden_size: int = 4096
-    num_layers: int = 32
-    num_heads: int = 32
-    seq_length: int = 2048
-    vocab_size: int = 50000
-    
-    # MoE specific
-    use_moe: bool = True
-    num_experts: int = 8
-    moe_top_k: int = 1
-    capacity_factor: float = 1.25
-    load_balancing_weight: float = 0.01
-    expert_parallel_size: Optional[int] = None
+    vocab_size: int = 50304
+    hidden_size: int = 512
+    num_layers: int = 8
+    num_heads: int = 8
+    num_kv_heads: int = 4
+    seq_length: int = 1024
+    intermediate_size: Optional[int] = None  # Auto-calculated if None
+    rms_norm_eps: float = 1e-6
+    rope_theta: float = 10000.0
+    dropout: float = 0.0
     
     # Training parameters
-    micro_batch_size: Optional[int] = None
-    effective_batch_size: int = 512
-    gradient_accumulation_steps: int = 1
+    batch_size: int = 2
+    micro_batch_size: Optional[int] = None  # Auto-calculated if None
+    gradient_accumulation_steps: int = 8
     learning_rate: float = 1e-4
-    
-    # Memory and precision
-    precision: str = "auto"
-    inference_precision: str = "auto"
-    use_flash_attention: Optional[bool] = None
-    gradient_checkpointing: bool = True
-    
-    # DeepSpeed configuration
-    use_deepspeed: bool = True
-    zero_stage: int = 0  # 0 = auto-select
-    cpu_offload: bool = False
-    cpu_offload_optimizer: bool = False
-    cpu_offload_parameters: bool = False
-    nvme_offload_optimizer: bool = False
-    nvme_offload_parameters: bool = False
-    aggressive_cpu_offload: bool = False
-    gradient_compression: bool = False
-    
-    # Advanced settings
+    weight_decay: float = 0.01
+    num_epochs: int = 3
+    warmup_ratio: float = 0.15
+    eval_every_n_batches: int = 500
+    save_every_n_batches: int = 1000
+    precision: str = "auto"  # Changed default to "auto"
+    inference_precision: str = "auto"  # Changed default to "auto"
     compile: bool = True
-    streaming_threshold_gb: float = 64.0
+    
+    # Data parameters
+    train_data_path: str = "data/train.jsonl"
+    eval_data_path: str = "data/eval.jsonl"
+    num_workers: int = 2
+    assistant_loss_weight: float = 1.5
+    max_conversations_per_file: int = 10000
+    streaming_threshold_gb: float = 10.0  # Auto-enable streaming for large datasets
+    prefetch_factor: int = 4
+    pin_memory: bool = True
+    
+    # Generation parameters
+    max_new_tokens: int = 512
+    temperature: float = 0.8
+    top_p: float = 0.9
+    top_k: int = 50
+    
+    # Stability and optimization
+    init_std: float = 0.02
+    layer_norm_eps: float = 1e-5
+    use_stable_embedding: bool = True
+    gradient_checkpointing: bool = True
+    tie_word_embeddings: bool = True
+    use_flash_attention: bool = True  # New
+    
+    # MoE parameters - Updated to match 8x pattern
+    use_moe: bool = True  # Default to True now
+    num_experts: int = 8  # Fixed to 8 for consistency
+    moe_top_k: int = 1   # Changed to 1 (top-1 routing like Mixtral)
+    capacity_factor: float = 1.5
+    load_balancing_weight: float = 0.001
+    expert_parallel_size: Optional[int] = None  # Auto-calculated
+    
+    # DeepSpeed parameters - Enhanced
+    use_deepspeed: bool = True
+    zero_stage: int = 0  # 0 means auto-select based on model size
+    cpu_offload: bool = False  # Auto-enabled if needed
+    cpu_offload_optimizer: bool = False
+    cpu_offload_parameters: bool = False  # New
+    aggressive_cpu_offload: bool = False
+    nvme_path: Optional[str] = None
+    nvme_offload_optimizer: bool = False  # New
+    nvme_offload_parameters: bool = False  # New
+    gradient_compression: bool = False  # New
+    communication_backend: str = "nccl"  # New
+    overlap_comm: bool = True  # New
+    contiguous_gradients: bool = True  # New
+    allgather_bucket_size: int = 500000000  # New
+    reduce_bucket_size: int = 500000000  # New
+    
+    # Production settings
+    experiment_name: Optional[str] = None
+    seed: int = 42
+    log_level: str = "INFO"
+    save_total_limit: int = 5
+    early_stopping_patience: Optional[int] = None
+    min_lr: float = 1e-6
+    lr_scheduler: str = "cosine"
+    
+    # Monitoring and fault tolerance
+    health_check_interval: int = 100
+    auto_resume: bool = True
+    backup_every_n_hours: int = 6
+    max_retries: int = 3
+    enable_wandb: bool = False  # New
+    wandb_project: Optional[str] = None  # New
+    wandb_entity: Optional[str] = None  # New
+    
+    # Advanced precision settings
+    auto_tune_precision: bool = True  # Changed default to True
+    precision_target: str = "balanced"
+    dynamic_precision: bool = False
+    tf32_enabled: Optional[bool] = None
+    fp16_loss_scale: float = 65536.0  # New
+    bf16_enabled: bool = True  # New
+    
+    # Memory optimization
+    max_memory_usage: float = 0.9  # New: Use up to 90% of GPU memory
+    memory_cleanup_interval: int = 1000  # New
+    enable_cpu_adam: bool = False  # New
+    partition_activations: bool = False  # New
+    
+    # Multi-node settings
+    master_addr: Optional[str] = None  # New
+    master_port: int = 29500  # New
+    world_size: Optional[int] = None  # New
+    rank: Optional[int] = None  # New
+    local_rank: Optional[int] = None  # New
+    
+    # Data processing
+    data_cache_dir: str = "data/cache"  # New
+    tokenizer_cache_dir: str = "tokenizers/cache"  # New
+    max_seq_length_percentile: float = 0.95  # New: Truncate outliers
+    
+    # Checkpointing enhancements
+    save_optimizer_states: bool = True  # New
+    checkpoint_compression: bool = True  # New
+    async_save: bool = True  # New
+    universal_checkpoint: bool = True  # New
+    
+    # Performance profiling
+    profile_memory: bool = False  # New
+    profile_communication: bool = False  # New
+    log_throughput: bool = True  # New
     
     def __post_init__(self):
-        """Calculate derived parameters."""
-        if self.gradient_accumulation_steps == 1:
-            self.gradient_accumulation_steps = max(1, self.effective_batch_size // (self.micro_batch_size or 1))
-    
-    def validate(self):
-        """Validate configuration parameters."""
-        if self.hidden_size <= 0:
-            raise ValueError("hidden_size must be positive")
-        if self.num_layers <= 0:
-            raise ValueError("num_layers must be positive")
-        if self.num_heads <= 0:
-            raise ValueError("num_heads must be positive")
-        if self.hidden_size % self.num_heads != 0:
-            raise ValueError("hidden_size must be divisible by num_heads")
-        if self.use_moe and self.num_experts <= 1:
-            raise ValueError("num_experts must be > 1 when using MoE")
-        if self.moe_top_k > self.num_experts:
-            raise ValueError("moe_top_k cannot exceed num_experts")
-    
-    def _get_gpu_memory_gb(self) -> Optional[float]:
-        """Get GPU memory in GB."""
-        if not torch.cuda.is_available():
-            return None
-        try:
-            return torch.cuda.get_device_properties(0).total_memory / (1024**3)
-        except:
-            return None
-    
-    def _auto_select_precision(self) -> str:
-        """Auto-select precision based on hardware."""
-        if not torch.cuda.is_available():
-            return "fp32"
+        self.validate()
+        self._auto_configure()
         
-        # Check GPU compute capability
-        try:
-            major, minor = torch.cuda.get_device_capability()
-            if major >= 8:  # A100, H100, etc.
-                return "bf16"
-            elif major >= 7:  # V100, etc.
-                return "fp16"
+    def _auto_configure(self):
+        """Auto-configure settings based on hardware and model size."""
+        if self.experiment_name is None:
+            self.experiment_name = f"transformer_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        
+        # Ensure vocab_size is divisible by 64 for efficiency
+        if self.vocab_size % 64 != 0:
+            self.vocab_size = ((self.vocab_size + 63) // 64) * 64
+        
+        # Auto-calculate intermediate_size if not specified (SwiGLU pattern)
+        if self.intermediate_size is None:
+            self.intermediate_size = int(self.hidden_size * 8 / 3)
+            # Round to nearest multiple of 64 for efficiency
+            self.intermediate_size = ((self.intermediate_size + 63) // 64) * 64
+        
+        # Auto-calculate micro_batch_size for DeepSpeed
+        if self.micro_batch_size is None:
+            self.micro_batch_size = max(1, self.batch_size // max(1, torch.cuda.device_count()))
+        
+        # Auto-configure expert parallelism
+        if self.use_moe and self.expert_parallel_size is None:
+            num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 1
+            # Try to evenly distribute 8 experts across GPUs
+            self.expert_parallel_size = min(self.num_experts, num_gpus)
+        
+        # Auto-configure DeepSpeed ZeRO stage based on model size
+        if self.zero_stage == 0:
+            estimated_params = self._estimate_parameters()
+            gpu_memory_gb = self._get_gpu_memory_gb()
+            
+            if estimated_params > 50e9 or (gpu_memory_gb and estimated_params * 2 > gpu_memory_gb * 1e9):
+                self.zero_stage = 3
+                self.cpu_offload = True
+            elif estimated_params > 10e9:
+                self.zero_stage = 3
+            elif estimated_params > 1e9:
+                self.zero_stage = 2
             else:
-                return "fp32"
-        except:
-            return "fp16"
+                self.zero_stage = 1
+        
+        # Auto-enable aggressive optimizations for large models
+        if self._estimate_parameters() > 50e9:
+            self.gradient_compression = True
+            self.cpu_offload_optimizer = True
+            self.cpu_offload_parameters = True
+        if self._estimate_parameters() > 1e9:  # 1B+ parameters
+            self.enable_cpu_adam = True
+            
+        # Auto-configure precision based on hardware
+        if self.precision == "auto":
+            self.precision = self._auto_select_precision()
+            
+        if self.inference_precision == "auto":
+            self.inference_precision = self._auto_select_precision(for_inference=True)
+            
+        # Auto-enable TF32 on Ampere+ GPUs
+        if self.tf32_enabled is None:
+            self.tf32_enabled = self._supports_tf32()
+            
+        # Calculate effective batch size
+        world_size = self.world_size or (torch.cuda.device_count() if torch.cuda.is_available() else 1)
+        self.effective_batch_size = self.micro_batch_size * self.gradient_accumulation_steps * world_size
+        
+        # Auto-configure data loading
+        if self.num_workers == 2:  # Default value
+            self.num_workers = min(os.cpu_count() or 4, 16)
+            
+        # Setup cache directories
+        Path(self.data_cache_dir).mkdir(parents=True, exist_ok=True)
+        Path(self.tokenizer_cache_dir).mkdir(parents=True, exist_ok=True)
     
     def _estimate_parameters(self) -> int:
         """Estimate total model parameters."""
-        if not self.use_moe:
-            # Standard transformer
-            embed_params = self.vocab_size * self.hidden_size
-            layer_params = 12 * self.hidden_size**2  # Rough estimate
-            total_params = embed_params + (self.num_layers * layer_params)
-        else:
-            # MoE transformer
-            embed_params = self.vocab_size * self.hidden_size
-            # Each expert has roughly 8 * hidden_size^2 parameters (2 linear layers)
-            expert_params = self.num_experts * 8 * self.hidden_size**2
-            other_layer_params = 4 * self.hidden_size**2  # Non-MoE parts
-            total_layer_params = expert_params + other_layer_params
-            total_params = embed_params + (self.num_layers * total_layer_params)
+        # Embedding parameters
+        embed_params = self.vocab_size * self.hidden_size * 2  # input + output embeddings
         
-        return int(total_params)
+        # Attention parameters per layer
+        attention_params_per_layer = (
+            4 * self.hidden_size * self.hidden_size +  # Q, K, V, O projections
+            self.hidden_size  # norm
+        )
+        
+        # Feed-forward parameters per layer (including MoE)
+        if self.use_moe:
+            ff_params_per_layer = (
+                self.num_experts * 3 * self.hidden_size * self.intermediate_size +  # gate, up, down for each expert
+                self.hidden_size * self.num_experts +  # routing layer
+                self.hidden_size  # norm
+            )
+        else:
+            ff_params_per_layer = (
+                3 * self.hidden_size * self.intermediate_size +  # gate, up, down
+                self.hidden_size  # norm
+            )
+        
+        total_params = (
+            embed_params + 
+            self.num_layers * (attention_params_per_layer + ff_params_per_layer)
+        )
+        
+        return total_params
+    
+    def _get_gpu_memory_gb(self) -> Optional[float]:
+        """Get available GPU memory in GB."""
+        if not torch.cuda.is_available():
+            return None
+        try:
+            props = torch.cuda.get_device_properties(0)
+            return props.total_memory / (1024**3)
+        except:
+            return None
+    
+    def _auto_select_precision(self, for_inference: bool = False) -> str:
+        """Auto-select precision based on hardware capabilities."""
+        if not torch.cuda.is_available():
+            return "fp32"
+            
+        # Check GPU architecture
+        if torch.cuda.get_device_capability()[0] >= 8:  # A100, H100, etc.
+            return "mixed_bf16" if not for_inference else "bf16"
+        elif torch.cuda.get_device_capability()[0] >= 7:  # V100, RTX series
+            return "mixed_fp16" if not for_inference else "fp16"
+        else:
+            return "fp32"
+    
+    def _supports_tf32(self) -> bool:
+        """Check if current GPU supports TF32."""
+        if not torch.cuda.is_available():
+            return False
+        return torch.cuda.get_device_capability()[0] >= 8
     
     def get_active_parameters(self) -> int:
-        """Get active parameters (for MoE, this is much smaller than total)."""
+        """Get number of active parameters (important for MoE models)."""
         if not self.use_moe:
             return self._estimate_parameters()
         
+        # For MoE, only a fraction of experts are active per token
         total_params = self._estimate_parameters()
-        # For MoE, active params = total params / num_experts * top_k (roughly)
-        expert_reduction_factor = self.num_experts / self.moe_top_k
-        active_params = int(total_params / expert_reduction_factor * (self.moe_top_k / self.num_experts))
         
-        # More accurate calculation
-        embed_params = self.vocab_size * self.hidden_size
-        active_expert_params = self.moe_top_k * 8 * self.hidden_size**2
-        other_layer_params = 4 * self.hidden_size**2
-        active_layer_params = active_expert_params + other_layer_params
-        active_total = embed_params + (self.num_layers * active_layer_params)
+        # Calculate non-expert parameters
+        embed_params = self.vocab_size * self.hidden_size * 2
+        attention_params = self.num_layers * (4 * self.hidden_size * self.hidden_size + self.hidden_size)
+        routing_params = self.num_layers * self.hidden_size * self.num_experts
+        norm_params = self.num_layers * self.hidden_size
         
-        return int(active_total)
+        non_expert_params = embed_params + attention_params + routing_params + norm_params
+        
+        # Calculate expert parameters (only top-k are active)
+        expert_params_per_layer = self.num_experts * 3 * self.hidden_size * self.intermediate_size
+        total_expert_params = self.num_layers * expert_params_per_layer
+        active_expert_params = self.num_layers * self.moe_top_k * 3 * self.hidden_size * self.intermediate_size
+        
+        return int(non_expert_params + active_expert_params)
+    
+    def validate(self):
+        """Enhanced validation with better error messages."""
+        # Basic architecture validation
+        if self.hidden_size % self.num_heads != 0:
+            raise ValueError(f"hidden_size ({self.hidden_size}) must be divisible by num_heads ({self.num_heads})")
+        
+        if self.num_heads % self.num_kv_heads != 0:
+            raise ValueError(f"num_heads ({self.num_heads}) must be divisible by num_kv_heads ({self.num_kv_heads})")
+        
+        # Precision validation
+        valid_precisions = ["fp32", "fp16", "bf16", "mixed_fp16", "mixed_bf16", "tf32", "auto"]
+        if self.precision not in valid_precisions:
+            raise ValueError(f"Invalid precision: {self.precision}. Valid options: {valid_precisions}")
+        
+        if self.inference_precision not in valid_precisions + ["dynamic"]:
+            raise ValueError(f"Invalid inference_precision: {self.inference_precision}")
+        
+        # Training parameters validation
+        if self.learning_rate <= 0:
+            raise ValueError("Learning rate must be positive")
+        
+        if not (0 <= self.warmup_ratio <= 1):
+            raise ValueError("Warmup ratio must be between 0 and 1")
+        
+        # MoE validation - Updated for 8x pattern
+        if self.use_moe:
+            if self.num_experts != 8:
+                raise ValueError("num_experts must be 8 for consistency with 8x pattern")
+            
+            if self.moe_top_k not in [1, 2]:
+                raise ValueError("moe_top_k should be 1 or 2 (1 recommended for 8x pattern)")
+            
+            if self.moe_top_k > self.num_experts:
+                raise ValueError("moe_top_k cannot exceed num_experts")
+            
+            if self.capacity_factor < 1.0:
+                raise ValueError("capacity_factor must be at least 1.0")
+                
+            if self.expert_parallel_size and self.expert_parallel_size > self.num_experts:
+                raise ValueError("expert_parallel_size cannot exceed num_experts")
+        
+        # DeepSpeed validation
+        if self.use_deepspeed:
+            if self.zero_stage not in [0, 1, 2, 3]:
+                raise ValueError("zero_stage must be 0 (auto), 1, 2, or 3")
+            
+            if self.nvme_path and not Path(self.nvme_path).exists():
+                raise ValueError(f"NVMe path does not exist: {self.nvme_path}")
+        
+        # Memory validation
+        if not (0.1 <= self.max_memory_usage <= 1.0):
+            raise ValueError("max_memory_usage must be between 0.1 and 1.0")
+        
+        # Data validation
+        if self.streaming_threshold_gb <= 0:
+            raise ValueError("streaming_threshold_gb must be positive")
     
     def get_memory_estimate_gb(self) -> Dict[str, float]:
-        """Estimate memory usage in GB."""
-        total_params = self._estimate_parameters()
+        """Estimate memory usage in GB for different components."""
+        params = self._estimate_parameters()
         active_params = self.get_active_parameters()
         
-        # Bytes per parameter based on precision
-        if self.precision in ["fp16", "bf16"]:
-            bytes_per_param = 2
+        # Parameter memory (in bytes)
+        if self.precision in ["fp16", "bf16", "mixed_fp16", "mixed_bf16"]:
+            param_bytes = params * 2
         else:
-            bytes_per_param = 4
+            param_bytes = params * 4
         
-        # Model memory (total parameters for storage, active for computation)
-        model_memory = total_params * bytes_per_param / (1024**3)
-        activation_memory = active_params * bytes_per_param * 2 / (1024**3)  # Rough estimate
+        # Gradient memory (same as parameters)
+        grad_bytes = param_bytes
         
-        # Optimizer memory (typically 2x model for Adam)
-        optimizer_memory = model_memory * 2 if not self.cpu_offload_optimizer else model_memory * 0.2
+        # Optimizer states (Adam: 2x parameters for momentum and variance)
+        optimizer_bytes = params * 4 * 2  # Always fp32 for stability
         
-        # Gradient memory
-        gradient_memory = model_memory if not self.cpu_offload else model_memory * 0.1
+        # Activations (rough estimate)
+        activation_bytes = (
+            self.batch_size * self.seq_length * self.hidden_size * self.num_layers * 4
+        )  # Rough approximation
         
-        total_memory = model_memory + activation_memory + optimizer_memory + gradient_memory
+        # Convert to GB
+        param_gb = param_bytes / (1024**3)
+        grad_gb = grad_bytes / (1024**3)
+        optimizer_gb = optimizer_bytes / (1024**3)
+        activation_gb = activation_bytes / (1024**3)
+        
+        total_gb = param_gb + grad_gb + optimizer_gb + activation_gb
+        
+        # Apply DeepSpeed optimizations
+        if self.use_deepspeed:
+            if self.zero_stage >= 2:
+                grad_gb = grad_gb / max(1, torch.cuda.device_count())
+            if self.zero_stage >= 3:
+                param_gb = param_gb / max(1, torch.cuda.device_count())
+            if self.cpu_offload_optimizer:
+                optimizer_gb = 0  # Moved to CPU
         
         return {
-            'model': model_memory,
-            'activations': activation_memory,
-            'optimizer': optimizer_memory,
-            'gradients': gradient_memory,
-            'total': total_memory,
-            'total_parameters': total_params,
-            'active_parameters': active_params
+            "parameters": param_gb,
+            "gradients": grad_gb, 
+            "optimizer": optimizer_gb,
+            "activations": activation_gb,
+            "total": param_gb + grad_gb + optimizer_gb + activation_gb,
+            "active_parameters": active_params,
+            "total_parameters": params
         }
+    
+    def save(self, path: str):
+        """Save configuration to file with metadata."""
+        config_dict = asdict(self)
+        
+        # Add metadata
+        config_dict["_metadata"] = {
+            "created": datetime.now().isoformat(),
+            "lumina_version": "2.0",
+            "estimated_parameters": self._estimate_parameters(),
+            "active_parameters": self.get_active_parameters(),
+            "memory_estimate": self.get_memory_estimate_gb()
+        }
+        
+        with open(path, 'w') as f:
+            yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False)
+    
+    @classmethod
+    def load(cls, path: str) -> 'Config':
+        """Load configuration from file."""
+        with open(path, 'r') as f:
+            config_dict = yaml.safe_load(f)
+        
+        # Remove metadata if present
+        config_dict.pop("_metadata", None)
+        
+        return cls(**config_dict)
+    
+    def to_deepspeed_config(self) -> Dict[str, Any]:
+        """Generate DeepSpeed configuration."""
+        ds_config = {
+            "train_batch_size": self.effective_batch_size,
+            "train_micro_batch_size_per_gpu": self.micro_batch_size,
+            "gradient_accumulation_steps": self.gradient_accumulation_steps,
+            "gradient_clipping": self.max_grad_norm,
+            
+            "optimizer": {
+                "type": "AdamW",
+                "params": {
+                    "lr": self.learning_rate,
+                    "weight_decay": self.weight_decay,
+                    "betas": [0.9, 0.95],
+                    "eps": 1e-8
+                }
+            },
+            
+            "scheduler": {
+                "type": "WarmupDecayLR",
+                "params": {
+                    "warmup_min_lr": self.min_lr,
+                    "warmup_max_lr": self.learning_rate,
+                    "warmup_num_steps": int(self.warmup_ratio * 10000),  # Rough estimate
+                    "total_num_steps": 10000  # Will be updated during training
+                }
+            },
+            
+            "communication_data_type": "fp32",
+            "gradient_compression": {
+                "enabled": self.gradient_compression
+            },
+            
+            "wall_clock_breakdown": False,
+            "memory_breakdown": self.profile_memory
+        }
+        
+        # Precision settings
+        if self.precision in ["fp16", "mixed_fp16"]:
+            ds_config["fp16"] = {
+                "enabled": True,
+                "loss_scale": self.fp16_loss_scale,
+                "loss_scale_window": 1000,
+                "hysteresis": 2,
+                "consecutive_hysteresis": False,
+                "auto_cast": False
+            }
+        elif self.precision in ["bf16", "mixed_bf16"]:
+            ds_config["bf16"] = {
+                "enabled": True
+            }
+        
+        # ZeRO configuration
+        if self.zero_stage > 0:
+            zero_config = {
+                "stage": self.zero_stage,
+                "overlap_comm": self.overlap_comm,
+                "contiguous_gradients": self.contiguous_gradients,
+                "sub_group_size": 1000000000,
+                "reduce_bucket_size": self.reduce_bucket_size,
+                "allgather_partitions": True,
+                "reduce_scatter": True,
+                "allgather_bucket_size": self.allgather_bucket_size,
+                "stage3_prefetch_bucket_size": 50000000,
+                "stage3_param_persistence_threshold": 100000,
+                "stage3_max_live_parameters": 1000000000,
+                "stage3_max_reuse_distance": 1000000000
+            }
+            
+            if self.cpu_offload:
+                zero_config["offload_optimizer"] = {
+                    "device": "cpu",
+                    "pin_memory": True
+                }
+                
+            if self.cpu_offload_parameters:
+                zero_config["offload_param"] = {
+                    "device": "cpu",
+                    "pin_memory": True
+                }
+            
+            if self.nvme_path:
+                if self.nvme_offload_optimizer:
+                    zero_config["offload_optimizer"] = {
+                        "device": "nvme",
+                        "nvme_path": self.nvme_path,
+                        "pin_memory": True
+                    }
+                if self.nvme_offload_parameters:
+                    zero_config["offload_param"] = {
+                        "device": "nvme", 
+                        "nvme_path": self.nvme_path,
+                        "pin_memory": True
+                    }
+            
+            ds_config["zero_optimization"] = zero_config
+        
+        # Activation checkpointing
+        if self.gradient_checkpointing:
+            ds_config["activation_checkpointing"] = {
+                "partition_activations": self.partition_activations,
+                "contiguous_memory_optimization": True,
+                "cpu_checkpointing": False,
+                "number_checkpoints": 4,
+                "synchronize_checkpoint_boundary": False,
+                "profile": False
+            }
+        
+        return ds_config
 
 
 class ConfigPresets:
-    """Predefined configurations for different model sizes."""
+    """Updated configuration presets following 8x MoE pattern."""
     
     @staticmethod
     def debug() -> Config:
-        """Minimal configuration for debugging and testing."""
+        """Minimal config for debugging and testing."""
         return Config(
-            hidden_size=512,
-            num_layers=4,
-            num_heads=8,
-            seq_length=512,
-            vocab_size=10000,
-            micro_batch_size=2,
-            effective_batch_size=16,
+            # Tiny model for fast iteration
+            vocab_size=1024,
+            hidden_size=128,
+            num_layers=2,
+            num_heads=2,
+            num_kv_heads=1,
+            seq_length=256,
+            intermediate_size=256,
+            
+            # Fast training settings
+            batch_size=2,
+            micro_batch_size=1,
+            gradient_accumulation_steps=2,
+            num_epochs=1,
+            learning_rate=5e-5,
+            weight_decay=0.01,
+            eval_every_n_batches=50,
+            save_every_n_batches=100,
             precision="fp32",
-            zero_stage=1,
+            inference_precision="fp32",
+            compile=False,
+            num_workers=0,
+            
+            # MoE settings - 8x pattern but smaller
+            use_moe=True,
+            num_experts=8,
+            moe_top_k=1,  # Top-1 routing
+            capacity_factor=1.1,
+            load_balancing_weight=0.005,
+            expert_parallel_size=2,
+            
+            # DeepSpeed settings
             use_deepspeed=True,
-            compile=False
+            zero_stage=1,
+            cpu_offload=False,
+            
+            # Monitoring and stability
+            experiment_name="debug_run",
+            log_level="DEBUG",
+            health_check_interval=10,
+            save_total_limit=3,
+            early_stopping_patience=None,
+            max_retries=1,
+            lr_scheduler="cosine",
+            gradient_checkpointing=False,
+            use_flash_attention=False,
+            
+            # Precision settings
+            auto_tune_precision=False,
+            precision_target="balanced",
+            dynamic_precision=False,
+            
+            # Memory settings
+            max_memory_usage=0.7,
+            streaming_threshold_gb=1.0
         )
     
     @staticmethod
     def b1() -> Config:
-        """1B active parameter model (8x1B total)."""
+        """1B active parameter model (8x1B = 8B total)."""
         return Config(
+            # Model architecture for ~1B active parameters
             hidden_size=1536,
-            num_layers=24,
+            num_layers=16,
             num_heads=12,
+            num_kv_heads=4,
             seq_length=2048,
-            vocab_size=50000,
-            micro_batch_size=4,
-            effective_batch_size=128,
+            intermediate_size=None,  # Auto-calculated
+            
+            # Training settings
+            batch_size=8,
+            micro_batch_size=1,
+            gradient_accumulation_steps=4,
+            num_epochs=3,
+            learning_rate=3e-4,
+            weight_decay=0.01,
+            eval_every_n_batches=500,
+            save_every_n_batches=1000,
             precision="auto",
+            inference_precision="auto",
+            compile=True,
+            num_workers=4,
+            
+            # MoE settings - 8x pattern
+            use_moe=True,
+            num_experts=8,
+            moe_top_k=1,
+            capacity_factor=1.25,
+            load_balancing_weight=0.01,
+            
+            # DeepSpeed settings
+            use_deepspeed=True,
             zero_stage=2,
-            gradient_checkpointing=True
+            cpu_offload=False,
+            gradient_compression=False,
+            
+            # Production settings
+            experiment_name="b1_8x1b",
+            log_level="INFO",
+            health_check_interval=100,
+            save_total_limit=5,
+            early_stopping_patience=5,
+            backup_every_n_hours=12,
+            lr_scheduler="cosine",
+            gradient_checkpointing=True,
+            use_flash_attention=True,
+            
+            # Precision settings
+            auto_tune_precision=True,
+            precision_target="balanced",
+            dynamic_precision=False,
+            
+            # Memory settings
+            max_memory_usage=0.85,
+            streaming_threshold_gb=5.0
         )
     
     @staticmethod
     def b7() -> Config:
-        """7B active parameter model (8x7B total) - Mixtral-style."""
+        """7B active parameter model (8x7B = 56B total) - Mixtral-style."""
         return Config(
+            # Model architecture for ~7B active parameters
             hidden_size=4096,
             num_layers=32,
             num_heads=32,
+            num_kv_heads=8,
             seq_length=4096,
-            vocab_size=50000,
-            micro_batch_size=2,
-            effective_batch_size=256,
+            intermediate_size=None,  # Auto-calculated to ~11008
+            
+            # Training settings
+            batch_size=16,
+            micro_batch_size=1,
+            gradient_accumulation_steps=8,
+            num_epochs=3,
+            learning_rate=1e-4,
+            weight_decay=0.01,
+            eval_every_n_batches=1000,
+            save_every_n_batches=2000,
             precision="auto",
+            inference_precision="auto",
+            compile=True,
+            num_workers=8,
+            
+            # MoE settings - 8x pattern like Mixtral
+            use_moe=True,
+            num_experts=8,
+            moe_top_k=1,  # Top-1 routing for efficiency
+            capacity_factor=1.25,
+            load_balancing_weight=0.01,
+            
+            # DeepSpeed settings
+            use_deepspeed=True,
             zero_stage=0,  # Auto-select
-            cpu_offload=False,
-            use_flash_attention=True
+            cpu_offload=False,  # Auto-enabled if needed
+            gradient_compression=False,
+            overlap_comm=True,
+            contiguous_gradients=True,
+            
+            # Production settings
+            experiment_name="b7_8x7b_mixtral",
+            log_level="INFO",
+            health_check_interval=100,
+            save_total_limit=10,
+            early_stopping_patience=10,
+            backup_every_n_hours=6,
+            lr_scheduler="cosine",
+            gradient_checkpointing=True,
+            use_flash_attention=True,
+            
+            # Precision settings
+            auto_tune_precision=True,
+            precision_target="balanced",
+            dynamic_precision=False,
+            
+            # Memory settings
+            max_memory_usage=0.9,
+            streaming_threshold_gb=10.0,
+            
+            # Monitoring
+            enable_wandb=False,
+            profile_memory=False,
+            log_throughput=True
         )
     
     @staticmethod
     def b14() -> Config:
-        """14B active parameter model (8x14B total)."""
+        """14B active parameter model (8x14B = 112B total)."""
         return Config(
+            # Model architecture for ~14B active parameters
             hidden_size=5120,
             num_layers=40,
             num_heads=40,
+            num_kv_heads=10,
             seq_length=4096,
-            vocab_size=50000,
+            intermediate_size=None,  # Auto-calculated
+            
+            # Training settings
+            batch_size=32,
             micro_batch_size=1,
-            effective_batch_size=512,
-            precision="bf16",
-            zero_stage=0,
-            cpu_offload=True,
+            gradient_accumulation_steps=16,
+            num_epochs=2,
+            learning_rate=8e-5,
+            weight_decay=0.01,
+            eval_every_n_batches=2000,
+            save_every_n_batches=5000,
+            precision="auto",
+            inference_precision="auto",
+            compile=True,
+            num_workers=8,
+            
+            # MoE settings - 8x pattern
+            use_moe=True,
+            num_experts=8,
+            moe_top_k=1,
+            capacity_factor=1.25,
+            load_balancing_weight=0.015,
+            
+            # DeepSpeed settings
+            use_deepspeed=True,
+            zero_stage=0,  # Auto-select (likely ZeRO-3)
+            cpu_offload=False,  # Auto-enabled if needed
+            gradient_compression=True,
+            overlap_comm=True,
+            contiguous_gradients=True,
+            
+            # Production settings
+            experiment_name="b14_8x14b",
+            log_level="INFO",
+            health_check_interval=200,
+            save_total_limit=15,
+            early_stopping_patience=15,
+            backup_every_n_hours=4,
+            lr_scheduler="cosine",
+            gradient_checkpointing=True,
             use_flash_attention=True,
-            streaming_threshold_gb=48.0
+            warmup_ratio=0.05,
+            
+            # Precision settings
+            auto_tune_precision=False,
+            precision_target="quality",
+            dynamic_precision=False,
+            tf32_enabled=None,  # Auto-detect
+            
+            # Memory settings
+            max_memory_usage=0.9,
+            streaming_threshold_gb=25.0,
+            enable_cpu_adam=False,
+            
+            # Monitoring
+            enable_wandb=False,
+            profile_memory=True,
+            log_throughput=True
         )
     
     @staticmethod
     def b50() -> Config:
-        """50B active parameter model (8x50B total)."""
+        """50B active parameter model (8x50B = 400B total)."""
         return Config(
+            # Model architecture for ~50B active parameters
             hidden_size=8192,
             num_layers=64,
             num_heads=64,
-            seq_length=4096,
-            vocab_size=50000,
+            num_kv_heads=16,
+            seq_length=128000,
+            intermediate_size=None,  # Auto-calculated
+            
+            # Training settings
+            batch_size=128,
             micro_batch_size=1,
-            effective_batch_size=1024,
-            precision="bf16",
+            gradient_accumulation_steps=32,
+            num_epochs=2,
+            learning_rate=6e-5,
+            weight_decay=0.01,
+            eval_every_n_batches=3000,
+            save_every_n_batches=8000,
+            precision="auto",
+            inference_precision="auto",
+            compile=True,
+            num_workers=12,
+            
+            # MoE settings - 8x pattern
+            use_moe=True,
+            num_experts=8,
+            moe_top_k=1,
+            capacity_factor=1.25,
+            load_balancing_weight=0.02,
+            
+            # DeepSpeed settings - Aggressive optimization needed
+            use_deepspeed=True,
             zero_stage=3,
             cpu_offload=True,
             cpu_offload_optimizer=True,
-            nvme_offload_optimizer=True,
+            cpu_offload_parameters=True,
+            aggressive_cpu_offload=True,
+            gradient_compression=True,
+            overlap_comm=True,
+            contiguous_gradients=True,
+            
+            # Production settings
+            experiment_name="b50_8x50b",
+            log_level="INFO",
+            health_check_interval=300,
+            save_total_limit=18,
+            early_stopping_patience=18,
+            backup_every_n_hours=3,
+            lr_scheduler="cosine",
+            gradient_checkpointing=True,
             use_flash_attention=True,
-            streaming_threshold_gb=32.0
+            warmup_ratio=0.08,
+            
+            # Precision settings
+            auto_tune_precision=False,
+            precision_target="quality",
+            dynamic_precision=False,
+            tf32_enabled=True,
+            
+            # Memory settings
+            max_memory_usage=0.95,
+            streaming_threshold_gb=50.0,
+            enable_cpu_adam=True,
+            partition_activations=True,
+            
+            # Advanced checkpointing
+            universal_checkpoint=True,
+            checkpoint_compression=True,
+            async_save=True,
+            
+            # Monitoring
+            enable_wandb=False,
+            profile_memory=True,
+            profile_communication=True,
+            log_throughput=True
         )
     
     @staticmethod
     def b100() -> Config:
-        """100B active parameter model (8x100B total)."""
+        """100B active parameter model (8x100B = 800B total)."""
         return Config(
+            # Model architecture for ~100B active parameters  
             hidden_size=12288,
             num_layers=80,
             num_heads=96,
-            seq_length=4096,
-            vocab_size=100000,
+            num_kv_heads=24,
+            seq_length=200000,
+            intermediate_size=None,  # Auto-calculated
+            
+            # Training settings
+            batch_size=256,
             micro_batch_size=1,
-            effective_batch_size=2048,
-            precision="bf16",
+            gradient_accumulation_steps=64,
+            num_epochs=2,
+            learning_rate=5e-5,
+            weight_decay=0.01,
+            eval_every_n_batches=5000,
+            save_every_n_batches=10000,
+            precision="auto",
+            inference_precision="auto",
+            compile=True,
+            num_workers=16,
+            
+            # MoE settings - 8x pattern
+            use_moe=True,
+            num_experts=8,
+            moe_top_k=1,
+            capacity_factor=1.25,
+            load_balancing_weight=0.025,
+            
+            # DeepSpeed settings - Maximum optimization
+            use_deepspeed=True,
             zero_stage=3,
             cpu_offload=True,
             cpu_offload_optimizer=True,
             cpu_offload_parameters=True,
-            nvme_offload_optimizer=True,
-            nvme_offload_parameters=True,
+            aggressive_cpu_offload=True,
+            gradient_compression=True,
+            overlap_comm=True,
+            contiguous_gradients=True,
+            
+            # Production settings
+            experiment_name="b100_8x100b",
+            log_level="INFO",
+            health_check_interval=500,
+            save_total_limit=20,
+            early_stopping_patience=20,
+            backup_every_n_hours=2,
+            lr_scheduler="cosine",
+            gradient_checkpointing=True,
             use_flash_attention=True,
-            streaming_threshold_gb=24.0
+            warmup_ratio=0.1,
+            
+            # Precision settings
+            auto_tune_precision=False,
+            precision_target="quality",
+            dynamic_precision=False,
+            tf32_enabled=True,
+            
+            # Memory settings
+            max_memory_usage=0.95,
+            streaming_threshold_gb=100.0,
+            enable_cpu_adam=True,
+            partition_activations=True,
+            
+            # Advanced settings
+            universal_checkpoint=True,
+            checkpoint_compression=True,
+            async_save=True,
+            
+            # Monitoring
+            enable_wandb=False,
+            profile_memory=True,
+            profile_communication=True,
+            log_throughput=True
         )
     
     @staticmethod
     def b200() -> Config:
-        """200B active parameter model (8x200B total)."""
+        """200B active parameter model (8x200B = 1.6T total)."""
         return Config(
+            # Model architecture for ~200B active parameters
             hidden_size=16384,
-            num_layers=96,
+            num_layers=100,
             num_heads=128,
-            seq_length=4096,
-            vocab_size=100000,
+            num_kv_heads=32,
+            seq_length=1000000,
+            intermediate_size=None,  # Auto-calculated
+            
+            # Training settings
+            batch_size=256,
             micro_batch_size=1,
-            effective_batch_size=4096,
-            precision="bf16",
+            gradient_accumulation_steps=64,
+            num_epochs=2,
+            learning_rate=4e-5,
+            weight_decay=0.01,
+            eval_every_n_batches=5000,
+            save_every_n_batches=10000,
+            precision="mixed_bf16",
+            inference_precision="bf16",
+            compile=True,
+            num_workers=16,
+            
+            # MoE settings - 8x pattern
+            use_moe=True,
+            num_experts=8,
+            moe_top_k=1,
+            capacity_factor=1.25,
+            load_balancing_weight=0.03,
+            
+            # DeepSpeed settings - Maximum optimization + NVMe
+            use_deepspeed=True,
             zero_stage=3,
             cpu_offload=True,
             cpu_offload_optimizer=True,
             cpu_offload_parameters=True,
+            aggressive_cpu_offload=True,
             nvme_offload_optimizer=True,
             nvme_offload_parameters=True,
-            aggressive_cpu_offload=True,
+            gradient_compression=True,
+            overlap_comm=True,
+            contiguous_gradients=True,
+            
+            # Production settings
+            experiment_name="b200_8x200b",
+            log_level="INFO",
+            health_check_interval=500,
+            save_total_limit=20,
+            early_stopping_patience=20,
+            backup_every_n_hours=2,
+            lr_scheduler="cosine",
+            gradient_checkpointing=True,
             use_flash_attention=True,
-            streaming_threshold_gb=16.0
+            warmup_ratio=0.1,
+            
+            # Precision settings
+            auto_tune_precision=False,
+            precision_target="production",
+            dynamic_precision=False,
+            tf32_enabled=True,
+            
+            # Memory settings
+            max_memory_usage=0.95,
+            streaming_threshold_gb=200.0,
+            enable_cpu_adam=True,
+            partition_activations=True,
+            
+            # Advanced settings
+            universal_checkpoint=True,
+            checkpoint_compression=True,
+            async_save=True,
+            
+            # Monitoring
+            enable_wandb=False,
+            profile_memory=True,
+            profile_communication=True,
+            log_throughput=True
         )
     
     @staticmethod
     def b300() -> Config:
         """300B active parameter model (8x300B = 2.4T total)."""
         return Config(
+            # Model architecture for ~300B active parameters
             hidden_size=20480,
             num_layers=120,
             num_heads=160,
-            seq_length=4096,
-            vocab_size=100000,
+            num_kv_heads=40,
+            seq_length=204800,
+            intermediate_size=None,  # Auto-calculated
+            
+            # Training settings
+            batch_size=256,
             micro_batch_size=1,
-            effective_batch_size=8192,
-            precision="bf16",
-            zero_stage=3,
-            cpu_offload=True,
-            cpu_offload_optimizer=True,
-            cpu_offload_parameters=True,
-            nvme_offload_optimizer=True,
-            nvme_offload_parameters=True,
-            aggressive_cpu_offload=True,
-            use_flash_attention=True,
-            streaming_threshold_gb=12.0
-        )
-    
-    # Dense model variants (same active parameter count as MoE counterparts)
-    
-    @staticmethod
-    def dense_1b() -> Config:
-        """1B parameter dense model (equivalent active params to b1 MoE)."""
-        return Config(
-            hidden_size=2048,
-            num_layers=24,
-            num_heads=16,
-            seq_length=2048,
-            vocab_size=50000,
-            micro_batch_size=2,
-            effective_batch_size=128,
-            precision="auto",
-            zero_stage=1,
-            cpu_offload=False,
-            gradient_compression=False,
-            use_moe=False,  # Dense model
-            gradient_checkpointing=True,
-            use_flash_attention=True
-        )
-    
-    @staticmethod
-    def dense_7b() -> Config:
-        """7B parameter dense model (equivalent active params to b7 MoE)."""
-        return Config(
-            hidden_size=4096,
-            num_layers=32,
-            num_heads=32,
-            seq_length=4096,
-            vocab_size=50000,
-            micro_batch_size=2,
-            effective_batch_size=256,
-            precision="auto",
-            zero_stage=0,  # Auto-select
-            cpu_offload=False,
-            gradient_compression=False,
-            use_moe=False,  # Dense model
-            gradient_checkpointing=True,
-            use_flash_attention=True
-        )
-    
-    @staticmethod
-    def dense_14b() -> Config:
-        """14B parameter dense model (equivalent active params to b14 MoE)."""
-        return Config(
-            hidden_size=5120,
-            num_layers=40,
-            num_heads=40,
-            seq_length=4096,
-            vocab_size=50000,
-            micro_batch_size=1,
-            effective_batch_size=512,
-            precision="auto",
-            zero_stage=0,  # Auto-select
-            cpu_offload=False,
-            gradient_compression=True,
-            use_moe=False,  # Dense model
-            gradient_checkpointing=True,
-            use_flash_attention=True,
-            streaming_threshold_gb=25.0
-        )
-    
-    @staticmethod
-    def dense_50b() -> Config:
-        """50B parameter dense model (equivalent active params to b50 MoE)."""
-        return Config(
-            hidden_size=8192,
-            num_layers=64,
-            num_heads=64,
-            seq_length=4096,
-            vocab_size=50000,
-            micro_batch_size=1,
-            effective_batch_size=1024,
-            precision="bf16",
-            zero_stage=3,
-            cpu_offload=True,
-            cpu_offload_optimizer=True,
-            cpu_offload_parameters=True,
-            aggressive_cpu_offload=True,
-            gradient_compression=True,
-            use_moe=False,  # Dense model
-            gradient_checkpointing=True,
-            use_flash_attention=True,
-            streaming_threshold_gb=50.0
-        )
-    
-    @staticmethod
-    def dense_100b() -> Config:
-        """100B parameter dense model (equivalent active params to b100 MoE)."""
-        return Config(
-            hidden_size=12288,
-            num_layers=80,
-            num_heads=96,
-            seq_length=4096,
-            vocab_size=100000,
-            micro_batch_size=1,
-            effective_batch_size=2048,
-            precision="bf16",
-            zero_stage=3,
-            cpu_offload=True,
-            cpu_offload_optimizer=True,
-            cpu_offload_parameters=True,
-            aggressive_cpu_offload=True,
-            gradient_compression=True,
-            use_moe=False,  # Dense model
-            gradient_checkpointing=True,
-            use_flash_attention=True,
-            streaming_threshold_gb=100.0
-        )
-    
-    @staticmethod
-    def dense_200b() -> Config:
-        """200B parameter dense model (equivalent active params to b200 MoE)."""
-        return Config(
-            hidden_size=16384,
-            num_layers=100,
-            num_heads=128,
-            seq_length=4096,
-            vocab_size=100000,
-            micro_batch_size=1,
-            effective_batch_size=4096,
-            precision="bf16",
+            gradient_accumulation_steps=64,
+            num_epochs=2,
+            learning_rate=3e-5,
+            weight_decay=0.01,
+            eval_every_n_batches=5000,
+            save_every_n_batches=10000,
+            precision="mixed_bf16",
+            inference_precision="bf16",
+            compile=True,
+            num_workers=16,
+            
+            # MoE settings - 8x pattern
+            use_moe=True,
+            num_experts=8,
+            moe_top_k=1,
+            capacity_factor=1.25,
+            load_balancing_weight=0.035,
+            
+            # DeepSpeed settings - Ultimate optimization
+            use_deepspeed=True,
             zero_stage=3,
             cpu_offload=True,
             cpu_offload_optimizer=True,
@@ -464,36 +1092,43 @@ class ConfigPresets:
             nvme_offload_optimizer=True,
             nvme_offload_parameters=True,
             gradient_compression=True,
-            use_moe=False,  # Dense model
+            overlap_comm=True,
+            contiguous_gradients=True,
+            
+            # Production settings
+            experiment_name="b300_8x300b",
+            log_level="INFO",
+            health_check_interval=500,
+            save_total_limit=20,
+            early_stopping_patience=20,
+            backup_every_n_hours=2,
+            lr_scheduler="cosine",
             gradient_checkpointing=True,
             use_flash_attention=True,
-            streaming_threshold_gb=200.0
-        )
-    
-    @staticmethod
-    def dense_300b() -> Config:
-        """300B parameter dense model (equivalent active params to b300 MoE)."""
-        return Config(
-            hidden_size=20480,
-            num_layers=120,
-            num_heads=160,
-            seq_length=4096,
-            vocab_size=100000,
-            micro_batch_size=1,
-            effective_batch_size=8192,
-            precision="bf16",
-            zero_stage=3,
-            cpu_offload=True,
-            cpu_offload_optimizer=True,
-            cpu_offload_parameters=True,
-            aggressive_cpu_offload=True,
-            nvme_offload_optimizer=True,
-            nvme_offload_parameters=True,
-            gradient_compression=True,
-            use_moe=False,  # Dense model
-            gradient_checkpointing=True,
-            use_flash_attention=True,
-            streaming_threshold_gb=300.0
+            warmup_ratio=0.1,
+            
+            # Precision settings
+            auto_tune_precision=False,
+            precision_target="quality",
+            dynamic_precision=False,
+            tf32_enabled=True,
+            
+            # Memory settings
+            max_memory_usage=0.95,
+            streaming_threshold_gb=300.0,
+            enable_cpu_adam=True,
+            partition_activations=True,
+            
+            # Advanced settings
+            universal_checkpoint=True,
+            checkpoint_compression=True,
+            async_save=True,
+            
+            # Monitoring
+            enable_wandb=False,
+            profile_memory=True,
+            profile_communication=True,
+            log_throughput=True
         )
     
     @staticmethod
@@ -595,90 +1230,6 @@ class ConfigPresets:
                 "moe_pattern": "8x experts, top-1 routing",
                 "deepspeed": "ZeRO-3 with full NVMe offloading",
                 "hardware": "Supercomputer-scale H100 clusters"
-            },
-            "dense_1b": {
-                "description": "1B parameter dense model (equivalent to b1 MoE active)",
-                "use_case": "Resource-efficient baseline, MoE comparison",
-                "active_params": "~1B",
-                "total_params": "~1B (dense)",
-                "memory_usage": "Low (~2-4GB)",
-                "training_speed": "Fast",
-                "precision": "Auto-detected (fp16/bf16)",
-                "moe_pattern": "Dense (no experts)",
-                "deepspeed": "ZeRO-1",
-                "hardware": "RTX 3090/4090, A6000"
-            },
-            "dense_7b": {
-                "description": "7B parameter dense model (equivalent to b7 MoE active)",
-                "use_case": "Dense baseline for comparison with MoE",
-                "active_params": "~7B",
-                "total_params": "~7B (dense)",
-                "memory_usage": "Medium (~14GB)",
-                "training_speed": "Medium",
-                "precision": "Auto-detected mixed precision",
-                "moe_pattern": "Dense (no experts)",
-                "deepspeed": "Auto ZeRO stage",
-                "hardware": "A100-40GB/80GB"
-            },
-            "dense_14b": {
-                "description": "14B parameter dense model (equivalent to b14 MoE active)",
-                "use_case": "High-performance dense baseline",
-                "active_params": "~14B",
-                "total_params": "~14B (dense)",
-                "memory_usage": "High (~28GB)",
-                "training_speed": "Slow",
-                "precision": "Mixed BF16 with TF32",
-                "moe_pattern": "Dense (no experts)",
-                "deepspeed": "ZeRO-2/3 with CPU offload",
-                "hardware": "A100-80GB or H100"
-            },
-            "dense_50b": {
-                "description": "50B parameter dense model (equivalent to b50 MoE active)",
-                "use_case": "Large dense model for research comparison",
-                "active_params": "~50B",
-                "total_params": "~50B (dense)",
-                "memory_usage": "Very High (~100GB)",
-                "training_speed": "Very Slow",
-                "precision": "Mixed BF16 with TF32",
-                "moe_pattern": "Dense (no experts)",
-                "deepspeed": "ZeRO-3 with aggressive CPU offload",
-                "hardware": "Multi-GPU A100/H100 clusters"
-            },
-            "dense_100b": {
-                "description": "100B parameter dense model (equivalent to b100 MoE active)",
-                "use_case": "Very large dense baseline",
-                "active_params": "~100B",
-                "total_params": "~100B (dense)",
-                "memory_usage": "Extreme (~200GB)",
-                "training_speed": "Very Slow",
-                "precision": "Mixed BF16 with TF32",
-                "moe_pattern": "Dense (no experts)",
-                "deepspeed": "ZeRO-3 with full offloading",
-                "hardware": "Large multi-node H100 clusters"
-            },
-            "dense_200b": {
-                "description": "200B parameter dense model (equivalent to b200 MoE active)",
-                "use_case": "Enterprise-scale dense model",
-                "active_params": "~200B",
-                "total_params": "~200B (dense)",
-                "memory_usage": "Extreme (~400GB)",
-                "training_speed": "Very Slow",
-                "precision": "Mixed BF16 with TF32",
-                "moe_pattern": "Dense (no experts)",
-                "deepspeed": "ZeRO-3 with NVMe offloading",
-                "hardware": "Massive multi-node H100 clusters with NVMe"
-            },
-            "dense_300b": {
-                "description": "300B parameter dense model (equivalent to b300 MoE active)",
-                "use_case": "Largest dense model for frontier research",
-                "active_params": "~300B",
-                "total_params": "~300B (dense)",
-                "memory_usage": "Extreme (~600GB)",
-                "training_speed": "Very Slow",
-                "precision": "Mixed BF16 with TF32",
-                "moe_pattern": "Dense (no experts)",
-                "deepspeed": "ZeRO-3 with full NVMe offloading",
-                "hardware": "Supercomputer-scale H100 clusters"
             }
         }
     
@@ -686,7 +1237,6 @@ class ConfigPresets:
     def compare_presets() -> Dict[str, Any]:
         """Compare all presets across key dimensions with 8x MoE considerations."""
         presets = {
-            # MoE models
             'debug': ConfigPresets.debug(),
             'b1': ConfigPresets.b1(),
             'b7': ConfigPresets.b7(),
@@ -694,15 +1244,7 @@ class ConfigPresets:
             'b50': ConfigPresets.b50(),
             'b100': ConfigPresets.b100(),
             'b200': ConfigPresets.b200(),
-            'b300': ConfigPresets.b300(),
-            # Dense models
-            'dense_1b': ConfigPresets.dense_1b(),
-            'dense_7b': ConfigPresets.dense_7b(),
-            'dense_14b': ConfigPresets.dense_14b(),
-            'dense_50b': ConfigPresets.dense_50b(),
-            'dense_100b': ConfigPresets.dense_100b(),
-            'dense_200b': ConfigPresets.dense_200b(),
-            'dense_300b': ConfigPresets.dense_300b()
+            'b300': ConfigPresets.b300()
         }
         
         comparison = {}
@@ -711,11 +1253,7 @@ class ConfigPresets:
             # Get memory estimates
             memory_est = config.get_memory_estimate_gb()
             
-            # Determine model type
-            model_type = "8x MoE" if config.use_moe else "Dense"
-            
             comparison[name] = {
-                'model_type': model_type,
                 'active_parameters': memory_est['active_parameters'],
                 'total_parameters': memory_est['total_parameters'], 
                 'parameter_efficiency': f"{memory_est['active_parameters'] / memory_est['total_parameters']:.1%}",
@@ -726,9 +1264,10 @@ class ConfigPresets:
                 'effective_batch_size': config.effective_batch_size,
                 'learning_rate': config.learning_rate,
                 'precision': config.precision,
-                'moe_pattern': f"{config.num_experts}x experts, top-{config.moe_top_k}" if config.use_moe else "Dense (no experts)",
-                'capacity_factor': config.capacity_factor if config.use_moe else "N/A",
-                'load_balancing_weight': config.load_balancing_weight if config.use_moe else "N/A",
+                'inference_precision': config.inference_precision,
+                'moe_pattern': f"{config.num_experts}x experts, top-{config.moe_top_k}",
+                'capacity_factor': config.capacity_factor,
+                'load_balancing_weight': config.load_balancing_weight,
                 'deepspeed_stage': f"ZeRO-{config.zero_stage}" if config.zero_stage > 0 else "Auto",
                 'cpu_offload': config.cpu_offload,
                 'nvme_offload': bool(config.nvme_offload_optimizer or config.nvme_offload_parameters),
@@ -742,7 +1281,7 @@ class ConfigPresets:
 
 
 class ConfigManager:
-    """Enhanced configuration management with hardware optimization and validation for both MoE and dense models."""
+    """Enhanced configuration management with hardware optimization and validation."""
     
     @staticmethod
     def create_config(
@@ -757,8 +1296,7 @@ class ConfigManager:
         if hasattr(ConfigPresets, preset):
             config = getattr(ConfigPresets, preset)()
         else:
-            available_presets = list(ConfigPresets.get_preset_info().keys())
-            raise ValueError(f"Unknown preset: {preset}. Available: {available_presets}")
+            raise ValueError(f"Unknown preset: {preset}. Available: {list(ConfigPresets.get_preset_info().keys())}")
         
         # Apply overrides
         if overrides:
@@ -776,17 +1314,13 @@ class ConfigManager:
     
     @staticmethod
     def optimize_for_hardware(config: Config, target_memory_usage: float = 0.9) -> Config:
-        """Optimize configuration based on available hardware with both MoE and dense model support."""
+        """Optimize configuration based on available hardware."""
         
         if not torch.cuda.is_available():
             print("Warning: CUDA not available, using CPU-optimized settings")
             config.precision = "fp32"
             config.use_deepspeed = False
             config.compile = False
-            # Disable MoE for CPU-only setups
-            if config.use_moe:
-                config.use_moe = False
-                print("Disabled MoE for CPU-only setup")
             return config
         
         # Get hardware info
@@ -798,114 +1332,50 @@ class ConfigManager:
         memory_est = config.get_memory_estimate_gb()
         required_memory = memory_est['total']
         
-        # Identify model type
-        model_type = "8x MoE" if config.use_moe else "Dense"
         print(f"Hardware detected: {gpu_count} GPUs, {gpu_memory_gb:.1f}GB each")
-        print(f"Model: {model_type} with {memory_est['active_parameters']/1e9:.1f}B active params")
         print(f"Required memory: {required_memory:.1f}GB, Available: {total_memory_gb:.1f}GB")
         
-        # Adjust micro batch size based on GPU memory and model size
+        # Adjust micro batch size based on GPU memory
         if config.micro_batch_size is None:
-            # More sophisticated batch size calculation
-            if memory_est['active_parameters'] > 100e9:  # >100B active params
-                config.micro_batch_size = max(1, int(gpu_memory_gb / 20))
-            elif memory_est['active_parameters'] > 50e9:  # >50B active params
-                config.micro_batch_size = max(1, int(gpu_memory_gb / 15))
-            elif memory_est['active_parameters'] > 10e9:  # >10B active params
-                config.micro_batch_size = max(1, int(gpu_memory_gb / 10))
-            else:
-                config.micro_batch_size = max(1, int(gpu_memory_gb / 8))
+            config.micro_batch_size = max(1, int(gpu_memory_gb / 10))  # Rough heuristic
         
-        # MoE-specific optimizations
-        if config.use_moe:
-            # Optimize expert parallelism for 8x MoE pattern
-            if hasattr(config, 'expert_parallel_size') and config.expert_parallel_size is None:
-                # For 8 experts, try to distribute evenly across GPUs
-                if gpu_count >= 8:
-                    config.expert_parallel_size = 8  # One expert per GPU
-                elif gpu_count >= 4:
-                    config.expert_parallel_size = gpu_count  # Multiple experts per GPU
-                else:
-                    config.expert_parallel_size = 1  # All experts on each GPU
-            
-            # Adjust capacity factor based on available memory
-            if hasattr(config, 'capacity_factor'):
-                if required_memory > total_memory_gb * 0.8:
-                    config.capacity_factor = min(config.capacity_factor, 1.0)
-                    print("Reduced MoE capacity factor due to memory constraints")
-        
-        # Enable CPU offloading based on memory pressure
-        memory_pressure = required_memory / total_memory_gb
-        if memory_pressure > target_memory_usage:
-            print(f"Enabling CPU offloading (memory pressure: {memory_pressure:.2f}x)")
+        # Enable CPU offloading if needed
+        if required_memory > total_memory_gb * target_memory_usage:
+            print("Enabling CPU offloading due to memory constraints")
             config.cpu_offload = True
             config.cpu_offload_optimizer = True
-            
-            if memory_pressure > 1.5:
+            if required_memory > total_memory_gb * 1.5:
                 config.cpu_offload_parameters = True
-                if hasattr(config, 'aggressive_cpu_offload'):
-                    config.aggressive_cpu_offload = True
-                print("Enabled aggressive CPU offloading")
-            
-            # Enable NVMe offloading for very large models
-            if memory_pressure > 2.0:
-                if hasattr(config, 'nvme_offload_optimizer'):
-                    config.nvme_offload_optimizer = True
-                if hasattr(config, 'nvme_offload_parameters'):
-                    config.nvme_offload_parameters = True
-                print("Enabled NVMe offloading for extreme memory constraints")
+                config.aggressive_cpu_offload = True
         
-        # Auto-adjust ZeRO stage based on model size and memory
+        # Adjust ZeRO stage based on memory requirements
         if config.zero_stage == 0:  # Auto-select
-            if memory_pressure > 2.0 or memory_est['total_parameters'] > 1e12:  # >1T params
+            if required_memory > total_memory_gb * 2:
                 config.zero_stage = 3
-                print("Selected ZeRO-3 for large model")
-            elif memory_pressure > 1.2 or memory_est['total_parameters'] > 100e9:  # >100B params
+            elif required_memory > total_memory_gb:
                 config.zero_stage = 2
-                print("Selected ZeRO-2 for medium model")
             else:
                 config.zero_stage = 1
-                print("Selected ZeRO-1 for small model")
         
         # Enable gradient compression for multi-GPU setups
-        if gpu_count > 4 and hasattr(config, 'gradient_compression'):
+        if gpu_count > 4:
             config.gradient_compression = True
-            print("Enabled gradient compression for multi-GPU setup")
         
-        # Adjust precision based on GPU capabilities and model size
+        # Optimize expert parallelism for MoE
+        if config.use_moe and config.expert_parallel_size is None:
+            config.expert_parallel_size = min(config.num_experts, gpu_count)
+        
+        # Adjust precision based on GPU capabilities
         if config.precision == "auto":
             config.precision = config._auto_select_precision()
-            # Override for very large models
-            if memory_est['total_parameters'] > 500e9:  # >500B params
-                config.precision = "bf16"
         
-        # Enable Flash Attention for large models
-        if hasattr(config, 'use_flash_attention') and config.use_flash_attention is None:
-            config.use_flash_attention = memory_est['active_parameters'] > 7e9  # >7B active params
-        
-        # Streaming optimizations for very large models
-        if hasattr(config, 'streaming_threshold_gb'):
-            if memory_est['total_parameters'] > 400e9:  # >400B params
-                config.streaming_threshold_gb = min(config.streaming_threshold_gb, 32)
-        
-        # Dense model specific optimizations
-        if not config.use_moe:
-            # Dense models can use slightly larger batch sizes since they're more memory efficient
-            if config.micro_batch_size == 1 and gpu_memory_gb > 40:  # Large GPUs
-                config.micro_batch_size = 2
-            
-            # Dense models benefit more from gradient checkpointing
-            if memory_est['total_parameters'] > 10e9:
-                config.gradient_checkpointing = True
-        
-        print(f"Optimized config: {model_type}, ZeRO-{config.zero_stage}, {config.precision}, "
-              f"CPU offload: {config.cpu_offload}, Micro batch: {config.micro_batch_size}")
+        print(f"Optimized config: ZeRO-{config.zero_stage}, {config.precision}, CPU offload: {config.cpu_offload}")
         
         return config
     
     @staticmethod
     def validate_config(config: Config, strict: bool = False) -> List[str]:
-        """Validate configuration with enhanced MoE and dense model checks."""
+        """Validate configuration and return list of warnings/errors."""
         warnings = []
         
         try:
@@ -918,140 +1388,56 @@ class ConfigManager:
         # Hardware compatibility checks
         if torch.cuda.is_available():
             gpu_memory_gb = config._get_gpu_memory_gb()
-            gpu_count = torch.cuda.device_count()
             memory_est = config.get_memory_estimate_gb()
             
-            per_gpu_memory = memory_est['total'] / gpu_count
-            if gpu_memory_gb and per_gpu_memory > gpu_memory_gb * 0.9:
-                warnings.append(f"High per-GPU memory usage: {per_gpu_memory:.1f}GB > {gpu_memory_gb * 0.9:.1f}GB")
+            if gpu_memory_gb and memory_est['total'] > gpu_memory_gb * 0.9:
+                warnings.append(f"High memory usage: {memory_est['total']:.1f}GB > {gpu_memory_gb * 0.9:.1f}GB")
                 warnings.append("Consider enabling CPU offloading or reducing batch size")
-            
-            # Check for minimum GPU requirements for large models
-            if memory_est['total_parameters'] > 400e9 and gpu_count < 4:
-                warnings.append("Large models (>400B params) typically require 4+ GPUs for efficient training")
         
         # MoE-specific validations
         if config.use_moe:
-            if hasattr(config, 'num_experts') and config.num_experts != 8:
-                warnings.append("Non-standard expert count: 8 experts recommended for optimal 8x MoE pattern")
+            if config.num_experts != 8:
+                warnings.append("Non-standard expert count: 8 experts recommended for consistency")
             
-            if hasattr(config, 'moe_top_k') and config.moe_top_k != 1:
-                warnings.append("Top-1 routing recommended for 8x MoE pattern efficiency and stability")
-            
-            # Check expert parallelism settings
-            if (hasattr(config, 'expert_parallel_size') and 
-                hasattr(config, 'num_experts') and 
-                config.expert_parallel_size and
-                config.expert_parallel_size > config.num_experts):
-                warnings.append("Expert parallel size should not exceed number of experts")
-            
-            # Load balancing checks
-            if hasattr(config, 'load_balancing_weight') and config.load_balancing_weight == 0:
-                warnings.append("Consider enabling load balancing for MoE training stability")
-        
-        # Dense model specific validations
-        else:
-            if memory_est['total_parameters'] > 100e9 and not config.gradient_checkpointing:
-                warnings.append("Consider enabling gradient checkpointing for large dense models")
-                
-            # Dense models can be more sensitive to batch size
-            effective_batch = getattr(config, 'effective_batch_size', 0)
-            if effective_batch < 64:
-                warnings.append("Small batch sizes may hurt dense model training stability")
+            if config.moe_top_k != 1:
+                warnings.append("Top-1 routing recommended for 8x MoE pattern efficiency")
         
         # DeepSpeed compatibility
-        if (hasattr(config, 'use_deepspeed') and config.use_deepspeed and 
-            config.zero_stage > 2 and not config.cpu_offload):
+        if config.use_deepspeed and config.zero_stage > 2 and not config.cpu_offload:
             warnings.append("ZeRO-3 typically requires CPU offloading for optimal performance")
-        
-        # Precision warnings
-        if (hasattr(config, 'precision') and config.precision == "fp32" and 
-            hasattr(config, 'get_memory_estimate_gb')):
-            memory_est = config.get_memory_estimate_gb()
-            if memory_est['total_parameters'] > 50e9:
-                warnings.append("Consider using mixed precision (bf16/fp16) for large models to reduce memory usage")
-        
-        # Batch size warnings
-        effective_batch = getattr(config, 'effective_batch_size', 0)
-        if effective_batch > 2048:
-            warnings.append("Very large effective batch size may impact training dynamics")
-        elif effective_batch < 32:
-            warnings.append("Small effective batch size may impact training stability")
         
         return warnings
     
-    @staticmethod
+    @staticmethod 
     def save_config_with_metadata(config: Config, path: str):
-        """Save configuration with comprehensive metadata including both MoE and dense model information."""
+        """Save configuration with comprehensive metadata."""
         config_dict = asdict(config)
-        
-        # Get memory and parameter estimates
-        memory_est = config.get_memory_estimate_gb()
-        total_params = config._estimate_parameters()
-        active_params = config.get_active_parameters()
-        
-        # Determine model architecture
-        model_arch = "8x MoE (Mixture of Experts)" if config.use_moe else "Dense Transformer"
         
         # Add comprehensive metadata
         config_dict["_metadata"] = {
             "created": datetime.now().isoformat(),
             "lumina_version": "2.0",
             "framework": "PyTorch + DeepSpeed",
-            "architecture": model_arch,
-            "model_comparison": {
-                "type": "MoE" if config.use_moe else "Dense",
-                "efficiency_ratio": f"{active_params / total_params:.1%}" if config.use_moe else "100% (dense)",
-                "memory_advantage": f"{(1 - active_params / total_params) * 100:.1f}% less active" if config.use_moe else "N/A"
-            },
-            "moe_pattern": f"{getattr(config, 'num_experts', 8)}x experts, top-{getattr(config, 'moe_top_k', 1)} routing" if config.use_moe else "Dense (no experts)",
+            "moe_pattern": f"{config.num_experts}x experts, top-{config.moe_top_k} routing",
             "estimated_parameters": {
-                "total": int(total_params),
-                "active": int(active_params),
-                "efficiency": f"{active_params / total_params:.1%}",
-                "expert_size": f"{active_params / getattr(config, 'num_experts', 1) / 1e9:.1f}B per expert" if config.use_moe else "N/A",
-                "dense_equivalent": f"{active_params / 1e9:.1f}B dense model" if config.use_moe else f"{total_params / 1e9:.1f}B dense model"
+                "total": config._estimate_parameters(),
+                "active": config.get_active_parameters(),
+                "efficiency": f"{config.get_active_parameters() / config._estimate_parameters():.1%}"
             },
-            "memory_estimate_gb": memory_est,
+            "memory_estimate_gb": config.get_memory_estimate_gb(),
             "hardware_requirements": {
-                "min_gpu_memory_gb": memory_est['total'] / torch.cuda.device_count() if torch.cuda.is_available() else "N/A",
-                "recommended_gpus": max(1, int(memory_est['total'] / 40)),  # Assuming A100-40GB baseline
-                "optimal_gpus": max(4, min(8, int(memory_est['total'] / 80))),  # H100-80GB optimal
-                "supports_cpu_offload": getattr(config, 'cpu_offload', False),
-                "supports_nvme_offload": bool(
-                    getattr(config, 'nvme_offload_optimizer', False) or 
-                    getattr(config, 'nvme_offload_parameters', False)
-                ),
-                "requires_multi_node": memory_est['total'] > 320,  # >4x H100-80GB
+                "min_gpu_memory_gb": config.get_memory_estimate_gb()['total'] / torch.cuda.device_count() if torch.cuda.is_available() else "N/A",
+                "recommended_gpus": max(1, int(config.get_memory_estimate_gb()['total'] / 40)),  # Assuming A100-40GB
+                "supports_cpu_offload": config.cpu_offload,
+                "supports_nvme_offload": bool(config.nvme_offload_optimizer or config.nvme_offload_parameters)
             },
             "training_characteristics": {
-                "effective_batch_size": getattr(config, 'effective_batch_size', 'auto'),
-                "micro_batch_size": getattr(config, 'micro_batch_size', 'auto'),
-                "gradient_accumulation": getattr(config, 'gradient_accumulation_steps', 1),
-                "sequence_length": getattr(config, 'seq_length', 'default'),
-                "precision": getattr(config, 'precision', 'auto'),
-                "deepspeed_stage": f"ZeRO-{config.zero_stage}" if config.zero_stage > 0 else "Auto",
-                "flash_attention": getattr(config, 'use_flash_attention', False),
-                "gradient_compression": getattr(config, 'gradient_compression', False),
-                "gradient_checkpointing": getattr(config, 'gradient_checkpointing', False)
+                "effective_batch_size": config.effective_batch_size,
+                "gradient_accumulation": config.gradient_accumulation_steps,
+                "precision": config.precision,
+                "deepspeed_stage": f"ZeRO-{config.zero_stage}" if config.zero_stage > 0 else "Auto"
             }
         }
-        
-        # Add MoE or Dense specific metadata
-        if config.use_moe:
-            config_dict["_metadata"]["moe_specifics"] = {
-                "expert_parallelism": getattr(config, 'expert_parallel_size', 'auto'),
-                "capacity_factor": getattr(config, 'capacity_factor', 'default'),
-                "load_balancing_weight": getattr(config, 'load_balancing_weight', 'default'),
-                "top_k_routing": getattr(config, 'moe_top_k', 1),
-                "streaming_threshold_gb": getattr(config, 'streaming_threshold_gb', 'default')
-            }
-        else:
-            config_dict["_metadata"]["dense_specifics"] = {
-                "total_flops_advantage": "More FLOPs but simpler routing vs MoE equivalent",
-                "memory_usage": "Higher memory usage but no expert routing overhead",
-                "architecture_simplicity": "Traditional transformer without expert routing complexity"
-            }
         
         # Ensure directory exists
         Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -1059,173 +1445,7 @@ class ConfigManager:
         with open(path, 'w') as f:
             yaml.dump(config_dict, f, default_flow_style=False, sort_keys=False, indent=2)
         
-        # Enhanced output information
-        model_type = "MoE" if config.use_moe else "Dense"
         print(f"Configuration saved to {path}")
-        print(f"Model: {model_type} - {active_params/1e9:.0f}B active params ({total_params/1e9:.0f}B total)")
-        print(f"Active parameters: {active_params:,.0f}")
-        print(f"Total parameters: {total_params:,.0f}")
-        if config.use_moe:
-            print(f"Parameter efficiency: {active_params / total_params:.1%}")
-            print(f"Memory advantage vs dense: {(1 - active_params / total_params) * 100:.1f}%")
-        print(f"Estimated memory: {memory_est['total']:.1f}GB")
-        
-        # Hardware recommendations
-        if torch.cuda.is_available():
-            recommended_gpus = max(1, int(memory_est['total'] / 40))
-            optimal_gpus = max(1, int(memory_est['total'] / 80))
-            print(f"Recommended GPUs: {recommended_gpus}x A100-40GB or {optimal_gpus}x H100-80GB")
-    
-    @staticmethod
-    def get_preset_recommendations(target_use_case: str = "general") -> Dict[str, str]:
-        """Get preset recommendations based on use case, including both MoE and dense options."""
-        recommendations = {
-            "debug": "debug - Minimal setup for testing and development",
-            "experimentation": "b1 (MoE) or dense_1b - Good for research and prototyping",
-            "general": "b7 (MoE) or dense_7b - Balanced performance for most applications",
-            "production": "b14 (MoE) or dense_14b - High-quality results for production use", 
-            "research": "b50+ (MoE) or dense_50b+ - State-of-the-art capabilities for advanced research",
-            "enterprise": "b200+ (MoE) or dense_200b+ - Enterprise-scale applications with maximum quality",
-            "moe_comparison": "Use matching pairs (e.g., b7 vs dense_7b) to compare MoE vs dense architectures",
-            "efficiency_focused": "MoE variants (b1, b7, b14, etc.) - Better parameter efficiency",
-            "simplicity_focused": "Dense variants (dense_1b, dense_7b, etc.) - Simpler architecture, no expert routing"
-        }
-        
-        if target_use_case in recommendations:
-            return {target_use_case: recommendations[target_use_case]}
-        else:
-            return recommendations
-    
-    @staticmethod
-    def compare_moe_vs_dense(active_param_size: str) -> Dict[str, Any]:
-        """Compare MoE vs Dense models with equivalent active parameter counts."""
-        size_map = {
-            "1b": ("b1", "dense_1b"),
-            "7b": ("b7", "dense_7b"), 
-            "14b": ("b14", "dense_14b"),
-            "50b": ("b50", "dense_50b"),
-            "100b": ("b100", "dense_100b"),
-            "200b": ("b200", "dense_200b"),
-            "300b": ("b300", "dense_300b")
-        }
-        
-        if active_param_size not in size_map:
-            raise ValueError(f"Unknown size: {active_param_size}. Available: {list(size_map.keys())}")
-        
-        moe_preset, dense_preset = size_map[active_param_size]
-        moe_config = getattr(ConfigPresets, moe_preset)()
-        dense_config = getattr(ConfigPresets, dense_preset)()
-        
-        moe_memory = moe_config.get_memory_estimate_gb()
-        dense_memory = dense_config.get_memory_estimate_gb()
-        
-        return {
-            "comparison_summary": {
-                "active_params": f"{active_param_size.upper()} active parameters",
-                "moe_total_params": f"{moe_memory['total_parameters']/1e9:.0f}B total",
-                "dense_total_params": f"{dense_memory['total_parameters']/1e9:.0f}B total",
-                "parameter_efficiency": f"MoE: {(moe_memory['active_parameters']/moe_memory['total_parameters'])*100:.1f}%, Dense: 100%",
-                "memory_usage": f"MoE: {moe_memory['total']:.1f}GB, Dense: {dense_memory['total']:.1f}GB"
-            },
-            "moe_advantages": [
-                "Parameter efficient - only activates subset of experts",
-                "Potentially better scaling with model size",
-                "Can achieve higher capacity with same compute",
-                "Interesting for research into conditional computation"
-            ],
-            "dense_advantages": [
-                "Simpler architecture and training",
-                "No expert routing overhead",
-                "More predictable memory usage",
-                "Easier to debug and optimize"
-            ],
-            "moe_config": moe_preset,
-            "dense_config": dense_preset,
-            "detailed_comparison": ConfigPresets.compare_presets()
-        }
-
-
-# Example usage and utility functions
-def main():
-    """Example usage of the enhanced configuration system."""
-    
-    print("=" * 80)
-    print("LUMINA 2.0 - Enhanced Configuration System")
-    print("Supporting both MoE and Dense model architectures")
-    print("=" * 80)
-    
-    # Show available presets
-    print("\n Available Model Presets:")
-    preset_info = ConfigPresets.get_preset_info()
-    
-    print("\n MoE Models (8x Expert Pattern):")
-    moe_presets = ["debug", "b1", "b7", "b14", "b50", "b100", "b200", "b300"]
-    for preset in moe_presets:
-        if preset in preset_info:
-            info = preset_info[preset]
-            print(f"  {preset}: {info['active_params']} active, {info['total_params']} total - {info['use_case']}")
-    
-    print("\n Dense Models (Traditional Architecture):")
-    dense_presets = ["dense_1b", "dense_7b", "dense_14b", "dense_50b", "dense_100b", "dense_200b", "dense_300b"]
-    for preset in dense_presets:
-        if preset in preset_info:
-            info = preset_info[preset]
-            print(f"  {preset}: {info['active_params']} params - {info['use_case']}")
-    
-    # Example: Create and optimize a configuration
-    print(f"\n Example: Creating optimized b7 MoE configuration")
-    try:
-        config = ConfigManager.create_config("b7", optimize_for_hardware=True)
-        print(f" Configuration created successfully")
-        
-        # Validate configuration
-        warnings = ConfigManager.validate_config(config)
-        if warnings:
-            print(f" Validation warnings:")
-            for warning in warnings[:3]:  # Show first 3 warnings
-                print(f"  {warning}")
-        else:
-            print(" Configuration passed all validations")
-            
-    except Exception as e:
-        print(f" Error creating configuration: {e}")
-    
-    # Example: Compare MoE vs Dense
-    print(f"\n Example: Comparing 7B MoE vs Dense models")
-    try:
-        comparison = ConfigManager.compare_moe_vs_dense("7b")
-        summary = comparison["comparison_summary"]
-        print(f" Comparison Results:")
-        print(f"  Active Parameters: {summary['active_params']}")
-        print(f"  MoE Total: {summary['moe_total_params']}")
-        print(f"  Dense Total: {summary['dense_total_params']}")
-        print(f"  Efficiency: {summary['parameter_efficiency']}")
-        print(f"  Memory Usage: {summary['memory_usage']}")
-        
-    except Exception as e:
-        print(f" Error comparing models: {e}")
-    
-    # Show usage recommendations
-    print(f"\n Usage Recommendations:")
-    recommendations = ConfigManager.get_preset_recommendations()
-    for use_case, recommendation in list(recommendations.items())[:5]:
-        print(f"  {use_case.title()}: {recommendation}")
-    
-    print(f"\n Quick Start Commands:")
-    print(f"  # Create MoE model")
-    print(f"  config = ConfigManager.create_config('b7')")
-    print(f"  ")
-    print(f"  # Create equivalent dense model")  
-    print(f"  config = ConfigManager.create_config('dense_7b')")
-    print(f"  ")
-    print(f"  # Compare architectures")
-    print(f"  comparison = ConfigManager.compare_moe_vs_dense('7b')")
-    print(f"  ")
-    print(f"  # Save with metadata")
-    print(f"  ConfigManager.save_config_with_metadata(config, 'config.yaml')")
-    
-    print("\n" + "=" * 80)
-
-
-if __name__ == "__main__":
-    main()
+        print(f"Active parameters: {config.get_active_parameters():,}")
+        print(f"Total parameters: {config._estimate_parameters():,}")
+        print(f"Parameter efficiency: {config.get_active_parameters() / config._estimate_parameters():.1%}")
