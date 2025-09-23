@@ -36,7 +36,7 @@ class Config:
     warmup_ratio: float = 0.15
     eval_every_n_batches: int = 500
     save_every_n_batches: int = 1000
-    max_grad_norm: float = 1.0
+    max_grad_norm: float = 0.3
     precision: str = "auto"  # Changed default to "auto"
     inference_precision: str = "auto"  # Changed default to "auto"
     compile: bool = True
@@ -69,8 +69,8 @@ class Config:
     use_moe: bool = True  # Default to True now
     num_experts: int = 8  # Fixed to 8 for consistency
     moe_top_k: int = 1   # Changed to 1 (top-1 routing like Mixtral)
-    capacity_factor: float = 1.25
-    load_balancing_weight: float = 0.01
+    capacity_factor: float = 1.5
+    load_balancing_weight: float = 0.001
     expert_parallel_size: Optional[int] = None  # Auto-calculated
     
     # DeepSpeed parameters - Enhanced
