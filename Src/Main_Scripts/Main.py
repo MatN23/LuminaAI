@@ -925,8 +925,6 @@ def main():
         'max_conversations_per_file': 100000,
         'backup_every_n_hours': 6,
 
-        'capacity_factor': 1.5,
-        'load_balancing_weight': 0.01,
         'num_workers': 2,
         'compile': True,
         'max_memory_usage': 0.9,
