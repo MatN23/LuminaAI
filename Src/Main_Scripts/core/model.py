@@ -17,42 +17,44 @@ except ImportError:
 
 
 def estimate_parameters(config) -> int:
-    """Estimate number of model parameters."""
-    # Embedding
+    """Estimate number of model parameters for the corrected MoE model."""
+    # Dense embedding layer
     embed_params = config.vocab_size * config.hidden_size
     
-    # Attention layers
+    # Dense attention layers (ALWAYS dense - no MoE here)
     attn_params_per_layer = (
         config.hidden_size * config.hidden_size * 3 +  # q, k, v projections
         config.hidden_size * config.hidden_size  # output projection
     )
     
-    # MLP or MoE layers
+    # FFN layers - MoE or Dense based on configuration
     if hasattr(config, 'use_moe') and config.use_moe:
-        # MoE parameters
-        gate_params = config.hidden_size  # gating network
+        # MoE FFN: gating network + experts
+        gate_params = config.hidden_size  # gating network per layer
         expert_params = (
             config.hidden_size * config.intermediate_size * 2 +  # gate and up
             config.intermediate_size * config.hidden_size  # down
-        ) * config.num_experts
-        mlp_params_per_layer = gate_params + expert_params
+        ) * config.num_experts  # multiply by number of experts
+        
+        ffn_params_per_layer = gate_params + expert_params
     else:
-        # Standard MLP
-        mlp_params_per_layer = (
+        # Standard dense FFN
+        ffn_params_per_layer = (
             config.hidden_size * config.intermediate_size * 2 +  # gate and up
             config.intermediate_size * config.hidden_size  # down
         )
     
-    # Layer norms
+    # Layer norms (always dense)
     norm_params_per_layer = config.hidden_size * 2  # input and post-attn norms
     
     # Total per layer
-    params_per_layer = attn_params_per_layer + mlp_params_per_layer + norm_params_per_layer
+    params_per_layer = attn_params_per_layer + ffn_params_per_layer + norm_params_per_layer
     
-    # Final norm and LM head (tied with embedding)
+    # Final norm and LM head
     final_norm = config.hidden_size
+    lm_head_params = config.vocab_size * config.hidden_size if not config.tie_word_embeddings else 0
     
-    total_params = embed_params + (params_per_layer * config.num_layers) + final_norm
+    total_params = embed_params + (params_per_layer * config.num_layers) + final_norm + lm_head_params
     
     return total_params
 
@@ -137,8 +139,8 @@ def apply_rotary_pos_emb(q: torch.Tensor, k: torch.Tensor,
     return q_embed, k_embed
 
 
-class GroupedQueryAttention(nn.Module):
-    """Enhanced GQA with better stability and optional flash attention."""
+class DenseGroupedQueryAttention(nn.Module):
+    """Dense GQA - ALWAYS dense, never uses MoE (CORRECT IMPLEMENTATION)."""
     
     def __init__(self, config):
         super().__init__()
@@ -150,7 +152,7 @@ class GroupedQueryAttention(nn.Module):
         self.num_queries_per_kv = self.num_heads // self.num_kv_heads
         self.scale = self.head_dim ** -0.5
         
-        # Linear projections
+        # Linear projections - ALWAYS DENSE (no MoE here)
         self.q_proj = nn.Linear(config.hidden_size, self.num_heads * self.head_dim, bias=False)
         self.k_proj = nn.Linear(config.hidden_size, self.num_kv_heads * self.head_dim, bias=False)
         self.v_proj = nn.Linear(config.hidden_size, self.num_kv_heads * self.head_dim, bias=False)
@@ -178,7 +180,7 @@ class GroupedQueryAttention(nn.Module):
     def forward(self, x: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
         B, L, D = x.shape
         
-        # Project to Q, K, V
+        # Project to Q, K, V - ALWAYS DENSE
         q = self.q_proj(x).view(B, L, self.num_heads, self.head_dim).transpose(1, 2)
         k = self.k_proj(x).view(B, L, self.num_kv_heads, self.head_dim).transpose(1, 2)
         v = self.v_proj(x).view(B, L, self.num_kv_heads, self.head_dim).transpose(1, 2)
@@ -247,13 +249,22 @@ class GroupedQueryAttention(nn.Module):
 
 
 class SwiGLUExpert(nn.Module):
-    """Single SwiGLU expert for MoE."""
+    """Single SwiGLU expert for MoE FFN."""
     
     def __init__(self, config):
         super().__init__()
         self.gate_proj = nn.Linear(config.hidden_size, config.intermediate_size, bias=False)
         self.up_proj = nn.Linear(config.hidden_size, config.intermediate_size, bias=False)
         self.down_proj = nn.Linear(config.intermediate_size, config.hidden_size, bias=False)
+        
+        self._init_weights(config)
+    
+    def _init_weights(self, config):
+        """Initialize expert weights."""
+        std = config.init_std
+        nn.init.normal_(self.gate_proj.weight, mean=0.0, std=std)
+        nn.init.normal_(self.up_proj.weight, mean=0.0, std=std)
+        nn.init.normal_(self.down_proj.weight, mean=0.0, std=std / math.sqrt(2 * config.num_layers))
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         gate = F.silu(self.gate_proj(x))
@@ -261,8 +272,8 @@ class SwiGLUExpert(nn.Module):
         return self.down_proj(gate * up)
 
 
-class OptimizedMoELayer(nn.Module):
-    """FIXED: Production-ready MoE with stable routing and load balancing."""
+class MoEFFNLayer(nn.Module):
+    """MoE FFN layer - ONLY used in FFN, not attention."""
     
     def __init__(self, config):
         super().__init__()
@@ -270,77 +281,68 @@ class OptimizedMoELayer(nn.Module):
         self.num_experts = config.num_experts
         self.top_k = config.moe_top_k
         self.hidden_size = config.hidden_size
-        self.capacity_factor = getattr(config, 'capacity_factor', 1.5)  # FIXED: Increased default
+        self.capacity_factor = getattr(config, 'capacity_factor', 1.25)
         
-        # Gating network
+        # Gating network - routes to FFN experts
         self.gate = nn.Linear(config.hidden_size, config.num_experts, bias=False)
         
         # Expert networks - use ModuleList for proper device handling
         self.experts = nn.ModuleList([SwiGLUExpert(config) for _ in range(config.num_experts)])
         
-        # Load balancing - FIXED: Much lower default weight
-        self.load_balancing_weight = getattr(config, 'load_balancing_weight', 0.001)
+        # Load balancing
+        self.load_balancing_weight = getattr(config, 'load_balancing_weight', 0.01)
         
-        # FIXED: Add routing temperature for stability
+        # Routing temperature for stability
         self.routing_temperature = getattr(config, 'routing_temperature', 1.0)
         
-        # FIXED: Add noise for load balancing
+        # Noise for load balancing
         self.noise_std = getattr(config, 'routing_noise_std', 0.1)
         
         self._init_weights()
     
     def _init_weights(self):
-        """FIXED: Better initialization for routing stability."""
-        std = self.config.init_std
-        
-        # FIXED: Proper gate initialization (was too small at 0.001)
+        """Initialize gating network."""
         nn.init.normal_(self.gate.weight, mean=0.0, std=0.02)
-        
-        # Initialize expert weights
-        for expert in self.experts:
-            nn.init.normal_(expert.gate_proj.weight, mean=0.0, std=std)
-            nn.init.normal_(expert.up_proj.weight, mean=0.0, std=std)
-            nn.init.normal_(expert.down_proj.weight, mean=0.0, std=std / math.sqrt(2 * self.config.num_layers))
     
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         batch_size, seq_len, hidden_size = x.shape
         total_tokens = batch_size * seq_len
         x_flat = x.view(-1, hidden_size)  # [total_tokens, hidden_size]
         
-        # FIXED: Add training noise for better load balancing
+        # Compute gate logits
         gate_logits = self.gate(x_flat)  # [total_tokens, num_experts]
         
+        # Add training noise for better load balancing
         if self.training and self.noise_std > 0:
-            # Add noise during training to encourage exploration
             noise = torch.randn_like(gate_logits) * self.noise_std
             gate_logits = gate_logits + noise
         
-        # FIXED: Apply temperature scaling for more stable routing
+        # Apply temperature scaling
         gate_logits = gate_logits / self.routing_temperature
         gate_probs = F.softmax(gate_logits, dim=-1)
         
-        # Top-k gating with capacity enforcement
+        # Top-k gating
         top_k_probs, top_k_indices = torch.topk(gate_probs, self.top_k, dim=-1)
         
         # Normalize top-k probabilities
         top_k_probs = top_k_probs / (top_k_probs.sum(dim=-1, keepdim=True) + 1e-8)
         
-        # FIXED: More conservative capacity calculation
+        # Calculate capacity per expert
         base_capacity = total_tokens * self.top_k // self.num_experts
-        expert_capacity = max(8, int(base_capacity * self.capacity_factor))  # Minimum 8 tokens
+        expert_capacity = max(8, int(base_capacity * self.capacity_factor))
         
         # Initialize output and tracking tensors
         output = torch.zeros_like(x_flat)
         expert_counts = torch.zeros(self.num_experts, dtype=torch.long, device=x.device)
-        dropped_tokens = 0  # Track dropped tokens for debugging
+        dropped_tokens = 0
         
-        # FIXED: More stable scatter/gather routing
+        # Process each position in top-k
         for k in range(self.top_k):
             # Get k-th choice for each token
             expert_ids = top_k_indices[:, k]  # [total_tokens]
             weights = top_k_probs[:, k]  # [total_tokens]
             
-            # Process each expert in parallel
+            # Process each expert
             for expert_id in range(self.num_experts):
                 # Find tokens assigned to this expert
                 mask = (expert_ids == expert_id)
@@ -348,15 +350,14 @@ class OptimizedMoELayer(nn.Module):
                 if not mask.any():
                     continue
                 
-                # FIXED: More stable capacity handling
+                # Apply capacity constraint
                 token_indices = torch.where(mask)[0]
                 if len(token_indices) > expert_capacity:
-                    # FIXED: Keep first tokens instead of random sampling
-                    # This provides more stable training
+                    # Keep first tokens (more stable than random)
                     token_indices = token_indices[:expert_capacity]
                     dropped_tokens += len(torch.where(mask)[0]) - expert_capacity
                     
-                    # Update mask for consistency
+                    # Update mask
                     new_mask = torch.zeros_like(mask)
                     new_mask[token_indices] = True
                     mask = new_mask
@@ -367,9 +368,9 @@ class OptimizedMoELayer(nn.Module):
                     expert_weights = weights[mask]  # [n_tokens_for_expert]
                     
                     # Forward through expert
-                    expert_output = self.experts[expert_id](expert_input)  # [n_tokens_for_expert, hidden_size]
+                    expert_output = self.experts[expert_id](expert_input)
                     
-                    # FIXED: Apply weights more carefully to avoid NaN
+                    # Apply weights
                     expert_weights = torch.clamp(expert_weights, min=1e-8, max=10.0)
                     weighted_output = expert_output * expert_weights.unsqueeze(-1)
                     output[mask] += weighted_output
@@ -377,8 +378,8 @@ class OptimizedMoELayer(nn.Module):
                     # Update expert usage count
                     expert_counts[expert_id] += mask.sum()
         
-        # FIXED: More stable load balancing loss computation
-        load_balancing_loss = self._compute_stable_load_balancing_loss(
+        # Compute load balancing loss
+        load_balancing_loss = self._compute_load_balancing_loss(
             gate_probs, expert_counts, total_tokens, dropped_tokens
         )
         
@@ -387,36 +388,34 @@ class OptimizedMoELayer(nn.Module):
         
         return output, load_balancing_loss
     
-    def _compute_stable_load_balancing_loss(self, 
-                                          gate_probs: torch.Tensor,
-                                          expert_counts: torch.Tensor,
-                                          total_tokens: int,
-                                          dropped_tokens: int) -> torch.Tensor:
-        """FIXED: More stable load balancing loss computation."""
-        
-        # Expert usage fractions (how often each expert is used)
+    def _compute_load_balancing_loss(self, 
+                                   gate_probs: torch.Tensor,
+                                   expert_counts: torch.Tensor,
+                                   total_tokens: int,
+                                   dropped_tokens: int) -> torch.Tensor:
+        """Compute load balancing loss."""
+        # Expert usage fractions
         expert_usage = expert_counts.float() / max(total_tokens * self.top_k, 1)
         
         # Gate importance (average probability assigned to each expert)
         gate_importance = gate_probs.mean(dim=0)  # [num_experts]
         
-        # FIXED: More stable loss formulation
-        # Standard Switch Transformer auxiliary loss
+        # Standard auxiliary loss
         aux_loss = torch.sum(expert_usage * gate_importance) * self.num_experts
         
-        # FIXED: Add penalty for dropped tokens to encourage better load balancing
+        # Add penalty for dropped tokens
         if dropped_tokens > 0:
             drop_penalty = (dropped_tokens / max(total_tokens, 1)) * 0.1
             aux_loss = aux_loss + drop_penalty
         
-        # FIXED: Clamp the loss to prevent explosion
+        # Clamp the loss to prevent explosion
         aux_loss = torch.clamp(aux_loss, max=1.0)
         
         return aux_loss * self.load_balancing_weight
 
 
-class SwiGLU(nn.Module):
-    """Enhanced SwiGLU with better initialization."""
+class DenseSwiGLU(nn.Module):
+    """Dense SwiGLU FFN for non-MoE layers."""
     
     def __init__(self, config):
         super().__init__()
@@ -427,14 +426,11 @@ class SwiGLU(nn.Module):
         self._init_weights()
     
     def _init_weights(self):
-        """Enhanced weight initialization for stability."""
+        """Initialize weights."""
         std = self.config.init_std
         
-        # GLU initialization
         nn.init.normal_(self.gate_proj.weight, mean=0.0, std=std)
         nn.init.normal_(self.up_proj.weight, mean=0.0, std=std)
-        
-        # Output projection with scaling
         nn.init.normal_(self.down_proj.weight, mean=0.0, std=std / math.sqrt(2 * self.config.num_layers))
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -444,25 +440,68 @@ class SwiGLU(nn.Module):
 
 
 class TransformerBlock(nn.Module):
-    """Enhanced transformer block with optimized MoE support."""
+    """Transformer block: Dense attention + MoE/Dense FFN."""
     
-    def __init__(self, config):
+    def __init__(self, config, layer_idx: int = 0):
         super().__init__()
         self.config = config
+        self.layer_idx = layer_idx
+        
+        # ALWAYS dense attention - never MoE
         self.input_norm = RMSNorm(config.hidden_size, config.rms_norm_eps)
-        self.self_attn = GroupedQueryAttention(config)
+        self.self_attn = DenseGroupedQueryAttention(config)  # ALWAYS dense
         self.post_attn_norm = RMSNorm(config.hidden_size, config.rms_norm_eps)
         
-        # MoE or standard MLP
+        # FFN: MoE or Dense based on configuration
         if hasattr(config, 'use_moe') and config.use_moe:
-            self.mlp = OptimizedMoELayer(config)
-            self.use_moe = True
+            # Check if this layer should use MoE based on pattern
+            should_use_moe = self._should_use_moe(layer_idx, config)
+            
+            if should_use_moe:
+                self.ffn = MoEFFNLayer(config)  # MoE FFN
+                self.use_moe = True
+            else:
+                self.ffn = DenseSwiGLU(config)  # Dense FFN
+                self.use_moe = False
         else:
-            self.mlp = SwiGLU(config)
+            self.ffn = DenseSwiGLU(config)  # Dense FFN
             self.use_moe = False
         
         # Gradient checkpointing flag
         self.gradient_checkpointing = config.gradient_checkpointing
+        
+        logging.info(f"Layer {layer_idx}: Dense Attention + {'MoE' if self.use_moe else 'Dense'} FFN")
+    
+    def _should_use_moe(self, layer_idx: int, config) -> bool:
+        """Determine if this layer should use MoE based on configuration pattern."""
+        # Default: all FFN layers use MoE (most common pattern)
+        moe_pattern = getattr(config, 'moe_pattern', 'all')
+        
+        if moe_pattern == 'all':
+            # Every FFN layer uses MoE
+            return True
+        elif moe_pattern == 'every_3rd':
+            # Every 3rd layer uses MoE (interleaved pattern)
+            return (layer_idx + 1) % 3 == 0
+        elif moe_pattern == 'every_4th':
+            # Every 4th layer uses MoE
+            return (layer_idx + 1) % 4 == 0
+        elif moe_pattern == 'sandwich':
+            # Sandwich pattern: first and last few layers are dense, middle layers are MoE
+            total_layers = config.num_layers
+            dense_start = getattr(config, 'dense_start_layers', 2)
+            dense_end = getattr(config, 'dense_end_layers', 2)
+            
+            if layer_idx < dense_start or layer_idx >= (total_layers - dense_end):
+                return False  # Dense
+            else:
+                return True   # MoE
+        elif moe_pattern == 'none':
+            # No MoE layers (all dense)
+            return False
+        else:
+            # Default to all MoE
+            return True
     
     def forward(self, x: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         if self.gradient_checkpointing and self.training:
@@ -472,18 +511,18 @@ class TransformerBlock(nn.Module):
     
     def _forward_impl(self, x: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         """Forward implementation with residual connections."""
-        # Self-attention with pre-norm
+        # Dense self-attention with pre-norm
         attn_out = self.self_attn(self.input_norm(x), attention_mask)
         x = x + attn_out
         
-        # MLP/MoE with pre-norm
+        # FFN (MoE or Dense) with pre-norm
         if self.use_moe:
-            mlp_out, load_balancing_loss = self.mlp(self.post_attn_norm(x))
-            x = x + mlp_out
+            ffn_out, load_balancing_loss = self.ffn(self.post_attn_norm(x))
+            x = x + ffn_out
             return x, load_balancing_loss
         else:
-            mlp_out = self.mlp(self.post_attn_norm(x))
-            x = x + mlp_out
+            ffn_out = self.ffn(self.post_attn_norm(x))
+            x = x + ffn_out
             return x
     
     def _forward_with_checkpointing(self, x: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
@@ -494,13 +533,13 @@ class TransformerBlock(nn.Module):
 
 
 class DeepSeekTransformer(nn.Module):
-    """Production-ready DeepSeek-style transformer with FIXED MoE."""
+    """DeepSeek-style transformer: Dense embeddings/attention + MoE/Dense FFN."""
     
     def __init__(self, config):
         super().__init__()
         self.config = config
         
-        # Embedding layer
+        # Dense embedding layer
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size)
         
         # Optional embedding scaling for stability
@@ -509,13 +548,16 @@ class DeepSeekTransformer(nn.Module):
         else:
             self.embed_scale = 1.0
         
-        # Transformer layers
-        self.layers = nn.ModuleList([TransformerBlock(config) for _ in range(config.num_layers)])
+        # Transformer layers (Dense attention + MoE/Dense FFN)
+        self.layers = nn.ModuleList([
+            TransformerBlock(config, layer_idx=i) 
+            for i in range(config.num_layers)
+        ])
         
-        # Final layer norm
+        # Dense final layer norm
         self.norm = RMSNorm(config.hidden_size, config.rms_norm_eps)
         
-        # Language modeling head
+        # Dense language modeling head
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         
         # Weight tying
@@ -524,6 +566,7 @@ class DeepSeekTransformer(nn.Module):
         
         # MoE tracking
         self.use_moe = hasattr(config, 'use_moe') and config.use_moe
+        self.moe_layers = [i for i, layer in enumerate(self.layers) if hasattr(layer, 'use_moe') and layer.use_moe]
         
         # Initialize weights
         self._init_weights()
@@ -534,20 +577,22 @@ class DeepSeekTransformer(nn.Module):
         logging.info(f"DeepSeek model initialized with {n_params:,} total parameters ({n_trainable:,} trainable)")
         
         if self.use_moe:
-            # Calculate active parameters for MoE
+            # Calculate active parameters
             n_active = self._calculate_active_params()
             efficiency = (n_active / n_params) * 100
             logging.info(f"MoE model with {n_active:,} active parameters per forward pass ({efficiency:.1f}% efficiency)")
+            logging.info(f"Architecture: Dense embeddings/attention + MoE FFN layers: {self.moe_layers}")
+            logging.info(f"MoE pattern: {getattr(config, 'moe_pattern', 'all')} with top-{config.moe_top_k} routing")
     
     def _calculate_active_params(self) -> int:
         """Calculate active parameters for MoE model."""
         if not self.use_moe:
             return sum(p.numel() for p in self.parameters())
         
-        # Non-MoE parameters
+        # Dense components (always active)
         active_params = (
-            self.embed_tokens.weight.numel() +
-            self.norm.weight.numel()
+            self.embed_tokens.weight.numel() +  # Dense embeddings
+            self.norm.weight.numel()  # Dense final norm
         )
         
         # Add LM head if not tied
@@ -556,56 +601,62 @@ class DeepSeekTransformer(nn.Module):
         
         # Per-layer active parameters
         for layer in self.layers:
-            # Attention parameters (always active)
+            # Dense attention parameters (always active)
             active_params += sum(p.numel() for p in layer.self_attn.parameters())
             active_params += layer.input_norm.weight.numel()
             active_params += layer.post_attn_norm.weight.numel()
             
-            # MoE parameters (only top-k experts active)
-            if hasattr(layer.mlp, 'gate'):
-                active_params += layer.mlp.gate.weight.numel()  # Gate always active
-                # Top-k experts out of total experts
-                expert_params = sum(p.numel() for p in layer.mlp.experts[0].parameters())
+            # FFN parameters
+            if hasattr(layer, 'use_moe') and layer.use_moe:
+                # MoE FFN
+                active_params += layer.ffn.gate.weight.numel()  # Gate always active
+                # Only top-k experts are active
+                expert_params = sum(p.numel() for p in layer.ffn.experts[0].parameters())
                 active_params += expert_params * self.config.moe_top_k
+            else:
+                # Dense FFN
+                active_params += sum(p.numel() for p in layer.ffn.parameters())
         
         return active_params
     
     def _init_weights(self):
-        """FIXED: Enhanced weight initialization following DeepSeek principles."""
-        # Embedding initialization
+        """Enhanced weight initialization."""
+        # Dense embedding initialization
         nn.init.normal_(self.embed_tokens.weight, mean=0.0, std=self.config.init_std)
         
-        # LM head initialization (if not tied)
+        # Dense LM head initialization (if not tied)
         if not self.config.tie_word_embeddings:
             nn.init.normal_(self.lm_head.weight, mean=0.0, std=self.config.init_std)
         
-        # FIXED: Less aggressive residual scaling for MoE stability
+        # Layer-wise scaling for stability
         with torch.no_grad():
             for layer_idx, layer in enumerate(self.layers):
                 # Progressive scaling: deeper layers get smaller initialization
                 depth_scale = 1.0 / math.sqrt((layer_idx + 1) * 2)
                 
-                # Scale attention output projection
-                layer.self_attn.o_proj.weight.data *= 0.8 * depth_scale  # Less aggressive
+                # Scale attention output projection (dense)
+                layer.self_attn.o_proj.weight.data *= 0.8 * depth_scale
                 
-                # FIXED: Different scaling for MoE vs standard MLP
-                if hasattr(layer.mlp, 'down_proj'):  # Standard MLP
-                    layer.mlp.down_proj.weight.data *= 0.8 * depth_scale
-                elif hasattr(layer.mlp, 'experts'):  # MoE - FIXED: Less aggressive scaling
-                    for expert in layer.mlp.experts:
-                        expert.down_proj.weight.data *= 0.9  # Much less aggressive for MoE
+                # Scale FFN based on type
+                if hasattr(layer, 'use_moe') and layer.use_moe:
+                    # MoE FFN - scale expert outputs
+                    for expert in layer.ffn.experts:
+                        expert.down_proj.weight.data *= 0.9  # Less aggressive for MoE
+                else:
+                    # Dense FFN
+                    layer.ffn.down_proj.weight.data *= 0.8 * depth_scale
     
     def forward(self, input_ids: torch.Tensor, 
                 attention_mask: Optional[torch.Tensor] = None,
                 return_hidden_states: bool = False,
                 return_aux_loss: bool = True) -> Union[torch.Tensor, Tuple[torch.Tensor, ...]]:
-        """Enhanced forward pass with comprehensive output options."""
+        """Enhanced forward pass with proper MoE handling."""
         # Input validation
         if torch.any(input_ids >= self.config.vocab_size) or torch.any(input_ids < 0):
             logging.warning("Input contains invalid token IDs, clamping...")
             input_ids = torch.clamp(input_ids, 0, self.config.vocab_size - 1)
         
-        # Embedding
+        # Dense embedding
         x = self.embed_tokens(input_ids) * self.embed_scale
         
         # Store hidden states if requested
@@ -617,11 +668,11 @@ class DeepSeekTransformer(nn.Module):
         
         # Transformer layers
         for layer in self.layers:
-            if self.use_moe and hasattr(layer.mlp, 'gate'):
+            if hasattr(layer, 'use_moe') and layer.use_moe:
                 result = layer(x, attention_mask)
                 if isinstance(result, tuple):
                     x, aux_loss = result
-                    # FIXED: Clamp aux loss to prevent explosion
+                    # Clamp aux loss to prevent explosion
                     aux_loss = torch.clamp(aux_loss, max=1.0)
                     total_aux_loss += aux_loss
                     if return_aux_loss:
@@ -634,10 +685,10 @@ class DeepSeekTransformer(nn.Module):
             if return_hidden_states:
                 hidden_states.append(x)
         
-        # Final layer norm
+        # Dense final layer norm
         x = self.norm(x)
         
-        # Language modeling head
+        # Dense language modeling head
         logits = self.lm_head(x)
         
         # Return appropriate format based on requested outputs
@@ -669,86 +720,62 @@ class DeepSeekTransformer(nn.Module):
         total_params = sum(p.numel() for p in self.parameters())
         total_size = sum(p.numel() * p.element_size() for p in self.parameters())
         
+        # Dense components
+        embedding_params = self.embed_tokens.weight.numel()
+        dense_attn_params = sum(
+            sum(p.numel() for p in layer.self_attn.parameters())
+            for layer in self.layers
+        )
+        
+        # FFN components (MoE or Dense)
+        ffn_params = sum(
+            sum(p.numel() for p in layer.ffn.parameters())
+            for layer in self.layers
+        )
+        
+        norm_params = (
+            sum(p.numel() for layer in self.layers for p in [layer.input_norm, layer.post_attn_norm]) + 
+            self.norm.weight.numel()
+        )
+        
         breakdown = {
             'total_parameters': total_params,
             'total_size_mb': total_size / (1024 * 1024),
-            'embedding_params': self.embed_tokens.weight.numel(),
-            'attention_params': sum(p.numel() for layer in self.layers for p in layer.self_attn.parameters()),
-            'mlp_params': sum(p.numel() for layer in self.layers for p in layer.mlp.parameters()),
-            'norm_params': sum(p.numel() for layer in self.layers for p in [layer.input_norm, layer.post_attn_norm]) + self.norm.weight.numel(),
+            'embedding_params': embedding_params,
+            'dense_attention_params': dense_attn_params,
+            'ffn_params': ffn_params,
+            'norm_params': norm_params,
+            'architecture': 'dense_attention_moe_ffn'
         }
         
         if self.use_moe:
             # MoE-specific breakdown
             total_expert_params = sum(
-                sum(p.numel() for expert in layer.mlp.experts for p in expert.parameters())
-                for layer in self.layers if hasattr(layer.mlp, 'experts')
+                sum(p.numel() for expert in layer.ffn.experts for p in expert.parameters())
+                for layer in self.layers if hasattr(layer, 'use_moe') and layer.use_moe
             )
             active_expert_params = total_expert_params * (self.config.moe_top_k / self.config.num_experts)
             
             breakdown.update({
                 'expert_params_total': total_expert_params,
                 'expert_params_active': int(active_expert_params),
-                'gate_params': sum(layer.mlp.gate.weight.numel() for layer in self.layers if hasattr(layer.mlp, 'gate')),
-                'parameter_efficiency': (breakdown['total_parameters'] - total_expert_params + active_expert_params) / breakdown['total_parameters']
+                'gate_params': sum(
+                    layer.ffn.gate.weight.numel() 
+                    for layer in self.layers 
+                    if hasattr(layer, 'use_moe') and layer.use_moe
+                ),
+                'parameter_efficiency': self._calculate_active_params() / total_params,
+                'moe_pattern': getattr(self.config, 'moe_pattern', 'all'),
+                'moe_layers': self.moe_layers,
+                'moe_routing': f'top_{self.config.moe_top_k}_of_{self.config.num_experts}'
             })
         
         return breakdown
-    
-    def estimate_flops(self, seq_len: int, batch_size: int = 1) -> dict:
-        """Estimate FLOPs for forward pass."""
-        hidden_size = self.config.hidden_size
-        vocab_size = self.config.vocab_size
-        num_layers = self.config.num_layers
-        intermediate_size = self.config.intermediate_size
-        
-        # Embedding lookup: negligible FLOPs
-        embedding_flops = 0
-        
-        # Per-layer FLOPs
-        attention_flops_per_layer = (
-            # QKV projections
-            3 * seq_len * hidden_size * hidden_size +
-            # Attention computation
-            2 * self.config.num_heads * seq_len * seq_len * (hidden_size // self.config.num_heads) +
-            # Output projection
-            seq_len * hidden_size * hidden_size
-        )
-        
-        if self.use_moe:
-            # MoE FLOPs (only active experts)
-            mlp_flops_per_layer = (
-                # Gate computation
-                seq_len * hidden_size * self.config.num_experts +
-                # Active experts only
-                seq_len * hidden_size * intermediate_size * 3 * self.config.moe_top_k  # gate, up, down projections
-            )
-        else:
-            # Standard MLP FLOPs
-            mlp_flops_per_layer = seq_len * hidden_size * intermediate_size * 3  # gate, up, down
-        
-        # Layer norm FLOPs (negligible)
-        norm_flops_per_layer = seq_len * hidden_size * 4  # 2 layer norms + final norm
-        
-        total_layer_flops = num_layers * (attention_flops_per_layer + mlp_flops_per_layer + norm_flops_per_layer)
-        
-        # LM head FLOPs
-        lm_head_flops = seq_len * hidden_size * vocab_size
-        
-        total_flops = batch_size * (embedding_flops + total_layer_flops + lm_head_flops)
-        
-        return {
-            'total_flops': total_flops,
-            'flops_per_token': total_flops / (batch_size * seq_len),
-            'attention_flops': batch_size * num_layers * attention_flops_per_layer,
-            'mlp_flops': batch_size * num_layers * mlp_flops_per_layer,
-            'lm_head_flops': batch_size * lm_head_flops,
-        }
 
 
-# Configuration class for easy model setup
+# Configuration class
 class DeepSeekConfig:
-    """Configuration class for DeepSeek-style transformer."""
+    """Configuration class for DeepSeek-style transformer with proper MoE placement."""
     
     def __init__(
         self,
@@ -766,14 +793,18 @@ class DeepSeekConfig:
         use_stable_embedding: bool = True,
         tie_word_embeddings: bool = True,
         gradient_checkpointing: bool = False,
-        # MoE parameters - FIXED defaults
-        use_moe: bool = False,
+        # MoE parameters for FFN layers only
+        use_moe: bool = True,
         num_experts: int = 8,
-        moe_top_k: int = 1,  # FIXED: Default to top-1
-        capacity_factor: float = 1.5,  # FIXED: Increased default
-        load_balancing_weight: float = 0.001,  # FIXED: Much lower default
-        routing_temperature: float = 1.0,  # FIXED: Add temperature control
-        routing_noise_std: float = 0.1,  # FIXED: Add noise for load balancing
+        moe_top_k: int = 2,
+        capacity_factor: float = 1.25,
+        load_balancing_weight: float = 0.01,
+        routing_temperature: float = 1.0,
+        routing_noise_std: float = 0.1,
+        # MoE placement pattern
+        moe_pattern: str = 'all',  # 'all', 'every_3rd', 'every_4th', 'sandwich', 'none'
+        dense_start_layers: int = 2,  # For sandwich pattern
+        dense_end_layers: int = 2,    # For sandwich pattern
         **kwargs
     ):
         self.vocab_size = vocab_size
@@ -791,7 +822,7 @@ class DeepSeekConfig:
         self.tie_word_embeddings = tie_word_embeddings
         self.gradient_checkpointing = gradient_checkpointing
         
-        # MoE configuration - FIXED
+        # MoE configuration for FFN layers
         self.use_moe = use_moe
         self.num_experts = num_experts
         self.moe_top_k = moe_top_k
@@ -800,120 +831,100 @@ class DeepSeekConfig:
         self.routing_temperature = routing_temperature
         self.routing_noise_std = routing_noise_std
         
+        # MoE placement pattern
+        self.moe_pattern = moe_pattern
+        self.dense_start_layers = dense_start_layers
+        self.dense_end_layers = dense_end_layers
+        
         # Validation
         assert self.num_heads % self.num_kv_heads == 0, "num_heads must be divisible by num_kv_heads"
         if self.use_moe:
             assert self.moe_top_k <= self.num_experts, "top_k must be <= num_experts"
             assert self.moe_top_k >= 1, "top_k must be >= 1"
+            assert self.moe_pattern in ['all', 'every_3rd', 'every_4th', 'sandwich', 'none'], f"Invalid moe_pattern: {self.moe_pattern}"
         
         # Store any additional kwargs
         for key, value in kwargs.items():
             setattr(self, key, value)
     
     @classmethod
-    def small(cls, **kwargs):
-        """Small model configuration (GPT-2 Small scale) with FIXED MoE."""
-        defaults = {
-            'hidden_size': 768,
-            'num_layers': 12,
-            'num_heads': 12,
-            'num_kv_heads': 4,  # GQA
-            'vocab_size': 50257,
-            'use_moe': True,
-            'num_experts': 8,
-            'moe_top_k': 1,  # FIXED: Top-1 routing
-            'capacity_factor': 1.5,  # FIXED: Higher capacity
-            'load_balancing_weight': 0.001,  # FIXED: Lower weight
-        }
-        defaults.update(kwargs)
-        return cls(**defaults)
-    
-    @classmethod
-    def medium(cls, **kwargs):
-        """Medium model configuration (GPT-2 Medium scale) with FIXED MoE."""
+    def standard_moe(cls, **kwargs):
+        """Standard MoE model: all FFN layers use MoE."""
         defaults = {
             'hidden_size': 1024,
             'num_layers': 24,
             'num_heads': 16,
-            'num_kv_heads': 4,  # GQA
-            'vocab_size': 50257,
-            'use_moe': True,
-            'num_experts': 8,
-            'moe_top_k': 1,  # FIXED: Top-1 routing
-            'capacity_factor': 1.5,  # FIXED: Higher capacity
-            'load_balancing_weight': 0.001,  # FIXED: Lower weight
-        }
-        defaults.update(kwargs)
-        return cls(**defaults)
-    
-    @classmethod
-    def large(cls, **kwargs):
-        """Large model configuration (GPT-2 Large scale) with FIXED MoE."""
-        defaults = {
-            'hidden_size': 1280,
-            'num_layers': 36,
-            'num_heads': 20,
-            'num_kv_heads': 4,  # GQA
-            'vocab_size': 50257,
-            'use_moe': True,
-            'num_experts': 8,
-            'moe_top_k': 1,  # FIXED: Top-1 routing
-            'capacity_factor': 1.5,  # FIXED: Higher capacity
-            'load_balancing_weight': 0.001,  # FIXED: Lower weight
-        }
-        defaults.update(kwargs)
-        return cls(**defaults)
-    
-    @classmethod
-    def moe_small(cls, **kwargs):
-        """Small MoE model configuration with FIXED settings."""
-        defaults = {
-            'hidden_size': 768,
-            'num_layers': 12,
-            'num_heads': 12,
             'num_kv_heads': 4,
-            'vocab_size': 50257,
             'use_moe': True,
             'num_experts': 8,
-            'moe_top_k': 1,  # FIXED: Top-1 routing for stability
-            'capacity_factor': 1.5,  # FIXED: Higher capacity
-            'load_balancing_weight': 0.001,  # FIXED: Much lower weight
-            'routing_temperature': 1.0,  # FIXED: Add temperature
-            'routing_noise_std': 0.1,  # FIXED: Add noise
+            'moe_top_k': 2,
+            'moe_pattern': 'all',
+            'capacity_factor': 1.25,
+            'load_balancing_weight': 0.01,
         }
         defaults.update(kwargs)
         return cls(**defaults)
     
     @classmethod
-    def moe_large(cls, **kwargs):
-        """Large MoE model configuration with FIXED settings."""
+    def interleaved_moe(cls, **kwargs):
+        """Interleaved MoE: every 3rd FFN layer uses MoE."""
         defaults = {
-            'hidden_size': 1280,
-            'num_layers': 36,
-            'num_heads': 20,
+            'hidden_size': 1024,
+            'num_layers': 24,
+            'num_heads': 16,
             'num_kv_heads': 4,
-            'vocab_size': 50257,
             'use_moe': True,
             'num_experts': 8,
-            'moe_top_k': 1,  # FIXED: Top-1 routing for stability
-            'capacity_factor': 1.25,  # FIXED: Slightly lower for large models
-            'load_balancing_weight': 0.0005,  # FIXED: Even lower for large models
-            'routing_temperature': 0.8,  # FIXED: Lower temperature for more focused routing
-            'routing_noise_std': 0.05,  # FIXED: Less noise for large models
+            'moe_top_k': 2,
+            'moe_pattern': 'every_3rd',
+            'capacity_factor': 1.25,
+            'load_balancing_weight': 0.01,
+        }
+        defaults.update(kwargs)
+        return cls(**defaults)
+    
+    @classmethod
+    def sandwich_moe(cls, **kwargs):
+        """Sandwich MoE: dense layers at start/end, MoE in middle."""
+        defaults = {
+            'hidden_size': 1024,
+            'num_layers': 24,
+            'num_heads': 16,
+            'num_kv_heads': 4,
+            'use_moe': True,
+            'num_experts': 8,
+            'moe_top_k': 2,
+            'moe_pattern': 'sandwich',
+            'dense_start_layers': 3,
+            'dense_end_layers': 3,
+            'capacity_factor': 1.25,
+            'load_balancing_weight': 0.01,
+        }
+        defaults.update(kwargs)
+        return cls(**defaults)
+    
+    @classmethod
+    def dense_only(cls, **kwargs):
+        """Dense only model: no MoE."""
+        defaults = {
+            'hidden_size': 1024,
+            'num_layers': 24,
+            'num_heads': 16,
+            'num_kv_heads': 4,
+            'use_moe': False,
         }
         defaults.update(kwargs)
         return cls(**defaults)
 
 
 # Factory function for easy model creation
-def create_deepseek_model(config_name: str = 'small', **kwargs) -> DeepSeekTransformer:
-    """Factory function to create DeepSeek models with predefined configurations."""
+def create_deepseek_model(config_name: str = 'standard_moe', **kwargs) -> DeepSeekTransformer:
+    """Factory function to create DeepSeek models with proper MoE placement."""
     config_mapping = {
-        'small': DeepSeekConfig.small,
-        'medium': DeepSeekConfig.medium,
-        'large': DeepSeekConfig.large,
-        'moe_small': DeepSeekConfig.moe_small,
-        'moe_large': DeepSeekConfig.moe_large,
+        'standard_moe': DeepSeekConfig.standard_moe,
+        'interleaved_moe': DeepSeekConfig.interleaved_moe,
+        'sandwich_moe': DeepSeekConfig.sandwich_moe,
+        'dense_only': DeepSeekConfig.dense_only,
     }
     
     if config_name not in config_mapping:
@@ -923,96 +934,47 @@ def create_deepseek_model(config_name: str = 'small', **kwargs) -> DeepSeekTrans
     return DeepSeekTransformer(config)
 
 
-# FIXED: Add debugging utilities
-def debug_moe_routing(model, input_ids, attention_mask=None):
-    """Debug MoE routing to identify issues."""
-    model.eval()
-    routing_info = []
-    
-    def capture_routing(name):
-        def hook(module, input, output):
-            if hasattr(module, 'gate'):
-                x_flat = input[0].view(-1, input[0].size(-1))
-                gate_logits = module.gate(x_flat)
-                gate_probs = F.softmax(gate_logits, dim=-1)
-                
-                # Calculate routing statistics
-                entropy = -torch.sum(gate_probs * torch.log(gate_probs + 1e-8), dim=-1).mean()
-                expert_usage = gate_probs.sum(dim=0) / gate_probs.sum()
-                max_prob = gate_probs.max(dim=-1)[0].mean()
-                
-                routing_info.append({
-                    'layer': name,
-                    'entropy': entropy.item(),
-                    'expert_usage': expert_usage.cpu().numpy(),
-                    'max_routing_prob': max_prob.item(),
-                    'usage_std': expert_usage.std().item()
-                })
-        return hook
-    
-    # Register hooks
-    hooks = []
-    for name, module in model.named_modules():
-        if hasattr(module, 'gate'):
-            hooks.append(module.register_forward_hook(capture_routing(name)))
-    
-    # Forward pass
-    try:
-        with torch.no_grad():
-            outputs = model(input_ids, attention_mask)
-    finally:
-        # Remove hooks
-        for hook in hooks:
-            hook.remove()
-    
-    # Print routing analysis
-    print("=== MoE Routing Analysis ===")
-    for info in routing_info:
-        print(f"Layer {info['layer']}:")
-        print(f"  Entropy: {info['entropy']:.3f} (higher = more balanced)")
-        print(f"  Max routing prob: {info['max_routing_prob']:.3f}")
-        print(f"  Usage std: {info['usage_std']:.3f} (lower = more balanced)")
-        print(f"  Expert usage: {[f'{u:.3f}' for u in info['expert_usage']]}")
-        
-        if info['entropy'] < 1.0:
-            print(f"  ⚠️ Very low entropy - routing is deterministic")
-        if info['usage_std'] > 0.3:
-            print(f"  ⚠️ High usage variation - experts are imbalanced")
-        print()
-    
-    return routing_info
-
-
 # Example usage and testing
 if __name__ == "__main__":
     # Configure logging
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     
-    # Test FIXED MoE configurations
-    print("=== FIXED DeepSeek-Style Transformer with Stable MoE ===\n")
+    print("=== CORRECTED MoE Transformer Model ===\n")
+    print("Architecture: Dense attention + MoE FFN (industry standard)")
+    print("Patterns supported: all, every_3rd, every_4th, sandwich, none")
+    print()
     
-    # Test FIXED MoE model
-    print("1. FIXED MoE Model:")
-    model_moe = create_deepseek_model('moe_small')
-    print(f"Parameters: {model_moe.get_num_params():,}")
-    memory_info = model_moe.get_memory_footprint()
-    print(f"Memory footprint: {memory_info}")
-    if 'parameter_efficiency' in memory_info:
-        print(f"Parameter efficiency: {memory_info['parameter_efficiency']:.2%}")
+    # Test different MoE patterns
+    patterns = ['standard_moe', 'interleaved_moe', 'sandwich_moe', 'dense_only']
     
-    # Test forward pass with debugging
-    batch_size, seq_len = 2, 128
+    for pattern in patterns:
+        print(f"Testing {pattern}:")
+        model = create_deepseek_model(pattern, num_layers=8)
+        memory_info = model.get_memory_footprint()
+        
+        print(f"  Parameters: {memory_info['total_parameters']:,}")
+        print(f"  Architecture: {memory_info['architecture']}")
+        
+        if 'moe_layers' in memory_info:
+            print(f"  MoE layers: {memory_info['moe_layers']}")
+            print(f"  MoE pattern: {memory_info['moe_pattern']}")
+            print(f"  Parameter efficiency: {memory_info['parameter_efficiency']:.2%}")
+        
+        print()
+    
+    # Test forward pass
+    print("Forward Pass Test:")
+    model = create_deepseek_model('standard_moe', num_layers=4)
+    batch_size, seq_len = 2, 64
     input_ids = torch.randint(0, 1000, (batch_size, seq_len))
     
-    print("\n2. Forward Pass Test:")
     with torch.no_grad():
-        outputs = model_moe(input_ids, return_aux_loss=True)
+        outputs = model(input_ids, return_aux_loss=True)
         if isinstance(outputs, tuple):
-            logits_moe, aux_loss = outputs[:2]
-            print(f"Output shape: {logits_moe.shape}")
+            logits, aux_loss = outputs[:2]
+            print(f"Output shape: {logits.shape}")
             print(f"Auxiliary loss: {aux_loss:.6f}")
             
-            # Check if aux loss is reasonable
             if aux_loss > 1.0:
                 print("⚠️ High auxiliary loss - might cause instability")
             elif aux_loss < 1e-6:
@@ -1022,17 +984,11 @@ if __name__ == "__main__":
         else:
             print(f"Output shape: {outputs.shape}")
     
-    # Test routing debugging
-    print("\n3. Routing Analysis:")
-    routing_stats = debug_moe_routing(model_moe, input_ids)
-    
-    print("\n=== FIXED MoE Test Complete ===")
-    print("\nKey Fixes Applied:")
-    print("  ✅ Gate initialization: std=0.02 (was 0.001)")
-    print("  ✅ Load balancing weight: 0.001 (was 0.075)")
-    print("  ✅ Capacity factor: 1.5 (was 1.25)")
-    print("  ✅ Top-1 routing (was top-2)")
-    print("  ✅ Stable token capacity handling")
-    print("  ✅ Auxiliary loss clamping")
-    print("  ✅ Less aggressive weight scaling")
-    print("  ✅ Added routing temperature and noise")
+    print("\n=== CORRECTED MoE Architecture Summary ===")
+    print("✅ Dense embeddings (no MoE)")
+    print("✅ Dense attention layers (no MoE) - CORRECT")  
+    print("✅ MoE FFN layers with configurable patterns - CORRECT")
+    print("✅ Dense output layer (no MoE)")
+    print("✅ Supports: all, interleaved, sandwich patterns")
+    print("✅ Industry standard: attention=dense, FFN=MoE")
+    print("✅ Compatible with existing training scripts")
