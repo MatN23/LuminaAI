@@ -631,7 +631,8 @@ class EnhancedConversationTrainer:
         
         # Compute additional metrics
         raw_loss = (loss * mask).sum() / mask.sum().clamp(min=1)
-        perplexity = torch.exp(raw_loss.clamp(max=10))
+        clamped_loss = torch.clamp(raw_loss.detach(), min=0.0, max=10.0)
+        perplexity = torch.exp(clamped_loss)
         
         return {
             'loss': final_loss,
