@@ -589,7 +589,7 @@ class EnhancedConversationTrainer:
     
     def compute_loss(self, logits: torch.Tensor, labels: torch.Tensor, 
                     loss_weights: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
-        """Compute weighted loss with MoE auxiliary losses."""
+        """Compute weighted loss with MoE auxiliary losses and accuracy metrics."""
         
         # For next-token prediction, shift logits and labels
         shift_logits = logits[..., :-1, :].contiguous()
@@ -601,6 +601,12 @@ class EnhancedConversationTrainer:
         
         # Create attention mask (ignore padding tokens)
         mask = (flat_labels != getattr(self.tokenizer, 'pad_token_id', 0)).float()
+        
+        # ACCURACY CALCULATION
+        with torch.no_grad():
+            predictions = torch.argmax(flat_logits, dim=-1)
+            correct_predictions = (predictions == flat_labels).float() * mask
+            accuracy = correct_predictions.sum() / mask.sum().clamp(min=1)
         
         # Compute base loss
         loss = F.cross_entropy(flat_logits, flat_labels, reduction='none')
@@ -621,7 +627,8 @@ class EnhancedConversationTrainer:
                 'loss': torch.tensor(0.0, device=loss.device, requires_grad=True),
                 'raw_loss': torch.tensor(0.0, device=loss.device),
                 'perplexity': torch.tensor(float('inf'), device=loss.device),
-                'valid_tokens': torch.tensor(0.0, device=loss.device)
+                'valid_tokens': torch.tensor(0.0, device=loss.device),
+                'accuracy': torch.tensor(0.0, device=loss.device)
             }
         
         # Compute final loss
@@ -638,7 +645,8 @@ class EnhancedConversationTrainer:
             'loss': final_loss,
             'raw_loss': raw_loss,
             'perplexity': perplexity,
-            'valid_tokens': mask.sum()
+            'valid_tokens': mask.sum(),
+            'accuracy': accuracy
         }
     
     def train_step(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
@@ -664,7 +672,8 @@ class EnhancedConversationTrainer:
                 'loss': 0.0,
                 'raw_loss': 0.0,
                 'perplexity': float('inf'),
-                'valid_tokens': 0
+                'valid_tokens': 0,
+                'accuracy': 0.0
             }
         
         try:
@@ -698,12 +707,14 @@ class EnhancedConversationTrainer:
             raw_loss_value = loss_dict['raw_loss'].item() if hasattr(loss_dict['raw_loss'], 'item') else float(loss_dict['raw_loss'])
             perplexity_value = loss_dict['perplexity'].item() if hasattr(loss_dict['perplexity'], 'item') else float(loss_dict['perplexity'])
             valid_tokens_value = loss_dict['valid_tokens'].item() if hasattr(loss_dict['valid_tokens'], 'item') else float(loss_dict['valid_tokens'])
+            accuracy_value = loss_dict['accuracy'].item() if hasattr(loss_dict['accuracy'], 'item') else float(loss_dict['accuracy'])
             
             return {
                 'loss': loss_value,
                 'raw_loss': raw_loss_value,
                 'perplexity': perplexity_value,
-                'valid_tokens': valid_tokens_value
+                'valid_tokens': valid_tokens_value,
+                'accuracy': accuracy_value
             }
             
         except Exception as e:
@@ -712,7 +723,8 @@ class EnhancedConversationTrainer:
                 'loss': 0.0,
                 'raw_loss': 0.0,
                 'perplexity': float('inf'),
-                'valid_tokens': 0
+                'valid_tokens': 0,
+                'accuracy': 0.0
             }
     
     def _standard_train_step(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
@@ -732,7 +744,8 @@ class EnhancedConversationTrainer:
                 'loss': 0.0,
                 'raw_loss': 0.0,
                 'perplexity': float('inf'),
-                'valid_tokens': 0
+                'valid_tokens': 0,
+                'accuracy': 0.0
             }
         
         # Forward pass with precision
@@ -760,7 +773,8 @@ class EnhancedConversationTrainer:
                 'loss': 0.0,
                 'raw_loss': 0.0,
                 'perplexity': float('inf'),
-                'valid_tokens': 0
+                'valid_tokens': 0,
+                'accuracy': 0.0
             }
         
         # Backward pass
@@ -773,7 +787,8 @@ class EnhancedConversationTrainer:
             'loss': loss.item(),
             'raw_loss': loss_dict['raw_loss'].item(),
             'perplexity': loss_dict['perplexity'].item(),
-            'valid_tokens': loss_dict['valid_tokens'].item()
+            'valid_tokens': loss_dict['valid_tokens'].item(),
+            'accuracy': loss_dict['accuracy'].item()
         }
     
     def optimizer_step(self) -> Dict[str, float]:
@@ -855,7 +870,7 @@ class EnhancedConversationTrainer:
     
     @torch.no_grad()
     def evaluate(self, eval_dataset, max_batches: int = 100) -> Dict[str, float]:
-        """Enhanced evaluation with DeepSpeed support."""
+        """Enhanced evaluation with DeepSpeed support and accuracy tracking."""
         if self.use_deepspeed:
             self.deepspeed_engine.eval()
         else:
@@ -866,6 +881,7 @@ class EnhancedConversationTrainer:
         total_loss = 0.0
         total_raw_loss = 0.0
         total_tokens = 0
+        total_accuracy = 0.0
         num_batches = 0
         
         eval_start_time = time.time()
@@ -907,6 +923,7 @@ class EnhancedConversationTrainer:
                 total_loss += loss_dict['loss'].item()
                 total_raw_loss += loss_dict['raw_loss'].item()
                 total_tokens += loss_dict['valid_tokens'].item()
+                total_accuracy += loss_dict['accuracy'].item()
                 num_batches += 1
         
         eval_time = time.time() - eval_start_time
@@ -916,6 +933,7 @@ class EnhancedConversationTrainer:
             return {
                 'eval_loss': float('inf'),
                 'eval_perplexity': float('inf'),
+                'eval_accuracy': 0.0,
                 'eval_time': eval_time,
                 'eval_throughput': 0.0,
                 'eval_peak_memory_mb': peak_memory
@@ -923,19 +941,21 @@ class EnhancedConversationTrainer:
         
         avg_loss = total_loss / num_batches
         avg_raw_loss = total_raw_loss / num_batches
+        avg_accuracy = total_accuracy / num_batches
         perplexity = math.exp(min(avg_raw_loss, 10))
         throughput = total_tokens / eval_time if eval_time > 0 else 0
         
         return {
             'eval_loss': avg_loss,
             'eval_perplexity': perplexity,
+            'eval_accuracy': avg_accuracy,
             'eval_time': eval_time,
             'eval_throughput': throughput,
             'eval_peak_memory_mb': peak_memory
         }
     
     def train_epoch(self, train_dataloader, epoch: int):
-        """Train one epoch with FIXED logging."""
+        """Train one epoch with accuracy tracking."""
         if self.use_deepspeed:
             self.deepspeed_engine.train()
         else:
@@ -945,6 +965,7 @@ class EnhancedConversationTrainer:
             'total_loss': 0.0,
             'total_raw_loss': 0.0,
             'total_tokens': 0,
+            'total_accuracy': 0.0,
             'num_batches': 0,
             'grad_norm_sum': 0.0
         }
@@ -952,7 +973,8 @@ class EnhancedConversationTrainer:
         accumulation_metrics = {
             'loss': 0.0,
             'raw_loss': 0.0,
-            'tokens': 0
+            'tokens': 0,
+            'accuracy': 0.0
         }
         
         gradient_accumulation_steps = getattr(self.config, 'gradient_accumulation_steps', 1)
@@ -984,6 +1006,7 @@ class EnhancedConversationTrainer:
             accumulation_metrics['loss'] += step_metrics['loss'] / gradient_accumulation_steps
             accumulation_metrics['raw_loss'] += step_metrics['raw_loss']
             accumulation_metrics['tokens'] += step_metrics['valid_tokens']
+            accumulation_metrics['accuracy'] += step_metrics['accuracy']
             
             # Optimizer step after accumulation
             if (batch_idx + 1) % gradient_accumulation_steps == 0:
@@ -995,6 +1018,7 @@ class EnhancedConversationTrainer:
                     epoch_metrics['total_loss'] += accumulation_metrics['loss']
                     epoch_metrics['total_raw_loss'] += accumulation_metrics['raw_loss']
                     epoch_metrics['total_tokens'] += accumulation_metrics['tokens']
+                    epoch_metrics['total_accuracy'] += accumulation_metrics['accuracy']
                     epoch_metrics['num_batches'] += 1
                     if 'grad_norm' in opt_metrics and opt_metrics['grad_norm'] is not None:
                         epoch_metrics['grad_norm_sum'] += opt_metrics['grad_norm']
@@ -1022,7 +1046,7 @@ class EnhancedConversationTrainer:
                     self._log_memory_usage(f"Step {self.global_step}")
                 
                 # Reset accumulation metrics
-                accumulation_metrics = {'loss': 0.0, 'raw_loss': 0.0, 'tokens': 0}
+                accumulation_metrics = {'loss': 0.0, 'raw_loss': 0.0, 'tokens': 0, 'accuracy': 0.0}
         
         # Compute epoch statistics
         epoch_time = time.time() - epoch_start_time
@@ -1030,19 +1054,22 @@ class EnhancedConversationTrainer:
         if epoch_metrics['num_batches'] > 0:
             avg_loss = epoch_metrics['total_loss'] / epoch_metrics['num_batches']
             avg_raw_loss = epoch_metrics['total_raw_loss'] / epoch_metrics['num_batches']
+            avg_accuracy = epoch_metrics['total_accuracy'] / epoch_metrics['num_batches']
             avg_grad_norm = epoch_metrics['grad_norm_sum'] / epoch_metrics['num_batches']
             avg_tokens_per_sec = epoch_metrics['total_tokens'] / epoch_time
         else:
-            avg_loss = avg_raw_loss = avg_grad_norm = avg_tokens_per_sec = 0.0
+            avg_loss = avg_raw_loss = avg_accuracy = avg_grad_norm = avg_tokens_per_sec = 0.0
         
         print(f"Epoch {epoch+1} completed in {epoch_time:.2f}s | "
               f"Avg Loss: {avg_loss:.6f} | "
+              f"Avg Accuracy: {avg_accuracy:.1%} | "
               f"Avg Grad Norm: {avg_grad_norm:.4f} | "
               f"Throughput: {avg_tokens_per_sec:.0f} tokens/s")
         
         return {
             'avg_loss': avg_loss,
             'avg_raw_loss': avg_raw_loss,
+            'avg_accuracy': avg_accuracy,
             'avg_grad_norm': avg_grad_norm,
             'epoch_time': epoch_time,
             'throughput': avg_tokens_per_sec
@@ -1050,7 +1077,7 @@ class EnhancedConversationTrainer:
     
     def _log_training_step(self, epoch: int, batch_idx: int, total_batches: int,
                           metrics, opt_metrics, tokens_per_sec: float):
-        """FIXED logging with guaranteed output."""
+        """FIXED logging with guaranteed output including accuracy."""
         
         try:
             # Memory info with fallback
@@ -1069,6 +1096,7 @@ class EnhancedConversationTrainer:
             # Safe metric extraction with defaults
             loss = metrics.get('loss', 0.0)
             raw_loss = metrics.get('raw_loss', loss)
+            accuracy = metrics.get('accuracy', 0.0)
             lr = opt_metrics.get('lr', 0.0)
             grad_norm = opt_metrics.get('grad_norm', 0.0)
             
@@ -1080,12 +1108,13 @@ class EnhancedConversationTrainer:
             except:
                 ppl_str = "N/A"
             
-            # FORCE the log message
+            # FORCE the log message with accuracy
             log_message = (
                 f"Epoch {epoch+1} | Step {self.global_step:6d} | "
                 f"Batch {batch_idx+1:4d}/{total_batches} | "
                 f"Loss: {loss:.6f} | "
                 f"PPL: {ppl_str} | "
+                f"Acc: {accuracy:.1%} | "
                 f"LR: {lr:.2e} | "
                 f"GradNorm: {grad_norm:.4f} | "
                 f"Tokens/s: {tokens_per_sec:.0f}"
@@ -1098,17 +1127,17 @@ class EnhancedConversationTrainer:
             
         except Exception as e:
             # Emergency fallback logging
-            fallback_msg = f"Step {self.global_step} | Loss: {metrics.get('loss', 'N/A')} | Logging Error: {e}"
+            fallback_msg = f"Step {self.global_step} | Loss: {metrics.get('loss', 'N/A')} | Acc: {metrics.get('accuracy', 'N/A')} | Logging Error: {e}"
             logging.error(fallback_msg)
             print(f"[TRAINING ERROR] {fallback_msg}")
     
     def train(self, train_dataset, eval_dataset=None):
-        """Main training loop with enhanced logging."""
+        """Main training loop with enhanced logging and accuracy tracking."""
         print("="*80)
         if self.use_deepspeed:
-            print("STARTING DEEPSPEED TRAINING WITH ENHANCED LOGGING")
+            print("STARTING DEEPSPEED TRAINING WITH ENHANCED LOGGING AND ACCURACY")
         else:
-            print("STARTING STANDARD TRAINING WITH ENHANCED LOGGING")
+            print("STARTING STANDARD TRAINING WITH ENHANCED LOGGING AND ACCURACY")
         print("="*80)
         
         # Store eval dataset
@@ -1152,7 +1181,9 @@ class EnhancedConversationTrainer:
                     
                     print(f"Epoch {epoch + 1} Summary:")
                     print(f"  Train Loss: {epoch_metrics['avg_loss']:.6f}")
+                    print(f"  Train Accuracy: {epoch_metrics['avg_accuracy']:.1%}")
                     print(f"  Eval Loss: {eval_metrics['eval_loss']:.6f}")
+                    print(f"  Eval Accuracy: {eval_metrics['eval_accuracy']:.1%}")
                     print(f"  Eval Perplexity: {eval_metrics['eval_perplexity']:.2f}")
                     
                     # Early stopping check
