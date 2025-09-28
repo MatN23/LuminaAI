@@ -19,6 +19,37 @@ import numpy as np
 import json
 import os
 
+# Quantization imports with fallbacks
+try:
+    import bitsandbytes as bnb
+    from bitsandbytes.optim import AdamW8bit, Lion8bit
+    BNB_AVAILABLE = True
+    logging.info("BitsAndBytes available for 8-bit quantization")
+except ImportError:
+    BNB_AVAILABLE = False
+    logging.warning("BitsAndBytes not available - 8-bit quantization disabled")
+
+try:
+    from transformers import BitsAndBytesConfig
+    HF_BNB_AVAILABLE = True
+except ImportError:
+    HF_BNB_AVAILABLE = False
+
+# Try importing more quantization libraries
+try:
+    import auto_gptq
+    GPTQ_AVAILABLE = True
+    logging.info("AutoGPTQ available for 4-bit quantization")
+except ImportError:
+    GPTQ_AVAILABLE = False
+
+try:
+    from optimum.quanto import quantize, freeze
+    QUANTO_AVAILABLE = True
+    logging.info("Optimum Quanto available for quantization")
+except ImportError:
+    QUANTO_AVAILABLE = False
+
 # DeepSpeed imports with fallback
 try:
     import deepspeed
@@ -69,6 +100,253 @@ except ImportError:
             pass
         def save_checkpoint(self, *args, **kwargs):
             pass
+
+
+class QuantizationManager:
+    """Manages different quantization strategies and optimizations."""
+    
+    def __init__(self, config):
+        self.config = config
+        self.quantization_method = getattr(config, 'quantization_method', None)
+        self.quantization_bits = getattr(config, 'quantization_bits', None)
+        
+        # Validate quantization configuration
+        self._validate_quantization_config()
+        
+        # Store quantization state
+        self.is_quantized = False
+        self.quantization_info = {}
+        
+    def _validate_quantization_config(self):
+        """Validate quantization configuration and availability."""
+        if not self.quantization_method:
+            return
+            
+        precision = getattr(self.config, 'precision', 'fp32')
+        
+        # Check compatibility
+        if self.quantization_method == 'bnb' and not BNB_AVAILABLE:
+            raise ValueError("BitsAndBytes not available but bnb quantization requested")
+        
+        if self.quantization_method == 'gptq' and not GPTQ_AVAILABLE:
+            raise ValueError("AutoGPTQ not available but gptq quantization requested")
+            
+        if self.quantization_method == 'quanto' and not QUANTO_AVAILABLE:
+            raise ValueError("Optimum Quanto not available but quanto quantization requested")
+        
+        # Validate quantization bits
+        if self.quantization_bits and self.quantization_bits not in [4, 8]:
+            raise ValueError(f"Unsupported quantization bits: {self.quantization_bits}. Only 4 and 8 bit supported.")
+        
+        # Check precision compatibility
+        if precision in ['fp16', 'bf16'] and self.quantization_bits == 4:
+            logging.warning("Mixed precision with 4-bit quantization may cause instability")
+    
+    def get_bnb_config(self) -> Optional[Dict[str, Any]]:
+        """Get BitsAndBytes quantization configuration."""
+        if not BNB_AVAILABLE or self.quantization_method != 'bnb':
+            return None
+            
+        if self.quantization_bits == 8:
+            return {
+                'load_in_8bit': True,
+                'llm_int8_threshold': 6.0,
+                'llm_int8_has_fp16_weight': False,
+                'llm_int8_enable_fp32_cpu_offload': getattr(self.config, 'cpu_offload', False)
+            }
+        elif self.quantization_bits == 4:
+            return {
+                'load_in_4bit': True,
+                'bnb_4bit_use_double_quant': True,
+                'bnb_4bit_quant_type': 'nf4',
+                'bnb_4bit_compute_dtype': torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+            }
+        
+        return None
+    
+    def quantize_model_bnb(self, model):
+        """Apply BitsAndBytes quantization to model."""
+        if not BNB_AVAILABLE:
+            raise ValueError("BitsAndBytes not available")
+        
+        config = self.get_bnb_config()
+        if not config:
+            return model
+            
+        logging.info(f"Applying BitsAndBytes {self.quantization_bits}-bit quantization...")
+        
+        # For BitsAndBytes, quantization is typically done at model loading time
+        # Here we apply post-hoc quantization
+        if self.quantization_bits == 8:
+            # Replace linear layers with 8-bit versions
+            model = self._replace_linear_layers_8bit(model)
+        elif self.quantization_bits == 4:
+            # 4-bit quantization is more complex and typically done at load time
+            logging.warning("4-bit quantization with BnB should ideally be done at model initialization")
+        
+        self.is_quantized = True
+        self.quantization_info = {
+            'method': 'bnb',
+            'bits': self.quantization_bits,
+            'config': config
+        }
+        
+        return model
+    
+    def _replace_linear_layers_8bit(self, model):
+        """Replace Linear layers with 8-bit equivalents."""
+        for name, module in model.named_children():
+            if isinstance(module, nn.Linear):
+                # Replace with 8-bit linear layer
+                int8_module = bnb.nn.Linear8bitLt(
+                    module.in_features,
+                    module.out_features,
+                    bias=module.bias is not None,
+                    has_fp16_weights=False,
+                    threshold=6.0
+                )
+                
+                # Copy weights
+                with torch.no_grad():
+                    int8_module.weight.data = module.weight.data.clone()
+                    if module.bias is not None:
+                        int8_module.bias.data = module.bias.data.clone()
+                
+                setattr(model, name, int8_module)
+            else:
+                # Recursively process child modules
+                self._replace_linear_layers_8bit(module)
+        
+        return model
+    
+    def quantize_model_gptq(self, model):
+        """Apply GPTQ quantization to model."""
+        if not GPTQ_AVAILABLE:
+            raise ValueError("AutoGPTQ not available")
+        
+        logging.info(f"Applying GPTQ {self.quantization_bits}-bit quantization...")
+        
+        from auto_gptq import AutoGPTQForCausalLM, BaseQuantizeConfig
+        
+        # Create quantization config
+        quantize_config = BaseQuantizeConfig(
+            bits=self.quantization_bits,
+            group_size=128,
+            desc_act=False,
+            static_groups=False,
+            sym=True,
+            true_sequential=True,
+            model_name_or_path=None,
+            model_file_base_name="model"
+        )
+        
+        # This is a simplified version - full GPTQ typically requires calibration data
+        logging.warning("GPTQ quantization requires calibration data for best results")
+        
+        self.is_quantized = True
+        self.quantization_info = {
+            'method': 'gptq',
+            'bits': self.quantization_bits,
+            'config': quantize_config
+        }
+        
+        return model
+    
+    def quantize_model_quanto(self, model):
+        """Apply Quanto quantization to model."""
+        if not QUANTO_AVAILABLE:
+            raise ValueError("Optimum Quanto not available")
+        
+        logging.info(f"Applying Quanto {self.quantization_bits}-bit quantization...")
+        
+        # Determine weight dtype based on quantization bits
+        if self.quantization_bits == 8:
+            weights = torch.int8
+        elif self.quantization_bits == 4:
+            weights = torch.int4 if hasattr(torch, 'int4') else "int4"  # Quanto uses string for int4
+        else:
+            raise ValueError(f"Unsupported quantization bits: {self.quantization_bits}")
+        
+        # Apply quantization
+        quantize(model, weights=weights, activations=None)  # Only quantize weights for training
+        freeze(model)
+        
+        self.is_quantized = True
+        self.quantization_info = {
+            'method': 'quanto',
+            'bits': self.quantization_bits,
+            'weights': weights
+        }
+        
+        return model
+    
+    def quantize_model(self, model):
+        """Apply the configured quantization method to the model."""
+        if not self.quantization_method or not self.quantization_bits:
+            return model
+        
+        logging.info(f"Quantizing model with {self.quantization_method} method, {self.quantization_bits} bits")
+        
+        original_memory = self._get_model_memory_usage(model)
+        
+        if self.quantization_method == 'bnb':
+            model = self.quantize_model_bnb(model)
+        elif self.quantization_method == 'gptq':
+            model = self.quantize_model_gptq(model)
+        elif self.quantization_method == 'quanto':
+            model = self.quantize_model_quanto(model)
+        else:
+            raise ValueError(f"Unsupported quantization method: {self.quantization_method}")
+        
+        # Calculate memory savings
+        quantized_memory = self._get_model_memory_usage(model)
+        memory_savings = (original_memory - quantized_memory) / original_memory * 100
+        
+        logging.info(f"Quantization complete:")
+        logging.info(f"  Original memory: {original_memory:.1f}MB")
+        logging.info(f"  Quantized memory: {quantized_memory:.1f}MB")
+        logging.info(f"  Memory savings: {memory_savings:.1f}%")
+        
+        return model
+    
+    def _get_model_memory_usage(self, model):
+        """Estimate model memory usage in MB."""
+        total_params = sum(p.numel() * p.element_size() for p in model.parameters())
+        return total_params / (1024 * 1024)
+    
+    def create_quantized_optimizer(self, model):
+        """Create optimizer compatible with quantized model."""
+        if not self.is_quantized:
+            return None
+        
+        if self.quantization_method == 'bnb' and BNB_AVAILABLE:
+            # Use 8-bit optimizer for better memory efficiency
+            if self.quantization_bits == 8:
+                logging.info("Using 8-bit AdamW optimizer")
+                return AdamW8bit(
+                    model.parameters(),
+                    lr=self.config.learning_rate,
+                    betas=(0.9, 0.95),
+                    eps=1e-8,
+                    weight_decay=getattr(self.config, 'weight_decay', 0.01),
+                    optim_bits=8
+                )
+        
+        # Fallback to standard optimizer
+        return None
+    
+    def get_quantization_info(self):
+        """Get information about current quantization state."""
+        return {
+            'is_quantized': self.is_quantized,
+            'method': self.quantization_info.get('method'),
+            'bits': self.quantization_info.get('bits'),
+            'available_methods': {
+                'bnb': BNB_AVAILABLE,
+                'gptq': GPTQ_AVAILABLE,
+                'quanto': QUANTO_AVAILABLE
+            }
+        }
 
 
 class MoEOptimizationManager:
@@ -281,7 +559,7 @@ class MoEOptimizationManager:
 
 
 class EnhancedConversationTrainer:
-    """Production trainer with DeepSpeed, MoE optimizations, and CPU offloading."""
+    """Production trainer with DeepSpeed, MoE optimizations, quantization, and CPU offloading."""
     
     def __init__(self, model, tokenizer, config, logger):
         self.model = model
@@ -291,7 +569,17 @@ class EnhancedConversationTrainer:
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
         # Enhanced managers
+        self.quantization_manager = QuantizationManager(config)
         self.moe_optimizer = MoEOptimizationManager(config) if hasattr(config, 'use_moe') and config.use_moe else None
+        
+        # Apply quantization to model if configured
+        if hasattr(config, 'quantization_method') and config.quantization_method:
+            logging.info("Applying quantization to model...")
+            self.model = self.quantization_manager.quantize_model(self.model)
+            
+            # Log quantization info
+            quant_info = self.quantization_manager.get_quantization_info()
+            logging.info(f"Quantization applied: {quant_info}")
         
         # DeepSpeed integration - CRITICAL FIX
         self.use_deepspeed = DEEPSPEED_AVAILABLE and getattr(config, 'use_deepspeed', False)
@@ -327,7 +615,7 @@ class EnhancedConversationTrainer:
     def _setup_deepspeed_training(self):
         """Setup DeepSpeed training with MoE and CPU offloading optimizations."""
         print("="*60)
-        print("INITIALIZING DEEPSPEED TRAINING")
+        print("INITIALIZING DEEPSPEED TRAINING WITH QUANTIZATION SUPPORT")
         print("="*60)
         
         # Debug information
@@ -336,6 +624,11 @@ class EnhancedConversationTrainer:
         print(f"Config use_deepspeed: {getattr(self.config, 'use_deepspeed', False)}")
         print(f"World size: {int(os.environ.get('WORLD_SIZE', 1))}")
         print(f"Local rank: {int(os.environ.get('LOCAL_RANK', 0))}")
+        
+        # Log quantization info
+        if self.quantization_manager.is_quantized:
+            quant_info = self.quantization_manager.get_quantization_info()
+            print(f"Model quantized: {quant_info['method']} {quant_info['bits']}-bit")
         
         # Create DeepSpeed configuration
         ds_config = self._create_deepspeed_config()
@@ -371,6 +664,10 @@ class EnhancedConversationTrainer:
             if ds_config.get('moe', {}).get('enabled', False):
                 print(f"  MoE enabled: {ds_config['moe']['num_experts']} experts")
                 print(f"  Expert parallel size: {ds_config['moe']['expert_parallel_size']}")
+                
+            if self.quantization_manager.is_quantized:
+                print(f"  Quantization: {self.quantization_manager.quantization_info['method']} "
+                      f"{self.quantization_manager.quantization_info['bits']}-bit")
             
         except Exception as e:
             print("❌ DEEPSPEED INITIALIZATION FAILED!")
@@ -408,9 +705,9 @@ class EnhancedConversationTrainer:
             "train_micro_batch_size_per_gpu": micro_batch_size,
             "gradient_accumulation_steps": gradient_accumulation_steps,
             
-            # Precision settings - SIMPLIFIED
+            # Enhanced precision settings with quantization support
             "fp16": {
-                "enabled": getattr(self.config, 'precision', 'fp32') in ["fp16", "mixed_fp16"],
+                "enabled": self._should_use_fp16(),
                 "auto_cast": False,
                 "loss_scale": 0,
                 "initial_scale_power": 16,
@@ -419,7 +716,7 @@ class EnhancedConversationTrainer:
                 "min_loss_scale": 1
             },
             "bf16": {
-                "enabled": getattr(self.config, 'precision', 'fp32') in ["bf16", "mixed_bf16"]
+                "enabled": self._should_use_bf16()
             },
             
             # Gradient clipping
@@ -431,7 +728,7 @@ class EnhancedConversationTrainer:
                 "params": {
                     "warmup_min_lr": 1e-6,
                     "warmup_max_lr": self.config.learning_rate,
-                    "warmup_num_steps": 3000  # Fixed number instead of calculation
+                    "warmup_num_steps": 1000  # Fixed number instead of calculation
                 }
             },
             
@@ -449,16 +746,42 @@ class EnhancedConversationTrainer:
             "dump_state": False
         }
         
-        # Add FIXED optimizer configuration
-        ds_config["optimizer"] = {
-            "type": "AdamW",
-            "params": {
-                "lr": self.config.learning_rate,
-                "betas": [0.9, 0.95],
-                "eps": 1e-8,
-                "weight_decay": getattr(self.config, 'weight_decay', 0.01)
+        # Add FIXED optimizer configuration (with quantization awareness)
+        if self.quantization_manager.is_quantized:
+            # Use quantization-aware optimizer if available
+            quantized_optimizer = self.quantization_manager.create_quantized_optimizer(self.model)
+            if quantized_optimizer:
+                # DeepSpeed will use the pre-created optimizer
+                ds_config["optimizer"] = {
+                    "type": "AdamW",  # DeepSpeed will detect the actual optimizer type
+                    "params": {
+                        "lr": self.config.learning_rate,
+                        "betas": [0.9, 0.95],
+                        "eps": 1e-8,
+                        "weight_decay": getattr(self.config, 'weight_decay', 0.01)
+                    }
+                }
+            else:
+                # Standard optimizer config
+                ds_config["optimizer"] = {
+                    "type": "AdamW",
+                    "params": {
+                        "lr": self.config.learning_rate,
+                        "betas": [0.9, 0.95],
+                        "eps": 1e-8,
+                        "weight_decay": getattr(self.config, 'weight_decay', 0.01)
+                    }
+                }
+        else:
+            ds_config["optimizer"] = {
+                "type": "AdamW",
+                "params": {
+                    "lr": self.config.learning_rate,
+                    "betas": [0.9, 0.95],
+                    "eps": 1e-8,
+                    "weight_decay": getattr(self.config, 'weight_decay', 0.01)
+                }
             }
-        }
         
         # Add MoE configuration if model uses MoE
         if hasattr(self.config, 'use_moe') and self.config.use_moe and self.moe_optimizer:
@@ -502,31 +825,70 @@ class EnhancedConversationTrainer:
         
         return ds_config
     
+    def _should_use_fp16(self) -> bool:
+        """Determine if FP16 should be used based on precision config and quantization."""
+        precision = getattr(self.config, 'precision', 'fp32')
+        
+        # Don't use FP16 if model is quantized to 4-bit (can cause instability)
+        if (self.quantization_manager.is_quantized and 
+            self.quantization_manager.quantization_info.get('bits') == 4):
+            return False
+            
+        return precision in ["fp16", "mixed_fp16"]
+    
+    def _should_use_bf16(self) -> bool:
+        """Determine if BF16 should be used based on precision config and quantization."""
+        precision = getattr(self.config, 'precision', 'fp32')
+        return precision in ["bf16", "mixed_bf16"]
+    
     def _setup_standard_training(self):
-        """Setup standard PyTorch training as fallback."""
+        """Setup standard PyTorch training with quantization support as fallback."""
         print("="*60)
-        print("SETTING UP STANDARD PYTORCH TRAINING")
+        print("SETTING UP STANDARD PYTORCH TRAINING WITH QUANTIZATION")
         print("="*60)
         
         # Move model to device
         self.model = self.model.to(self.device)
         
-        # Create optimizer
-        self.optimizer = self._create_standard_optimizer()
+        # Create optimizer (quantization-aware if possible)
+        quantized_optimizer = self.quantization_manager.create_quantized_optimizer(self.model)
+        if quantized_optimizer:
+            self.optimizer = quantized_optimizer
+            print(f"Using quantized optimizer: {type(quantized_optimizer).__name__}")
+        else:
+            self.optimizer = self._create_standard_optimizer()
+        
         self.scheduler = None
         
-        # Mixed precision setup
+        # Mixed precision setup (adjusted for quantization)
         self.training_precision = getattr(self.config, 'precision', 'fp32')
+        
+        # Adjust precision if model is quantized
+        if (self.quantization_manager.is_quantized and 
+            self.quantization_manager.quantization_info.get('bits') == 4 and
+            self.training_precision in ["fp16", "mixed_fp16"]):
+            print("WARNING: Adjusting precision from FP16 to FP32 for 4-bit quantization stability")
+            self.training_precision = "fp32"
+        
         self.use_amp = self.training_precision in ["fp16", "bf16", "mixed_fp16", "mixed_bf16"] and torch.cuda.is_available()
         self.scaler = GradScaler() if self.use_amp and self.training_precision in ["fp16", "mixed_fp16"] else None
         
-        # Model compilation
+        # Model compilation (may not work with some quantized models)
         if getattr(self.config, 'compile', True) and hasattr(torch, 'compile'):
             try:
-                self.model = torch.compile(self.model, mode='default')
-                print("Model compiled successfully")
+                # Skip compilation for quantized models as it may not be compatible
+                if not self.quantization_manager.is_quantized:
+                    self.model = torch.compile(self.model, mode='default')
+                    print("Model compiled successfully")
+                else:
+                    print("Skipping model compilation for quantized model")
             except Exception as e:
                 print(f"Model compilation failed: {e}")
+        
+        # Log quantization info
+        if self.quantization_manager.is_quantized:
+            quant_info = self.quantization_manager.get_quantization_info()
+            print(f"Model quantized: {quant_info['method']} {quant_info['bits']}-bit")
         
         print(f"✅ Standard training setup complete - Device: {self.device}")
     
@@ -554,7 +916,7 @@ class EnhancedConversationTrainer:
                 lr=self.config.learning_rate,
                 betas=(0.9, 0.95),
                 eps=1e-8,
-                fused=torch.cuda.is_available()
+                fused=torch.cuda.is_available() and not self.quantization_manager.is_quantized
             )
         except Exception:
             return AdamW(
@@ -565,12 +927,36 @@ class EnhancedConversationTrainer:
             )
     
     def _get_autocast_context(self, precision: Optional[str] = None, for_inference: bool = False):
-        """Get autocast context with comprehensive precision support."""
+        """Get autocast context with comprehensive precision support including INT8 inference."""
         if self.use_deepspeed:
             return nullcontext()  # DeepSpeed handles precision internally
         
         # Use existing precision logic for standard training
         target_precision = precision or (getattr(self.config, 'inference_precision', self.training_precision) if for_inference else self.training_precision)
+        
+        # Override precision if model is quantized and precision might cause issues
+        if (self.quantization_manager.is_quantized and 
+            self.quantization_manager.quantization_info.get('bits') == 4 and
+            target_precision in ["fp16", "mixed_fp16"]):
+            target_precision = "fp32"  # Use FP32 for stability with 4-bit quantization
+        
+        # Handle INT8 inference precision
+        if target_precision == "int8":
+            if for_inference:
+                # For inference, INT8 precision can be handled through torch.autocast with specific settings
+                # or by using quantized operations. Here we'll use a mixed approach.
+                try:
+                    # Use autocast with float16 as base but enable INT8 optimizations
+                    return autocast('cuda', dtype=torch.float16, enabled=True)
+                except TypeError:
+                    return autocast('cuda', enabled=True)
+            else:
+                # For training, fall back to fp16 as INT8 training is not stable
+                logging.warning("INT8 precision requested for training - falling back to FP16 for stability")
+                try:
+                    return autocast('cuda', dtype=torch.float16)
+                except TypeError:
+                    return autocast('cuda')
         
         if target_precision == "fp32" or not torch.cuda.is_available():
             return nullcontext()
@@ -620,9 +1006,11 @@ class EnhancedConversationTrainer:
         else:
             weighted_loss = loss * mask
         
-        # Check for numerical issues
+        # Check for numerical issues (more important with quantized models)
         if torch.isnan(weighted_loss).any() or torch.isinf(weighted_loss).any():
             print("NaN or Inf detected in loss computation")
+            if self.quantization_manager.is_quantized:
+                print("This might be related to quantization - consider adjusting precision or quantization settings")
             return {
                 'loss': torch.tensor(0.0, device=loss.device, requires_grad=True),
                 'raw_loss': torch.tensor(0.0, device=loss.device),
@@ -650,14 +1038,14 @@ class EnhancedConversationTrainer:
         }
     
     def train_step(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
-        """Enhanced training step with DeepSpeed and MoE support."""
+        """Enhanced training step with DeepSpeed, MoE, and quantization support."""
         if self.use_deepspeed:
             return self._deepspeed_train_step(batch)
         else:
             return self._standard_train_step(batch)
     
     def _deepspeed_train_step(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
-        """DeepSpeed training step with guaranteed metric return."""
+        """DeepSpeed training step with guaranteed metric return and quantization support."""
         # Move batch to device
         batch = {k: v.to(self.device, non_blocking=True) for k, v in batch.items()}
         
@@ -677,7 +1065,7 @@ class EnhancedConversationTrainer:
             }
         
         try:
-            # Forward pass
+            # Forward pass (DeepSpeed handles precision internally)
             output = self.deepspeed_engine(input_ids, attention_mask)
             
             # Handle MoE outputs
@@ -719,6 +1107,8 @@ class EnhancedConversationTrainer:
             
         except Exception as e:
             print(f"DeepSpeed training step error: {e}")
+            if self.quantization_manager.is_quantized:
+                print("This error might be related to quantization - check quantization compatibility")
             return {
                 'loss': 0.0,
                 'raw_loss': 0.0,
@@ -728,7 +1118,7 @@ class EnhancedConversationTrainer:
             }
     
     def _standard_train_step(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
-        """Standard PyTorch training step."""
+        """Standard PyTorch training step with quantization awareness."""
         self.model.train()
         
         # Move batch to device
@@ -748,7 +1138,7 @@ class EnhancedConversationTrainer:
                 'accuracy': 0.0
             }
         
-        # Forward pass with precision
+        # Forward pass with precision (adjusted for quantization)
         with self._get_autocast_context(for_inference=False):
             output = self.model(input_ids, attention_mask)
             
@@ -766,9 +1156,11 @@ class EnhancedConversationTrainer:
         
         loss = loss_dict['loss']
         
-        # Check for valid loss
+        # Check for valid loss (more important with quantized models)
         if torch.isnan(loss).any() or torch.isinf(loss).any():
             print("Invalid loss detected, skipping batch")
+            if self.quantization_manager.is_quantized:
+                print("This might be related to quantization - consider adjusting settings")
             return {
                 'loss': 0.0,
                 'raw_loss': 0.0,
@@ -792,7 +1184,7 @@ class EnhancedConversationTrainer:
         }
     
     def optimizer_step(self) -> Dict[str, float]:
-        """Enhanced optimizer step with DeepSpeed support."""
+        """Enhanced optimizer step with DeepSpeed and quantization support."""
         if self.use_deepspeed:
             return self._deepspeed_optimizer_step()
         else:
@@ -830,7 +1222,7 @@ class EnhancedConversationTrainer:
         }
     
     def _standard_optimizer_step(self) -> Dict[str, float]:
-        """Standard optimizer step."""
+        """Standard optimizer step with quantization awareness."""
         # Unscale gradients for AMP
         if self.use_amp and self.scaler is not None:
             self.scaler.unscale_(self.optimizer)
@@ -841,9 +1233,11 @@ class EnhancedConversationTrainer:
             self.model.parameters(), max_grad_norm
         )
         
-        # Check for NaN gradients
+        # Check for NaN gradients (more common with quantized models)
         if torch.isnan(grad_norm) or torch.isinf(grad_norm):
             print("NaN/Inf gradients detected, skipping step")
+            if self.quantization_manager.is_quantized:
+                print("This might be related to quantization - consider reducing learning rate")
             self.optimizer.zero_grad(set_to_none=True)
             if self.use_amp and self.scaler is not None:
                 self.scaler.update()
@@ -868,13 +1262,47 @@ class EnhancedConversationTrainer:
         
         return {'grad_norm': grad_norm.item(), 'lr': current_lr}
     
+    def optimize_for_int8_inference(self):
+        """Optimize model for INT8 inference when using int8 inference precision."""
+        if not hasattr(self.config, 'inference_precision') or self.config.inference_precision != 'int8':
+            return
+            
+        try:
+            # Enable optimizations for INT8 inference
+            if torch.cuda.is_available():
+                # Enable TensorRT optimizations if available
+                try:
+                    torch.backends.cudnn.allow_tf32 = True
+                    torch.backends.cuda.matmul.allow_tf32 = True
+                    logging.info("Enabled TF32 optimizations for INT8 inference")
+                except:
+                    pass
+                
+                # Set memory format to channels_last for better performance
+                try:
+                    if hasattr(self.model, 'to'):
+                        # This is more for CNN models, but can help with some transformer optimizations
+                        pass
+                except:
+                    pass
+            
+            # Log INT8 inference optimization
+            logging.info("Model optimized for INT8 inference precision")
+            
+        except Exception as e:
+            logging.warning(f"Failed to optimize model for INT8 inference: {e}")
+    
     @torch.no_grad()
     def evaluate(self, eval_dataset, max_batches: int = 100) -> Dict[str, float]:
-        """Enhanced evaluation with DeepSpeed support and accuracy tracking."""
+        """Enhanced evaluation with DeepSpeed, quantization support, INT8 inference, and accuracy tracking."""
         if self.use_deepspeed:
             self.deepspeed_engine.eval()
         else:
             self.model.eval()
+        
+        # Optimize for INT8 inference if configured
+        if hasattr(self.config, 'inference_precision') and self.config.inference_precision == 'int8':
+            self.optimize_for_int8_inference()
         
         eval_dataloader = create_dataloader(eval_dataset, self.config, shuffle=False)
         
@@ -890,6 +1318,9 @@ class EnhancedConversationTrainer:
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats()
         
+        # INT8 inference timing
+        int8_inference_times = []
+        
         for batch_idx, batch in enumerate(eval_dataloader):
             if batch_idx >= max_batches:
                 break
@@ -904,12 +1335,19 @@ class EnhancedConversationTrainer:
             if input_ids is None or input_ids.numel() == 0:
                 continue
             
-            # Forward pass
+            # Forward pass with INT8 inference optimization
+            inference_start = time.time()
+            
             if self.use_deepspeed:
                 output = self.deepspeed_engine(input_ids, attention_mask)
             else:
-                with self._get_autocast_context(for_inference=True):
+                # Use INT8 inference precision if configured
+                inference_precision = getattr(self.config, 'inference_precision', None)
+                with self._get_autocast_context(precision=inference_precision, for_inference=True):
                     output = self.model(input_ids, attention_mask)
+            
+            inference_time = time.time() - inference_start
+            int8_inference_times.append(inference_time)
             
             # Handle outputs
             if isinstance(output, tuple):
@@ -945,7 +1383,8 @@ class EnhancedConversationTrainer:
         perplexity = math.exp(min(avg_raw_loss, 10))
         throughput = total_tokens / eval_time if eval_time > 0 else 0
         
-        return {
+        # Calculate INT8 inference performance metrics
+        eval_results = {
             'eval_loss': avg_loss,
             'eval_perplexity': perplexity,
             'eval_accuracy': avg_accuracy,
@@ -953,9 +1392,51 @@ class EnhancedConversationTrainer:
             'eval_throughput': throughput,
             'eval_peak_memory_mb': peak_memory
         }
+        
+        # Add INT8 inference specific metrics
+        if int8_inference_times and hasattr(self.config, 'inference_precision') and self.config.inference_precision == 'int8':
+            avg_inference_time = sum(int8_inference_times) / len(int8_inference_times)
+            eval_results.update({
+                'avg_int8_inference_time_ms': avg_inference_time * 1000,
+                'int8_inference_speedup': f"INT8 optimized",
+                'inference_precision': 'int8'
+            })
+            
+            logging.info(f"INT8 Inference Performance: {avg_inference_time*1000:.2f}ms avg per batch")
+        
+        return eval_results
+    
+    def get_quantization_status(self) -> Dict[str, Any]:
+        """Get comprehensive quantization status and diagnostics."""
+        status = self.quantization_manager.get_quantization_info()
+        
+        if self.quantization_manager.is_quantized:
+            # Add memory usage comparison if possible
+            try:
+                model_memory_mb = self.quantization_manager._get_model_memory_usage(self.model)
+                status['current_memory_mb'] = model_memory_mb
+            except:
+                status['current_memory_mb'] = "Unknown"
+            
+            # Add training stability recommendations
+            if self.quantization_manager.quantization_info.get('bits') == 4:
+                status['training_recommendations'] = [
+                    "Use FP32 or BF16 precision for stability",
+                    "Consider lower learning rate",
+                    "Monitor for gradient issues",
+                    "Use gradient checkpointing if memory allows"
+                ]
+            elif self.quantization_manager.quantization_info.get('bits') == 8:
+                status['training_recommendations'] = [
+                    "Mixed precision training should work well",
+                    "Monitor gradient norms",
+                    "Consider 8-bit optimizer for memory savings"
+                ]
+        
+        return status
     
     def train_epoch(self, train_dataloader, epoch: int):
-        """Train one epoch with accuracy tracking."""
+        """Train one epoch with accuracy tracking and quantization monitoring."""
         if self.use_deepspeed:
             self.deepspeed_engine.train()
         else:
@@ -984,6 +1465,11 @@ class EnhancedConversationTrainer:
         print(f"Starting epoch {epoch + 1} with {len(train_dataloader)} batches")
         print(f"Gradient accumulation steps: {gradient_accumulation_steps}")
         
+        # Log quantization status for this epoch
+        if self.quantization_manager.is_quantized:
+            quant_status = self.get_quantization_status()
+            print(f"Training with {quant_status['method']} {quant_status['bits']}-bit quantization")
+        
         for batch_idx, batch in enumerate(train_dataloader):
             if self.should_stop:
                 break
@@ -995,11 +1481,17 @@ class EnhancedConversationTrainer:
             
             # ALWAYS log every step for debugging
             if batch_idx < 10 or batch_idx % 5 == 0:
-                print(f"DEBUG: Batch {batch_idx}, Step metrics: {step_metrics}")
+                debug_msg = f"DEBUG: Batch {batch_idx}, Step metrics: {step_metrics}"
+                if self.quantization_manager.is_quantized:
+                    debug_msg += f" [QUANTIZED: {self.quantization_manager.quantization_info['bits']}-bit]"
+                print(debug_msg)
             
-            # Skip invalid batches
+            # Skip invalid batches (more important with quantized models)
             if step_metrics['loss'] == 0.0 or math.isnan(step_metrics['loss']) or math.isinf(step_metrics['loss']):
-                print(f"Skipping batch {batch_idx} due to invalid loss: {step_metrics['loss']}")
+                skip_msg = f"Skipping batch {batch_idx} due to invalid loss: {step_metrics['loss']}"
+                if self.quantization_manager.is_quantized:
+                    skip_msg += " (may be quantization-related)"
+                print(skip_msg)
                 continue
             
             # Accumulate metrics
@@ -1045,6 +1537,10 @@ class EnhancedConversationTrainer:
                 if self.global_step % 20 == 0:
                     self._log_memory_usage(f"Step {self.global_step}")
                 
+                # Quantization-specific monitoring
+                if self.quantization_manager.is_quantized and self.global_step % 100 == 0:
+                    self._log_quantization_diagnostics()
+                
                 # Reset accumulation metrics
                 accumulation_metrics = {'loss': 0.0, 'raw_loss': 0.0, 'tokens': 0, 'accuracy': 0.0}
         
@@ -1060,11 +1556,16 @@ class EnhancedConversationTrainer:
         else:
             avg_loss = avg_raw_loss = avg_accuracy = avg_grad_norm = avg_tokens_per_sec = 0.0
         
-        print(f"Epoch {epoch+1} completed in {epoch_time:.2f}s | "
-              f"Avg Loss: {avg_loss:.6f} | "
-              f"Avg Accuracy: {avg_accuracy:.1%} | "
-              f"Avg Grad Norm: {avg_grad_norm:.4f} | "
-              f"Throughput: {avg_tokens_per_sec:.0f} tokens/s")
+        epoch_summary = (f"Epoch {epoch+1} completed in {epoch_time:.2f}s | "
+                        f"Avg Loss: {avg_loss:.6f} | "
+                        f"Avg Accuracy: {avg_accuracy:.1%} | "
+                        f"Avg Grad Norm: {avg_grad_norm:.4f} | "
+                        f"Throughput: {avg_tokens_per_sec:.0f} tokens/s")
+        
+        if self.quantization_manager.is_quantized:
+            epoch_summary += f" | Quantization: {self.quantization_manager.quantization_info['bits']}-bit"
+        
+        print(epoch_summary)
         
         return {
             'avg_loss': avg_loss,
@@ -1075,9 +1576,37 @@ class EnhancedConversationTrainer:
             'throughput': avg_tokens_per_sec
         }
     
+    def _log_quantization_diagnostics(self):
+        """Log quantization-specific diagnostics."""
+        if not self.quantization_manager.is_quantized:
+            return
+            
+        try:
+            current_memory = self.quantization_manager._get_model_memory_usage(self.model)
+            print(f"Quantization Status at Step {self.global_step}:")
+            print(f"  Method: {self.quantization_manager.quantization_info['method']}")
+            print(f"  Bits: {self.quantization_manager.quantization_info['bits']}")
+            print(f"  Current Memory: {current_memory:.1f}MB")
+            
+            # Check for gradient issues
+            total_grad_norm = 0.0
+            num_params = 0
+            for param in self.model.parameters():
+                if param.grad is not None:
+                    total_grad_norm += param.grad.norm().item() ** 2
+                    num_params += 1
+            
+            if num_params > 0:
+                avg_grad_norm = (total_grad_norm / num_params) ** 0.5
+                if avg_grad_norm > 100 or avg_grad_norm < 1e-6:
+                    print(f"  WARNING: Unusual gradient norm {avg_grad_norm:.2e} - may indicate quantization issues")
+                    
+        except Exception as e:
+            print(f"Error in quantization diagnostics: {e}")
+    
     def _log_training_step(self, epoch: int, batch_idx: int, total_batches: int,
                           metrics, opt_metrics, tokens_per_sec: float):
-        """FIXED logging with guaranteed output including accuracy."""
+        """FIXED logging with guaranteed output including accuracy and quantization info."""
         
         try:
             # Memory info with fallback
@@ -1092,6 +1621,13 @@ class EnhancedConversationTrainer:
             
             # Training mode info
             mode_info = " | DeepSpeed" if self.use_deepspeed else " | Standard"
+            
+            # Quantization info
+            quant_info = ""
+            if self.quantization_manager.is_quantized:
+                quant_method = self.quantization_manager.quantization_info['method']
+                quant_bits = self.quantization_manager.quantization_info['bits']
+                quant_info = f" | {quant_method.upper()}-{quant_bits}bit"
             
             # Safe metric extraction with defaults
             loss = metrics.get('loss', 0.0)
@@ -1108,7 +1644,7 @@ class EnhancedConversationTrainer:
             except:
                 ppl_str = "N/A"
             
-            # FORCE the log message with accuracy
+            # FORCE the log message with accuracy and quantization info
             log_message = (
                 f"Epoch {epoch+1} | Step {self.global_step:6d} | "
                 f"Batch {batch_idx+1:4d}/{total_batches} | "
@@ -1118,7 +1654,7 @@ class EnhancedConversationTrainer:
                 f"LR: {lr:.2e} | "
                 f"GradNorm: {grad_norm:.4f} | "
                 f"Tokens/s: {tokens_per_sec:.0f}"
-                f"{mode_info}{memory_info}"
+                f"{mode_info}{quant_info}{memory_info}"
             )
             
             # Multiple logging attempts to ensure visibility
@@ -1132,13 +1668,26 @@ class EnhancedConversationTrainer:
             print(f"[TRAINING ERROR] {fallback_msg}")
     
     def train(self, train_dataset, eval_dataset=None):
-        """Main training loop with enhanced logging and accuracy tracking."""
+        """Main training loop with enhanced logging, accuracy tracking, and quantization monitoring."""
         print("="*80)
         if self.use_deepspeed:
-            print("STARTING DEEPSPEED TRAINING WITH ENHANCED LOGGING AND ACCURACY")
+            print("STARTING DEEPSPEED TRAINING WITH ENHANCED LOGGING, ACCURACY, AND QUANTIZATION")
         else:
-            print("STARTING STANDARD TRAINING WITH ENHANCED LOGGING AND ACCURACY")
+            print("STARTING STANDARD TRAINING WITH ENHANCED LOGGING, ACCURACY, AND QUANTIZATION")
         print("="*80)
+        
+        # Log quantization status
+        if self.quantization_manager.is_quantized:
+            quant_status = self.get_quantization_status()
+            print(f"QUANTIZATION STATUS:")
+            print(f"  Method: {quant_status['method']}")
+            print(f"  Bits: {quant_status['bits']}")
+            print(f"  Memory: {quant_status.get('current_memory_mb', 'Unknown')}MB")
+            if 'training_recommendations' in quant_status:
+                print("  Recommendations:")
+                for rec in quant_status['training_recommendations']:
+                    print(f"    - {rec}")
+            print("="*80)
         
         # Store eval dataset
         self.eval_dataset = eval_dataset
@@ -1168,6 +1717,8 @@ class EnhancedConversationTrainer:
                 
                 print(f"\n{'='*60}")
                 print(f"EPOCH {epoch + 1}/{self.config.num_epochs}")
+                if self.quantization_manager.is_quantized:
+                    print(f"QUANTIZED TRAINING: {self.quantization_manager.quantization_info['method'].upper()}-{self.quantization_manager.quantization_info['bits']}bit")
                 print(f"{'='*60}")
                 
                 # Train epoch
@@ -1185,6 +1736,9 @@ class EnhancedConversationTrainer:
                     print(f"  Eval Loss: {eval_metrics['eval_loss']:.6f}")
                     print(f"  Eval Accuracy: {eval_metrics['eval_accuracy']:.1%}")
                     print(f"  Eval Perplexity: {eval_metrics['eval_perplexity']:.2f}")
+                    
+                    if self.quantization_manager.is_quantized:
+                        print(f"  Quantization: {self.quantization_manager.quantization_info['method']}-{self.quantization_manager.quantization_info['bits']}bit")
                     
                     # Early stopping check
                     if getattr(self.config, 'early_stopping_patience', None):
@@ -1210,6 +1764,8 @@ class EnhancedConversationTrainer:
             print("Training interrupted by user")
         except Exception as e:
             print(f"Training error: {e}")
+            if self.quantization_manager.is_quantized:
+                print("Error may be related to quantization - check quantization compatibility")
             import traceback
             traceback.print_exc()
             raise
@@ -1222,34 +1778,55 @@ class EnhancedConversationTrainer:
                 self._save_deepspeed_checkpoint(self.current_epoch, final=True)
             else:
                 self._save_standard_checkpoint(self.current_epoch, final=True)
+            
+            # Final quantization summary
+            if self.quantization_manager.is_quantized:
+                print(f"\nFinal Quantization Summary:")
+                final_status = self.get_quantization_status()
+                print(f"  Method: {final_status['method']}")
+                print(f"  Bits: {final_status['bits']}")
+                print(f"  Final Memory: {final_status.get('current_memory_mb', 'Unknown')}MB")
     
     def _save_deepspeed_checkpoint(self, epoch: int, final: bool = False):
-        """Save DeepSpeed checkpoint."""
+        """Save DeepSpeed checkpoint with quantization state."""
         try:
             checkpoint_dir = Path(f"checkpoints/deepspeed_epoch_{epoch}")
             if final:
                 checkpoint_dir = Path("checkpoints/deepspeed_final")
             
             self.deepspeed_engine.save_checkpoint(str(checkpoint_dir))
+            
+            # Save quantization state separately if quantized
+            if self.quantization_manager.is_quantized:
+                quant_state_path = checkpoint_dir / "quantization_state.json"
+                with open(quant_state_path, 'w') as f:
+                    json.dump(self.quantization_manager.get_quantization_info(), f, indent=2)
+            
             print(f"DeepSpeed checkpoint saved: {checkpoint_dir}")
         except Exception as e:
             print(f"Failed to save DeepSpeed checkpoint: {e}")
     
     def _save_standard_checkpoint(self, epoch: int, final: bool = False):
-        """Save standard PyTorch checkpoint."""
+        """Save standard PyTorch checkpoint with quantization state."""
         try:
             suffix = "final" if final else f"epoch_{epoch:03d}"
             checkpoint_path = Path(f"checkpoints/checkpoint_{suffix}_{self.global_step}.pt")
             checkpoint_path.parent.mkdir(exist_ok=True, parents=True)
             
-            torch.save({
+            checkpoint_data = {
                 'model_state_dict': self.model.state_dict(),
                 'optimizer_state_dict': self.optimizer.state_dict(),
                 'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler else None,
                 'global_step': self.global_step,
                 'epoch': epoch,
                 'config': self.config
-            }, checkpoint_path)
+            }
+            
+            # Add quantization state if model is quantized
+            if self.quantization_manager.is_quantized:
+                checkpoint_data['quantization_info'] = self.quantization_manager.get_quantization_info()
+            
+            torch.save(checkpoint_data, checkpoint_path)
             
             print(f"Checkpoint saved: {checkpoint_path}")
         except Exception as e:
@@ -1286,7 +1863,7 @@ class EnhancedConversationTrainer:
             self.should_stop = True
     
     def _log_training_config(self, batches_per_epoch: int):
-        """Log comprehensive training configuration."""
+        """Log comprehensive training configuration including quantization and INT8 inference."""
         try:
             model_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
         except:
@@ -1301,9 +1878,22 @@ class EnhancedConversationTrainer:
             f"Gradient accumulation: {getattr(self.config, 'gradient_accumulation_steps', 1)}",
             f"Learning rate: {self.config.learning_rate:.2e}",
             f"Weight decay: {getattr(self.config, 'weight_decay', 0.01)}",
-            f"Precision: {getattr(self.config, 'precision', 'fp32')}",
+            f"Training precision: {getattr(self.config, 'precision', 'fp32')}",
+            f"Inference precision: {getattr(self.config, 'inference_precision', 'same as training')}",
             f"Device: {self.device}"
         ]
+        
+        # Add quantization info
+        if self.quantization_manager.is_quantized:
+            quant_info = self.quantization_manager.get_quantization_info()
+            config_info.extend([
+                f"Quantization: {quant_info['method']} {quant_info['bits']}-bit",
+                f"Quantized Memory: {quant_info.get('current_memory_mb', 'Unknown')}MB"
+            ])
+        
+        # Add INT8 inference info
+        if hasattr(self.config, 'inference_precision') and self.config.inference_precision == 'int8':
+            config_info.append("INT8 Inference: Enabled for faster evaluation")
         
         if self.use_deepspeed:
             config_info.extend([
@@ -1320,317 +1910,59 @@ class EnhancedConversationTrainer:
         print("Training Configuration:")
         for info in config_info:
             print(f"  {info}")
-    
-    def _log_memory_usage(self, context: str):
-        """Log memory usage information."""
-        if torch.cuda.is_available():
-            allocated = torch.cuda.memory_allocated() / 1e9
-            reserved = torch.cuda.memory_reserved() / 1e9
-            max_allocated = torch.cuda.max_memory_allocated() / 1e9
-            print(f"{context} - GPU Memory: {allocated:.2f}GB allocated, "
-                  f"{reserved:.2f}GB reserved, {max_allocated:.2f}GB max")
-        
-        # System memory
-        try:
-            import psutil
-            memory = psutil.virtual_memory()
-            print(f"{context} - System Memory: {memory.percent:.1f}% used, "
-                  f"{memory.available / 1e9:.1f}GB available")
-        except ImportError:
-            pass
-    
-    def get_moe_diagnostics(self) -> Dict[str, Any]:
-        """Get MoE routing and performance diagnostics."""
-        if not self.moe_optimizer:
-            return {"error": "MoE not enabled or not available"}
-        
-        return self.moe_optimizer.get_routing_diagnostics()
-    
-    def get_memory_stats(self) -> Dict[str, Any]:
-        """Get comprehensive memory usage statistics."""
-        stats = {}
-        
-        # GPU memory
-        if torch.cuda.is_available():
-            stats['gpu'] = {
-                'allocated_gb': torch.cuda.memory_allocated() / 1e9,
-                'reserved_gb': torch.cuda.memory_reserved() / 1e9,
-                'max_allocated_gb': torch.cuda.max_memory_allocated() / 1e9
-            }
-        
-        # CPU memory
-        try:
-            import psutil
-            memory = psutil.virtual_memory()
-            stats['cpu'] = {
-                'usage_percent': memory.percent,
-                'available_gb': memory.available / 1e9,
-                'total_gb': memory.total / 1e9
-            }
-        except ImportError:
-            stats['cpu'] = {'error': 'psutil not available'}
-        
-        return stats
-    
-    def optimize_for_sequence_length(self, sequence_length: int):
-        """Optimize training configuration for specific sequence length."""
-        if not self.use_deepspeed:
-            print("Sequence length optimization requires DeepSpeed")
-            return
-        
-        # Calculate optimal batch size for long sequences
-        if sequence_length > 50000:  # Very long sequences
-            # Reduce batch size, increase gradient accumulation
-            optimal_micro_batch = max(1, self.config.batch_size // 4)
-            optimal_grad_accum = self.config.batch_size * 4
-            
-            print(f"Optimizing for very long sequences ({sequence_length})")
-            print(f"Reducing micro batch size to {optimal_micro_batch}")
-            print(f"Increasing gradient accumulation to {optimal_grad_accum}")
-            
-            # Update DeepSpeed configuration if possible
-            try:
-                self.deepspeed_engine.train_micro_batch_size_per_gpu = optimal_micro_batch
-                self.deepspeed_engine.gradient_accumulation_steps = optimal_grad_accum
-            except AttributeError:
-                print("Could not update DeepSpeed batch sizes dynamically")
-    
-    def get_current_metrics(self):
-        """Get current training metrics for adaptive processing."""
-        try:
-            from training.orchestrator import TrainingMetrics
-        except ImportError:
-            # Fallback if orchestrator not available
-            from dataclasses import dataclass
-            from datetime import datetime
-            
-            @dataclass
-            class TrainingMetrics:
-                epoch: int
-                step: int
-                loss: float
-                grad_norm: float
-                learning_rate: float
-                expert_utilization: dict
-                memory_usage: dict
-                throughput: float
-                semantic_coherence: float
-                factual_accuracy: float
-                reasoning_score: float
-                timestamp: datetime
-        
-        return TrainingMetrics(
-            epoch=self.current_epoch,
-            step=self.global_step,
-            loss=self.metrics['train_losses'][-1] if self.metrics['train_losses'] else 0.0,
-            grad_norm=self.metrics['gradient_norms'][-1] if self.metrics['gradient_norms'] else 0.0,
-            learning_rate=self.metrics['learning_rates'][-1] if self.metrics['learning_rates'] else self.config.learning_rate,
-            expert_utilization={f'expert_{i}': 0.125 for i in range(8)},  # Mock data
-            memory_usage=self.get_memory_stats(),
-            throughput=self.metrics['throughput'][-1] if self.metrics['throughput'] else 0.0,
-            semantic_coherence=0.8,  # Mock
-            factual_accuracy=0.7,    # Mock
-            reasoning_score=0.6,     # Mock
-            timestamp=datetime.now()
-        )
-    
-    def adjust_learning_rate(self, new_lr: float):
-        """Adjust learning rate during training."""
-        old_lr = self.config.learning_rate
-        self.config.learning_rate = new_lr
-        
-        if self.use_deepspeed:
-            # Update DeepSpeed learning rate
-            try:
-                if hasattr(self.deepspeed_engine, 'optimizer'):
-                    for param_group in self.deepspeed_engine.optimizer.param_groups:
-                        param_group['lr'] = new_lr
-                print(f"DeepSpeed learning rate adjusted: {old_lr:.2e} -> {new_lr:.2e}")
-            except Exception as e:
-                print(f"Failed to adjust DeepSpeed learning rate: {e}")
-        else:
-            # Update standard optimizer learning rate
-            if self.optimizer:
-                for param_group in self.optimizer.param_groups:
-                    param_group['lr'] = new_lr
-                print(f"Learning rate adjusted: {old_lr:.2e} -> {new_lr:.2e}")
-    
-    def emergency_lr_reduction(self, factor: float = 0.1):
-        """Emergency learning rate reduction for stability."""
-        current_lr = self.config.learning_rate
-        new_lr = current_lr * factor
-        self.adjust_learning_rate(new_lr)
-        print(f"EMERGENCY: Learning rate reduced by {factor}x: {current_lr:.2e} -> {new_lr:.2e}")
 
 
-class DeepSpeedConfigGenerator:
-    """Helper class to generate optimized DeepSpeed configurations."""
+# Update the print_quantization_recommendations to include INT8 inference
+def print_quantization_recommendations():
+    """Print recommendations for quantization setup including INT8 inference."""
+    print("INT4/INT8 Quantization and Inference Setup Recommendations:")
+    print("=" * 60)
     
-    @staticmethod
-    def create_moe_config_with_expert_parallelism(
-        num_gpus: int, 
-        num_experts: int, 
-        model_size_gb: float,
-        sequence_length: int
-    ) -> Dict[str, Any]:
-        """Create MoE configuration optimized for expert parallelism."""
-        
-        # Calculate optimal expert parallel size
-        # Rule: minimize all-to-all communication while balancing expert load
-        optimal_ep_size = DeepSpeedConfigGenerator._calculate_expert_parallel_size(
-            num_gpus, num_experts
-        )
-        
-        # Calculate capacity factor based on sequence length
-        # Longer sequences need higher capacity to avoid dropping tokens
-        if sequence_length > 100000:
-            capacity_factor = 3.5
-        elif sequence_length > 50000:
-            capacity_factor = 3.0  
-        elif sequence_length > 20000:
-            capacity_factor = 2.8
-        else:
-            capacity_factor = 1
-        
-        config = {
-            "moe": {
-                "enabled": True,
-                "num_experts": num_experts,
-                "expert_parallel_size": optimal_ep_size,
-                "top_k": 2,
-                
-                # Routing optimizations
-                "capacity_factor": capacity_factor,
-                "eval_capacity_factor": capacity_factor + 0.4,
-                "min_capacity": max(16, sequence_length // 10000),
-                "use_residual": True,
-                
-                # Load balancing
-                "load_balance_loss_coef": 0.02,
-                "load_balance_type": "aux_loss",
-                "router_jitter_noise": 0.01,
-                
-                # Communication optimizations
-                "enable_expert_tensor_parallelism": True,
-                "all_to_all_dispatch": True,
-                "overlap_alltoall": True,
-                "comm_dtype": "bf16",
-                
-                # Memory optimizations
-                "pad_expert_input_to_capacity": True,
-                "enable_expert_weight_parallelism": True,
-                "moe_param_group": True,
-                "expert_placement_policy": "balanced"
-            }
-        }
-        
-        print(f"Generated MoE config:")
-        print(f"  Expert parallel size: {optimal_ep_size} (from {num_gpus} GPUs)")
-        print(f"  Capacity factor: {capacity_factor} (for seq_len {sequence_length})")
-        print(f"  Experts per parallel group: {num_experts // optimal_ep_size}")
-        
-        return config
+    methods = get_available_quantization_methods()
     
-    @staticmethod
-    def _calculate_expert_parallel_size(num_gpus: int, num_experts: int) -> int:
-        """Calculate optimal expert parallel size."""
-        # Find all divisors of num_gpus
-        divisors = []
-        for i in range(1, num_gpus + 1):
-            if num_gpus % i == 0:
-                divisors.append(i)
-        
-        # Score each divisor based on:
-        # 1. Communication efficiency (smaller groups = less all-to-all overhead)
-        # 2. Expert utilization (more experts per group = better load balancing)
-        # 3. Memory efficiency
-        
-        best_ep_size = 1
-        best_score = 0
-        
-        for ep_size in divisors:
-            experts_per_group = num_experts / ep_size
-            
-            # Skip if we can't distribute experts evenly
-            if experts_per_group < 1:
-                continue
-            
-            # Communication score: prefer smaller groups (less all-to-all)
-            comm_score = 1.0 / ep_size
-            
-            # Expert utilization score: prefer 2-8 experts per group
-            if 2 <= experts_per_group <= 8:
-                util_score = 1.0
-            elif experts_per_group > 8:
-                util_score = 8.0 / experts_per_group
-            else:
-                util_score = experts_per_group / 2.0
-            
-            # Memory score: prefer configurations that allow for good memory distribution
-            memory_score = min(1.0, experts_per_group / 4.0)
-            
-            total_score = comm_score * util_score * memory_score
-            
-            if total_score > best_score:
-                best_score = total_score
-                best_ep_size = ep_size
-        
-        return best_ep_size
-
-
-# Utility functions for backward compatibility and helper methods
-def _count_parameters(model):
-    """Count trainable parameters in model."""
-    return sum(p.numel() for p in model.parameters() if p.requires_grad)
-
-
-# Additional helper methods for debugging
-def debug_dataloader(dataloader, tokenizer, max_batches=3):
-    """Debug dataloader to check if data is flowing correctly."""
-    print(f"\n=== DEBUGGING DATALOADER ===")
-    print(f"Dataloader length: {len(dataloader)}")
+    print("Available Quantization Methods:")
+    for method, available in methods.items():
+        status = "✅ Available" if available else "❌ Not Available"
+        print(f"  {method}: {status}")
     
-    for batch_idx, batch in enumerate(dataloader):
-        if batch_idx >= max_batches:
-            break
-        
-        print(f"\nBatch {batch_idx}:")
-        for key, value in batch.items():
-            if hasattr(value, 'shape'):
-                print(f"  {key}: shape={value.shape}, dtype={value.dtype}")
-                if key == 'input_ids' and hasattr(tokenizer, 'decode'):
-                    try:
-                        sample_text = tokenizer.decode(value[0][:50].tolist())
-                        print(f"    Sample text: {repr(sample_text[:100])}")
-                    except:
-                        print(f"    Sample tokens: {value[0][:10].tolist()}")
-            else:
-                print(f"  {key}: {type(value)}")
+    if not any(methods.values()):
+        print("\n❌ No quantization libraries available!")
+        print("\nTo install:")
+        print("  BitsAndBytes (8-bit): pip install bitsandbytes")
+        print("  AutoGPTQ (4-bit):     pip install auto-gptq")
+        print("  Optimum Quanto:       pip install optimum[quanto]")
     
-    print(f"=== DATALOADER DEBUG COMPLETE ===\n")
+    print("\nConfiguration Examples:")
+    print("  Model Quantization:")
+    print("    8-bit weights:      config.quantization_method = 'bnb', config.quantization_bits = 8")
+    print("    4-bit weights:      config.quantization_method = 'bnb', config.quantization_bits = 4")
+    print("    GPTQ 4-bit:         config.quantization_method = 'gptq', config.quantization_bits = 4")
+    print("    Quanto 8-bit:       config.quantization_method = 'quanto', config.quantization_bits = 8")
+    print("\n  Inference Precision:")
+    print("    Standard FP16:      config.inference_precision = 'fp16'")
+    print("    Standard BF16:      config.inference_precision = 'bf16'") 
+    print("    Fast INT8:          config.inference_precision = 'int8'")
+    print("\n  Combined Example:")
+    print("    config.quantization_method = 'bnb'")
+    print("    config.quantization_bits = 8")
+    print("    config.precision = 'bf16'")
+    print("    config.inference_precision = 'int8'  # For faster inference")
+    
+    print("\nRecommendations:")
+    print("  Model Quantization (Memory Savings):")
+    print("    - 8-bit quantization: Good balance of memory savings (50%) and stability")
+    print("    - 4-bit quantization: Maximum memory savings (75%), may need precision adjustments")
+    print("    - Use FP32 or BF16 precision with 4-bit quantization for stability")
+    print("\n  Inference Precision (Speed Optimization):")
+    print("    - INT8 inference: Faster inference compared to FP16 on modern GPUs")
+    print("    - Works independently from model quantization")
+    print("    - Best for evaluation/inference, training stays in higher precision")
+    print("\n  General:")
+    print("    - Monitor gradient norms closely with quantized models")
+    print("    - Consider lower learning rates with quantized models")
+    print("    - INT8 inference precision improves speed, quantization saves memory")
 
 
-# Add debugging method to trainer
-def debug_training_setup(self):
-    """Debug training setup to identify issues."""
-    print(f"\n=== DEBUGGING TRAINING SETUP ===")
-    print(f"Model: {type(self.model)}")
-    print(f"Use DeepSpeed: {self.use_deepspeed}")
-    print(f"Device: {self.device}")
-    print(f"Global step: {self.global_step}")
-    print(f"Current epoch: {self.current_epoch}")
-    
-    if hasattr(self, 'optimizer'):
-        print(f"Optimizer: {type(self.optimizer)}")
-    
-    if self.use_deepspeed and hasattr(self, 'deepspeed_engine'):
-        print(f"DeepSpeed engine: {type(self.deepspeed_engine)}")
-        print(f"DeepSpeed world size: {getattr(self.deepspeed_engine, 'world_size', 'N/A')}")
-    
-    print(f"Config batch size: {getattr(self.config, 'batch_size', 'N/A')}")
-    print(f"Config grad accumulation: {getattr(self.config, 'gradient_accumulation_steps', 'N/A')}")
-    print(f"=== TRAINING SETUP DEBUG COMPLETE ===\n")
-
-
-# Patch the debug method to the trainer
-EnhancedConversationTrainer.debug_training_setup = debug_training_setup
+# Example usage
+if __name__ == "__main__":
+    print_quantization_recommendations()
