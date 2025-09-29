@@ -57,6 +57,24 @@ except ImportError:
         print("ERROR: Could not import core modules")
         sys.exit(1)
 
+# Try to import advanced training infrastructure
+TRAINING_INFRASTRUCTURE_AVAILABLE = False
+try:
+    from training.orchestrator import AdaptiveTrainingOrchestrator
+    from training.trainer import EnhancedConversationTrainer
+    from training.checkpoint import CheckpointManager
+    TRAINING_INFRASTRUCTURE_AVAILABLE = True
+    print("Advanced training infrastructure available")
+except ImportError:
+    try:
+        from orchestrator import AdaptiveTrainingOrchestrator
+        from trainer import EnhancedConversationTrainer
+        from checkpoint import CheckpointManager
+        TRAINING_INFRASTRUCTURE_AVAILABLE = True
+        print("Advanced training infrastructure available")
+    except ImportError:
+        print("Advanced training infrastructure not available - using built-in trainer")
+
 
 def create_dummy_training_data(file_path: Path, num_samples: int = 100):
     """Create dummy training data for testing."""
@@ -108,7 +126,11 @@ def config_to_deepseek_config(config: Config):
 
 
 class ProductionTrainer:
-    """Complete production trainer with DeepSpeed, MoE, and proper training loop."""
+    """Complete production trainer with DeepSpeed, MoE, and proper training loop.
+    
+    This is the fallback trainer used when advanced training infrastructure is not available.
+    It provides the same basic training functionality as the original Main.py.
+    """
     
     def __init__(self, model, tokenizer, config, logger=None):
         self.model = model
@@ -367,7 +389,7 @@ class ProductionTrainer:
             return self._standard_train_step(batch)
     
     def _deepspeed_train_step(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
-        """FIXED DeepSpeed training step with proper MoE aux_loss handling."""
+        """DeepSpeed training step with proper MoE aux_loss handling."""
         # Move batch to device
         batch = {k: v.to(self.device, non_blocking=True) for k, v in batch.items()}
         
@@ -381,7 +403,7 @@ class ProductionTrainer:
             # Forward pass
             outputs = self.deepspeed_engine(input_ids)
             
-            # FIXED: Handle different output formats from MoE model
+            # Handle different output formats from MoE model
             logits = None
             aux_loss = None
             
@@ -389,17 +411,13 @@ class ProductionTrainer:
                 if len(outputs) >= 1:
                     logits = outputs[0]
                 if len(outputs) >= 3:
-                    # Handle auxiliary loss - can be tensor, list, or None  
                     potential_aux = outputs[2]
                     
-                    # CRITICAL FIX: Handle different aux_loss formats
                     if potential_aux is not None:
                         if isinstance(potential_aux, torch.Tensor):
-                            # Single tensor aux loss
                             if potential_aux.numel() > 0 and not torch.isnan(potential_aux).any():
                                 aux_loss = potential_aux
                         elif isinstance(potential_aux, list):
-                            # List of aux losses - sum them up
                             valid_losses = []
                             for loss_item in potential_aux:
                                 if isinstance(loss_item, torch.Tensor):
@@ -411,7 +429,6 @@ class ProductionTrainer:
             else:
                 logits = outputs
             
-            # Validate logits
             if logits is None:
                 print(f"Error: No logits found in model output: {type(outputs)}")
                 return {'loss': 0.0, 'accuracy': 0.0, 'perplexity': float('inf')}
@@ -450,7 +467,7 @@ class ProductionTrainer:
             return {'loss': 0.0, 'accuracy': 0.0, 'perplexity': float('inf')}
     
     def _standard_train_step(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
-        """FIXED Standard PyTorch training step with proper MoE aux_loss handling."""
+        """Standard PyTorch training step with proper MoE aux_loss handling."""
         self.model.train()
         
         # Move batch to device
@@ -466,7 +483,6 @@ class ProductionTrainer:
         with self._get_autocast_context():
             outputs = self.model(input_ids)
             
-            # FIXED: Handle different output formats from MoE model
             logits = None
             aux_loss = None
             
@@ -474,17 +490,13 @@ class ProductionTrainer:
                 if len(outputs) >= 1:
                     logits = outputs[0]
                 if len(outputs) >= 3:
-                    # Handle auxiliary loss - can be tensor, list, or None
                     potential_aux = outputs[2]
                     
-                    # CRITICAL FIX: Handle different aux_loss formats
                     if potential_aux is not None:
                         if isinstance(potential_aux, torch.Tensor):
-                            # Single tensor aux loss
                             if potential_aux.numel() > 0 and not torch.isnan(potential_aux).any():
                                 aux_loss = potential_aux
                         elif isinstance(potential_aux, list):
-                            # List of aux losses - sum them up
                             valid_losses = []
                             for loss_item in potential_aux:
                                 if isinstance(loss_item, torch.Tensor):
@@ -493,11 +505,9 @@ class ProductionTrainer:
                             
                             if valid_losses:
                                 aux_loss = sum(valid_losses)
-                        # If it's neither tensor nor list, ignore it
             else:
                 logits = outputs
             
-            # Validate logits
             if logits is None:
                 print(f"Error: No logits found in model output: {type(outputs)}")
                 return {'loss': 0.0, 'accuracy': 0.0, 'perplexity': float('inf')}
@@ -871,24 +881,29 @@ def main():
     # Base model configuration
     config_choice = 'debug'  # Options: 'debug', 'b1', 'b7', 'b14', 'b50', 'b100', 'b200', 'b300'
     
+    # Training mode selection
+    use_advanced_infrastructure = TRAINING_INFRASTRUCTURE_AVAILABLE  # Set to False to force basic trainer
+    
     # Training parameters
     training_params = {
         'use_moe': True,
-        'num_epochs': 5,
+        'num_epochs': 20,
         'learning_rate': 1e-4,
         'min_lr': 1e-6,
         'lr_scheduler': "cosine",
         'batch_size': 2,
         'gradient_accumulation_steps': 8,
-        'precision': "mixed_bf16",
-        'inference_precision': "bf16",
+        'precision': "fp32",
+        'inference_precision': "fp16",
         'compile': True,
         'max_memory_usage': 0.85,
-        'save_every_n_batches': 500,
-        'eval_every_n_batches': 250,
+        'save_every_n_batches': 1000,
+        'eval_every_n_batches': 500,
         'use_flash_attention': True,
         'gradient_checkpointing': True,
         'num_workers': 2,
+        'save_total_limit': 5,
+        'weight_decay': 0.01,
     }
     
     # Data configuration
@@ -896,30 +911,37 @@ def main():
         'train_data_path': 'oasst1_data/oasst1_train.jsonl',
         'eval_data_path': 'oasst1_data/oasst1_train.jsonl',
         'max_conversations_per_file': 50000,
-        'create_dummy_data': True,
+        'create_dummy_data': False,
         'dummy_data_samples': 200,
     }
     
     # DeepSpeed configuration
     deepspeed_params = {
         'use_deepspeed': False,
-        'cpu_offload': True,
-        'cpu_offload_optimizer': True,
-        'cpu_offload_parameters': True,
+        'cpu_offload': False,
+        'cpu_offload_optimizer': False,
+        'cpu_offload_parameters': False,
         'zero_stage': 2,
         'nvme_path': None,
         'max_grad_norm': 1.0,
+    }
+    
+    # Quantization configuration (for advanced infrastructure)
+    quantization_params = {
+        'quantization_method': None,  # Options: None, 'bnb', 'gptq', 'quanto'
+        'quantization_bits': None,  # Options: None, 4, 8
     }
     
     # Monitoring and logging
     monitoring_params = {
         'log_level': "INFO",
         'experiment_name': f'Production_Training_{datetime.now().strftime("%Y%m%d_%H%M%S")}',
-        'early_stopping_patience': None,
+        'early_stopping_patience': 5,
         'backup_every_n_hours': 12,
         'enable_wandb': False,
         'wandb_project': None,
         'wandb_entity': None,
+        'health_check_interval': 50,
     }
     
     # =================================================
@@ -932,47 +954,57 @@ def main():
     )
     
     print("\n" + "="*80)
-    print("PRODUCTION DEEPSEEK MOE TRANSFORMER TRAINING - FIXED VERSION")
+    if use_advanced_infrastructure and TRAINING_INFRASTRUCTURE_AVAILABLE:
+        print("ADAPTIVE AI-DRIVEN TRAINING WITH SELF-IMPROVEMENT")
+    else:
+        print("PRODUCTION DEEPSEEK MOE TRANSFORMER TRAINING")
     print("="*80)
     print(f"Experiment: {monitoring_params['experiment_name']}")
+    print(f"Advanced Infrastructure: {use_advanced_infrastructure and TRAINING_INFRASTRUCTURE_AVAILABLE}")
     print(f"DeepSpeed Available: {DEEPSPEED_AVAILABLE}")
     print(f"CUDA Available: {torch.cuda.is_available()}")
     print(f"GPU Count: {torch.cuda.device_count() if torch.cuda.is_available() else 0}")
     print("="*80)
     
     try:
-        # Create base configuration
+        # Step 1: Create base configuration
         print(f"\nStep 1: Creating base configuration ({config_choice})")
         if hasattr(ConfigPresets, config_choice):
             config = getattr(ConfigPresets, config_choice)()
         else:
             raise ValueError(f"Unknown config preset: {config_choice}")
         
-        # Apply all parameter overrides
-        all_params = {**training_params, **data_params, **deepspeed_params, **monitoring_params}
+        # Step 2: Apply all parameter overrides
+        all_params = {
+            **training_params, 
+            **data_params, 
+            **deepspeed_params, 
+            **quantization_params,
+            **monitoring_params
+        }
         
         print(f"Step 2: Applying {len(all_params)} parameter overrides")
         for key, value in all_params.items():
-            if hasattr(config, key):
-                old_value = getattr(config, key)
+            if value is not None:
+                old_value = getattr(config, key, None)
                 setattr(config, key, value)
-                print(f"  {key}: {old_value} -> {value}")
-            else:
-                setattr(config, key, value)
-                print(f"  NEW: {key} = {value}")
+                if old_value is not None:
+                    print(f"  {key}: {old_value} -> {value}")
+                else:
+                    print(f"  NEW: {key} = {value}")
         
-        # Validate configuration
+        # Step 3: Validate configuration
         print(f"\nStep 3: Validating configuration")
         config.validate()
         print("Configuration validation passed")
         
-        # Initialize tokenizer
+        # Step 4: Initialize tokenizer
         print(f"\nStep 4: Initializing tokenizer")
         tokenizer = ConversationTokenizer()
         config.vocab_size = tokenizer.vocab_size
         print(f"Tokenizer initialized with vocab_size: {config.vocab_size}")
         
-        # Initialize model
+        # Step 5: Initialize model
         print(f"\nStep 5: Initializing model")
         model_config = config_to_deepseek_config(config)
         model = DeepSeekTransformer(model_config)
@@ -983,7 +1015,7 @@ def main():
         print(f"  Total parameters: {total_params:,}")
         print(f"  Trainable parameters: {trainable_params:,}")
         
-        # Setup datasets
+        # Step 6: Setup datasets
         print(f"\nStep 6: Setting up datasets")
         
         # Handle dummy data creation
@@ -1011,12 +1043,32 @@ def main():
             print("Using training data for evaluation (same file)")
             eval_dataset = train_dataset
         
-        # Initialize trainer
-        print(f"\nStep 7: Initializing trainer")
-        trainer = ProductionTrainer(model, tokenizer, config, logging.getLogger(__name__))
-        print(f"Trainer initialized: {'DeepSpeed' if trainer.use_deepspeed else 'Standard PyTorch'}")
+        # Step 7: Initialize training system
+        print(f"\nStep 7: Initializing training system")
         
-        # Start training
+        trainer = None
+        orchestrator = None
+        
+        if use_advanced_infrastructure and TRAINING_INFRASTRUCTURE_AVAILABLE:
+            # Use advanced adaptive training orchestrator
+            print("Using AdaptiveTrainingOrchestrator with AI-driven optimization")
+            orchestrator = AdaptiveTrainingOrchestrator(config)
+            
+            # The orchestrator will initialize its own components
+            print("Adaptive training system will be initialized by orchestrator")
+            print(f"  Meta-learning enabled: Yes")
+            print(f"  Real-time monitoring: Yes")
+            print(f"  Adaptive hyperparameter optimization: Yes")
+            print(f"  Architecture evolution: {'Yes' if config.use_moe else 'No'}")
+            
+        else:
+            # Use basic ProductionTrainer
+            print("Using ProductionTrainer (basic training)")
+            logger = logging.getLogger(__name__)
+            trainer = ProductionTrainer(model, tokenizer, config, logger)
+            print(f"Trainer initialized: {'DeepSpeed' if trainer.use_deepspeed else 'Standard PyTorch'}")
+        
+        # Step 8: Start training
         print(f"\nStep 8: Starting training")
         print(f"Configuration:")
         print(f"  Epochs: {config.num_epochs}")
@@ -1024,9 +1076,13 @@ def main():
         print(f"  Gradient accumulation: {config.gradient_accumulation_steps}")
         print(f"  Learning rate: {config.learning_rate}")
         print(f"  Precision: {config.precision}")
+        print(f"  Inference precision: {getattr(config, 'inference_precision', 'same as training')}")
         print(f"  MoE enabled: {config.use_moe}")
         if config.use_moe:
             print(f"  Experts: {config.num_experts}, Top-K: {config.moe_top_k}")
+        if quantization_params.get('quantization_method'):
+            print(f"  Quantization: {quantization_params['quantization_method']} "
+                  f"{quantization_params['quantization_bits']}-bit")
         
         # Create experiment directory
         experiment_dir = Path(f"experiments/{config.experiment_name}")
@@ -1038,29 +1094,60 @@ def main():
         print(f"Configuration saved: {config_path}")
         
         # Run training
-        trainer.train(train_dataset, eval_dataset)
+        if orchestrator:
+            # Use adaptive training orchestrator
+            orchestrator.run_adaptive_training()
+        elif trainer:
+            # Use standard trainer
+            trainer.train(train_dataset, eval_dataset)
+        else:
+            raise RuntimeError("No training system initialized")
         
         print("\n" + "="*80)
         print("TRAINING COMPLETED SUCCESSFULLY!")
         print("="*80)
         print(f"Experiment: {config.experiment_name}")
-        print(f"Total steps: {trainer.global_step}")
-        print(f"Final epoch: {trainer.current_epoch}")
-        print(f"Best eval loss: {trainer.best_eval_loss:.6f}")
+        
+        if trainer:
+            print(f"Total steps: {trainer.global_step}")
+            print(f"Final epoch: {trainer.current_epoch}")
+            print(f"Best eval loss: {trainer.best_eval_loss:.6f}")
+        
+        if orchestrator:
+            status = orchestrator.get_adaptive_status()
+            print(f"Adaptive decisions made: {status.get('adaptive_decisions_made', 'N/A')}")
+            print(f"Metrics collected: {status.get('metrics_collected', 'N/A')}")
+            print(f"Meta-learning runs: {status.get('meta_learning_runs', 'N/A')}")
         
         # Save final summary
         summary = {
             'experiment_name': config.experiment_name,
-            'total_steps': trainer.global_step,
-            'epochs_completed': trainer.current_epoch,
-            'best_eval_loss': trainer.best_eval_loss,
             'training_completed': datetime.now().isoformat(),
             'model_parameters': {
                 'total': total_params,
                 'trainable': trainable_params,
             },
-            'final_metrics': trainer.metrics
+            'configuration': {
+                'model': config_choice,
+                'moe_enabled': config.use_moe,
+                'quantization': quantization_params.get('quantization_method'),
+                'precision': config.precision,
+                'training_mode': 'adaptive' if orchestrator else 'standard'
+            }
         }
+        
+        if trainer:
+            summary['training_state'] = {
+                'total_steps': trainer.global_step,
+                'epochs_completed': trainer.current_epoch,
+                'best_eval_loss': trainer.best_eval_loss,
+            }
+        
+        if orchestrator:
+            try:
+                summary['adaptive_training'] = orchestrator.get_adaptive_status()
+            except Exception as e:
+                print(f"Could not get orchestrator status: {e}")
         
         summary_path = experiment_dir / "training_summary.json"
         with open(summary_path, 'w') as f:
@@ -1069,6 +1156,14 @@ def main():
         
     except KeyboardInterrupt:
         print("\nTraining interrupted by user")
+        
+        # Save emergency state
+        if orchestrator:
+            try:
+                orchestrator._save_meta_learning_state()
+            except:
+                pass
+        
         return 0
     except Exception as e:
         print(f"\nTraining failed with error: {e}")
@@ -1076,9 +1171,19 @@ def main():
         return 1
     finally:
         # Cleanup
+        print("\nCleaning up resources...")
+        
+        if orchestrator:
+            try:
+                orchestrator.cleanup()
+            except Exception as e:
+                print(f"Orchestrator cleanup error: {e}")
+        
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         gc.collect()
+        
+        print("Cleanup complete")
     
     return 0
 
