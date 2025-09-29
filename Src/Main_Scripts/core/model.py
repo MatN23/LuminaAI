@@ -765,8 +765,10 @@ class DeepSeekTransformer(nn.Module):
                 ffn_params += layer.ffn._param_count
         
         norm_params = (
-            sum(p.numel() for layer in self.layers for p in [layer.input_norm, layer.post_attn_norm]) + 
-            self.norm.weight.numel()
+            sum(sum(p.numel() for p in layer.input_norm.parameters()) + 
+                sum(p.numel() for p in layer.post_attn_norm.parameters()) 
+                for layer in self.layers) + 
+            sum(p.numel() for p in self.norm.parameters())
         )
         
         breakdown = {
