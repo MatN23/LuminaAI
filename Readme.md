@@ -67,12 +67,10 @@ LuminaAI/
 ├── Readme.md                    # This documentation
 ├── config/
 │   ├── config_manager.py        # Configuration classes and presets
-│   └── __init__.py
 ├── core/                        # Core model and data components
 │   ├── model.py                 # DeepSeek transformer with MoE
 │   ├── tokenizer.py             # GPT-4 compatible tokenization
 │   ├── dataset.py               # Advanced dataset handling
-│   └── __init__.py
 ├── training/                    # Enhanced training system
 │   ├── trainer.py               # DeepSpeed-enabled trainer
 │   ├── orchestrator.py          # Training coordination and monitoring
@@ -80,14 +78,10 @@ LuminaAI/
 │   └── __init__.py
 ├── monitoring/                  # Comprehensive monitoring
 │   ├── logger.py                # Enhanced logging with health metrics
-│   ├── visualizations.py        # Real-time training visualizations
-│   ├── moe_analytics.py         # MoE routing analysis
-│   └── __init__.py
 ├── utils/                       # Enhanced utilities
 │   ├── data_processing.py       # Data validation and processing
 │   ├── environment.py           # System validation and optimization
 │   ├── reporting.py             # Performance analysis and reporting
-│   └── __init__.py
 ├── data/                        # Training data and caches
 │   ├── shards/                  # Data sharding for large datasets
 │   ├── processed/               # Processed and validated data
