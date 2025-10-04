@@ -329,7 +329,7 @@ class QuantizationManager:
                     betas=(0.9, 0.95),
                     eps=1e-8,
                     weight_decay=getattr(self.config, 'weight_decay', 0.01),
-                    optim_bits=8
+                    optim_bits=32  # BitsAndBytes only supports 32-bit optimizer states
                 )
         
         # Fallback to standard optimizer
@@ -1497,7 +1497,7 @@ class EnhancedConversationTrainer:
             step_metrics = self.train_step(batch)
             
             # ALWAYS log every step for debugging
-            if batch_idx < 10 or batch_idx % 5 == 0:
+            if batch_idx < 5 and getattr(self.config, 'log_level', 'INFO') == 'DEBUG':
                 debug_msg = f"DEBUG: Batch {batch_idx}, Step metrics: {step_metrics}"
                 if self.quantization_manager.is_quantized:
                     debug_msg += f" [QUANTIZED: {self.quantization_manager.quantization_info['bits']}-bit]"
@@ -1538,12 +1538,11 @@ class EnhancedConversationTrainer:
                 
                 # FORCE logging - log every step for the first 20 steps, then every 5 steps
 
-                log_frequency = getattr(self.config, 'log_every_n_steps', 5)
+                log_frequency = getattr(self.config, 'log_every_n_steps', 50)
 
                 should_log = (
-                    self.global_step <= 20 or 
                     self.global_step % log_frequency == 0 or 
-                    time.time() - last_log_time > 10
+                    time.time() - last_log_time > 60
                 )
                 
                 if should_log:
@@ -1678,7 +1677,6 @@ class EnhancedConversationTrainer:
             )
             
             # Multiple logging attempts to ensure visibility
-            logging.info(log_message)
             print(f"[TRAINING] {log_message}")
             
         except Exception as e:

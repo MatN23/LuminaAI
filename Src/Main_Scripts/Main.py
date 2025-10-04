@@ -1112,8 +1112,8 @@ def main():
     
     # Quantization configuration (for advanced infrastructure)
     quantization_params = {
-        'quantization_method': None,  # Options: None, 'bnb', 'gptq', 'quanto'
-        'quantization_bits': None,  # Options: None, 4, 8
+        'quantization_method': 'bnb',  # Options: None, 'bnb', 'gptq', 'quanto'
+        'quantization_bits': 8,  # Options: None, 4, 8
     }
     
     # Monitoring and logging
@@ -1391,7 +1391,7 @@ def main():
         # Cleanup
         print("\nCleaning up resources...")
         
-        if orchestrator:
+        if 'orchestrator' in locals() and orchestrator:
             try:
                 orchestrator.cleanup()
             except Exception as e:

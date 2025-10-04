@@ -310,13 +310,13 @@ class Config:
         
         if self.num_heads % self.num_kv_heads != 0:
             raise ValueError(f"num_heads ({self.num_heads}) must be divisible by num_kv_heads ({self.num_kv_heads})")
-        
+
         # Precision validation
         valid_precisions = ["fp32", "fp16", "bf16", "mixed_fp16", "mixed_bf16", "tf32", "auto"]
         if self.precision not in valid_precisions:
             raise ValueError(f"Invalid precision: {self.precision}. Valid options: {valid_precisions}")
-        
-        if self.inference_precision not in valid_precisions + ["dynamic"]:
+
+        if self.inference_precision not in valid_precisions + ["dynamic", "int8"]:
             raise ValueError(f"Invalid inference_precision: {self.inference_precision}")
         
         # Training parameters validation
@@ -328,8 +328,13 @@ class Config:
         
         # MoE validation - Updated for 8x pattern
         if self.use_moe:
-            if self.num_experts != 8:
-                raise ValueError("num_experts must be 8 for consistency with 8x pattern")
+            valid_experts = [8, 16, 32, 64]
+            if self.num_experts not in valid_experts:
+                raise ValueError(
+                    f"Invalid num_experts={self.num_experts}. "
+                    f"Choose from {valid_experts}."
+                )
+            print(f"[INFO] Using MoE with {self.num_experts} experts and top_k={self.moe_top_k}")
             
             if self.moe_top_k not in [1, 2]:
                 raise ValueError("moe_top_k should be 1 or 2 (1 recommended for 8x pattern)")
@@ -638,8 +643,8 @@ class ConfigPresets:
 
             # MoE
             use_moe=True,
-            num_experts=4,
-            moe_top_k=1,
+            num_experts=32,
+            moe_top_k=2,
             capacity_factor=1.2,
             load_balancing_weight=0.01,
             expert_parallel_size=1,
