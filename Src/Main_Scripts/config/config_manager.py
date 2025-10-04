@@ -611,45 +611,45 @@ class ConfigPresets:
         )
     
     def debug_200m() -> Config:
-        """~200M parameter model for experimental runs."""
+        """~200M parameter model for T4-friendly debugging/testing."""
         return Config(
-            # Model size
-            vocab_size=32000,            # standard tokenization range
-            hidden_size=1024,            # bigger embedding
-            num_layers=12,               # deep enough for structure
-            num_heads=16,                # attention heads
-            num_kv_heads=16,             
-            seq_length=512,              # longer context
-            intermediate_size=4096,      # feed-forward layer
+            # Model architecture
+            vocab_size=1024,
+            hidden_size=768,         # hidden dimension
+            num_layers=12,           # transformer blocks
+            num_heads=12,            # attention heads
+            num_kv_heads=12,
+            seq_length=256,
+            intermediate_size=3072,  # feed-forward dimension
 
-            # Training settings
-            batch_size=8,
-            micro_batch_size=2,
+            # Training
+            batch_size=4,
+            micro_batch_size=1,
             gradient_accumulation_steps=4,
-            num_epochs=3,
-            learning_rate=3e-5,
+            num_epochs=1,
+            learning_rate=5e-5,
             weight_decay=0.01,
-            eval_every_n_batches=100,
-            save_every_n_batches=200,
-            precision="fp16",            # reduce memory, faster
-            inference_precision="fp16",
-            compile=True,
-            num_workers=4,
+            eval_every_n_batches=50,
+            save_every_n_batches=100,
+            precision="fp32",
+            inference_precision="fp32",
+            compile=False,
+            num_workers=0,
 
-            # MoE settings
+            # MoE
             use_moe=True,
-            num_experts=32,              # more experts for larger model
-            moe_top_k=2,                 # Top-2 routing for capacity
-            capacity_factor=1.25,
-            load_balancing_weight=0.01,
-            expert_parallel_size=4,
+            num_experts=8,
+            moe_top_k=1,
+            capacity_factor=1.1,
+            load_balancing_weight=0.005,
+            expert_parallel_size=2,
 
-            # DeepSpeed settings
+            # DeepSpeed
             use_deepspeed=True,
             zero_stage=1,
             cpu_offload=False,
 
-            # Monitoring and stability
+            # Monitoring / stability
             experiment_name="debug_run_200M",
             log_level="DEBUG",
             health_check_interval=10,
@@ -660,16 +660,15 @@ class ConfigPresets:
             gradient_checkpointing=False,
             use_flash_attention=False,
 
-            # Precision settings
+            # Precision tuning
             auto_tune_precision=False,
             precision_target="balanced",
             dynamic_precision=False,
 
-            # Memory settings
+            # Memory
             max_memory_usage=0.7,
             streaming_threshold_gb=1.0
         )
-
     
     @staticmethod
     def b1() -> Config:
