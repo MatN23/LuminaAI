@@ -1126,6 +1126,7 @@ def main():
         'wandb_project': None,
         'wandb_entity': None,
         'health_check_interval': 50,
+        'log_every_n_steps': 50,
     }
     
     # =================================================

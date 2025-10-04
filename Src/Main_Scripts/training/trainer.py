@@ -1537,9 +1537,12 @@ class EnhancedConversationTrainer:
                 tokens_per_sec = accumulation_metrics['tokens'] / step_time if step_time > 0 else 0
                 
                 # FORCE logging - log every step for the first 20 steps, then every 5 steps
+
+                log_frequency = getattr(self.config, 'log_every_n_steps', 5)
+
                 should_log = (
                     self.global_step <= 20 or 
-                    self.global_step % 20 == 0 or 
+                    self.global_step % log_frequency == 0 or 
                     time.time() - last_log_time > 10
                 )
                 
