@@ -611,62 +611,61 @@ class ConfigPresets:
         )
     
     def debug_200m() -> Config:
-        """~200M parameter model for T4-friendly debugging/testing."""
+        """~200M hybrid MoE model tuned for T4 GPUs."""
         return Config(
-            # Model architecture
+            # Model size
             vocab_size=1024,
-            hidden_size=768,         # hidden dimension
-            num_layers=12,           # transformer blocks
-            num_heads=12,            # attention heads
-            num_kv_heads=12,
-            seq_length=256,
-            intermediate_size=3072,  # feed-forward dimension
+            hidden_size=640,
+            num_layers=12,
+            num_heads=8,
+            num_kv_heads=8,
+            seq_length=512,
+            intermediate_size=2560,
 
             # Training
             batch_size=4,
-            micro_batch_size=1,
-            gradient_accumulation_steps=4,
-            num_epochs=1,
-            learning_rate=5e-5,
+            micro_batch_size=2,
+            gradient_accumulation_steps=2,
+            num_epochs=3,
+            learning_rate=3e-5,
             weight_decay=0.01,
-            eval_every_n_batches=50,
-            save_every_n_batches=100,
-            precision="fp32",
-            inference_precision="fp32",
-            compile=False,
-            num_workers=0,
+            eval_every_n_batches=100,
+            save_every_n_batches=250,
+            precision="fp16",
+            inference_precision="fp16",
+            compile=True,
+            num_workers=2,
 
             # MoE
             use_moe=True,
-            num_experts=8,
+            num_experts=4,
             moe_top_k=1,
-            capacity_factor=1.1,
-            load_balancing_weight=0.005,
-            expert_parallel_size=2,
+            capacity_factor=1.2,
+            load_balancing_weight=0.01,
+            expert_parallel_size=1,
 
-            # DeepSpeed
+            # Deepspeed
             use_deepspeed=True,
             zero_stage=1,
             cpu_offload=False,
 
-            # Monitoring / stability
-            experiment_name="debug_run_200M",
-            log_level="DEBUG",
-            health_check_interval=10,
+            # Monitoring and stability
+            experiment_name="debug_200m",
+            log_level="INFO",
+            health_check_interval=15,
             save_total_limit=3,
             early_stopping_patience=None,
             max_retries=1,
             lr_scheduler="cosine",
-            gradient_checkpointing=False,
-            use_flash_attention=False,
+            gradient_checkpointing=True,
 
             # Precision tuning
             auto_tune_precision=False,
             precision_target="balanced",
             dynamic_precision=False,
 
-            # Memory
-            max_memory_usage=0.7,
+            # Memory and performance
+            max_memory_usage=0.8,
             streaming_threshold_gb=1.0
         )
     
