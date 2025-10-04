@@ -1539,7 +1539,7 @@ class EnhancedConversationTrainer:
                 # FORCE logging - log every step for the first 20 steps, then every 5 steps
                 should_log = (
                     self.global_step <= 20 or 
-                    self.global_step % 5 == 0 or 
+                    self.global_step % 20 == 0 or 
                     time.time() - last_log_time > 10
                 )
                 
@@ -1551,7 +1551,7 @@ class EnhancedConversationTrainer:
                     last_log_time = time.time()
                 
                 # System monitoring
-                if self.global_step % 20 == 0:
+                if self.global_step % 100 == 0:
                     self._log_memory_usage(f"Step {self.global_step}")
                 
                 # Quantization-specific monitoring
