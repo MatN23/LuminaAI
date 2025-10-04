@@ -12,7 +12,7 @@ import time
 import math
 import signal
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List, Tuple
 
 import torch
@@ -74,6 +74,167 @@ except ImportError:
         print("Advanced training infrastructure available")
     except ImportError:
         print("Advanced training infrastructure not available - using built-in trainer")
+
+
+def validate_precision_support(precision: str, device: torch.device) -> Tuple[bool, str]:
+    """
+    Validate if the requested precision is supported by the hardware.
+    
+    Returns:
+        (is_supported, error_message)
+    """
+    if precision in ['fp32', 'float32']:
+        return True, ""
+    
+    if device.type == 'cpu':
+        if precision in ['fp16', 'mixed_fp16']:
+            return False, f"FP16 precision '{precision}' is not supported on CPU. Use 'fp32' or 'bf16' instead."
+        elif precision in ['bf16', 'mixed_bf16']:
+            # Check if CPU supports bfloat16
+            try:
+                test_tensor = torch.randn(2, 2, dtype=torch.bfloat16)
+                _ = test_tensor + test_tensor
+                return True, ""
+            except:
+                return False, f"BF16 precision '{precision}' is not supported on this CPU. Use 'fp32' instead."
+    
+    if device.type == 'cuda':
+        # Get GPU compute capability
+        capability = torch.cuda.get_device_capability(device)
+        major, minor = capability
+        
+        if precision in ['fp16', 'mixed_fp16']:
+            # FP16 supported on compute capability >= 5.3
+            if major > 5 or (major == 5 and minor >= 3):
+                return True, ""
+            else:
+                return False, f"FP16 precision '{precision}' requires compute capability >= 5.3. " \
+                             f"Your GPU has {major}.{minor}. Use 'fp32' instead."
+        
+        elif precision in ['bf16', 'mixed_bf16']:
+            # BF16 requires compute capability >= 8.0 (Ampere and newer)
+            if major >= 8:
+                return True, ""
+            else:
+                return False, f"BF16 precision '{precision}' requires compute capability >= 8.0 (Ampere GPU or newer). " \
+                             f"Your GPU has {major}.{minor}. Use 'fp16' or 'fp32' instead."
+    
+    return True, ""
+
+
+class TimeEstimator:
+    """Estimates training time based on actual step timing."""
+    
+    def __init__(self, total_epochs: int, steps_per_epoch: int):
+        self.total_epochs = total_epochs
+        self.steps_per_epoch = steps_per_epoch
+        self.total_steps = total_epochs * steps_per_epoch
+        
+        self.step_times = []
+        self.start_time = None
+        self.last_step_time = None
+        
+        # Moving average window
+        self.window_size = 20
+        
+    def start_training(self):
+        """Mark the start of training."""
+        self.start_time = time.time()
+        self.last_step_time = self.start_time
+    
+    def record_step(self, step_num: int):
+        """Record the completion of a training step."""
+        current_time = time.time()
+        
+        if self.last_step_time is not None:
+            step_duration = current_time - self.last_step_time
+            self.step_times.append(step_duration)
+            
+            # Keep only recent steps for moving average
+            if len(self.step_times) > self.window_size:
+                self.step_times.pop(0)
+        
+        self.last_step_time = current_time
+    
+    def get_average_step_time(self) -> float:
+        """Get average time per step."""
+        if not self.step_times:
+            return 0.0
+        return sum(self.step_times) / len(self.step_times)
+    
+    def estimate_remaining_time(self, current_step: int) -> Dict[str, Any]:
+        """
+        Estimate remaining training time.
+        
+        Returns:
+            Dictionary with time estimates and statistics
+        """
+        if not self.step_times or current_step == 0:
+            return {
+                'avg_step_time': 0.0,
+                'remaining_steps': self.total_steps,
+                'estimated_remaining_seconds': 0.0,
+                'estimated_total_seconds': 0.0,
+                'eta': 'Calculating...',
+                'progress_percent': 0.0
+            }
+        
+        avg_step_time = self.get_average_step_time()
+        remaining_steps = self.total_steps - current_step
+        estimated_remaining_seconds = remaining_steps * avg_step_time
+        
+        elapsed_time = time.time() - self.start_time if self.start_time else 0
+        estimated_total_seconds = elapsed_time + estimated_remaining_seconds
+        
+        # Calculate ETA
+        eta_datetime = datetime.now() + timedelta(seconds=estimated_remaining_seconds)
+        
+        progress_percent = (current_step / self.total_steps) * 100 if self.total_steps > 0 else 0
+        
+        return {
+            'avg_step_time': avg_step_time,
+            'remaining_steps': remaining_steps,
+            'estimated_remaining_seconds': estimated_remaining_seconds,
+            'estimated_total_seconds': estimated_total_seconds,
+            'elapsed_seconds': elapsed_time,
+            'eta': eta_datetime.strftime('%Y-%m-%d %H:%M:%S'),
+            'progress_percent': progress_percent,
+            'steps_per_second': 1.0 / avg_step_time if avg_step_time > 0 else 0.0
+        }
+    
+    def format_time(self, seconds: float) -> str:
+        """Format seconds into human-readable string."""
+        if seconds < 60:
+            return f"{seconds:.1f}s"
+        elif seconds < 3600:
+            minutes = seconds / 60
+            return f"{minutes:.1f}m"
+        elif seconds < 86400:
+            hours = seconds / 3600
+            return f"{hours:.1f}h"
+        else:
+            days = seconds / 86400
+            return f"{days:.1f}d"
+    
+    def print_estimate(self, current_step: int):
+        """Print formatted time estimate."""
+        estimate = self.estimate_remaining_time(current_step)
+        
+        if estimate['avg_step_time'] == 0:
+            print("  [Time] Collecting timing data...")
+            return
+        
+        elapsed = self.format_time(estimate['elapsed_seconds'])
+        remaining = self.format_time(estimate['estimated_remaining_seconds'])
+        total = self.format_time(estimate['estimated_total_seconds'])
+        
+        print(f"  [Time] Progress: {estimate['progress_percent']:.1f}% | "
+              f"Elapsed: {elapsed} | "
+              f"Remaining: ~{remaining} | "
+              f"Total: ~{total}")
+        print(f"         ETA: {estimate['eta']} | "
+              f"Speed: {estimate['steps_per_second']:.2f} steps/s | "
+              f"Avg: {estimate['avg_step_time']:.3f}s/step")
 
 
 def create_dummy_training_data(file_path: Path, num_samples: int = 100):
@@ -145,6 +306,9 @@ class ProductionTrainer:
         self.best_eval_loss = float('inf')
         self.patience_counter = 0
         self.should_stop = False
+        
+        # Time estimation
+        self.time_estimator = None
         
         # Metrics tracking
         self.metrics = {
@@ -718,6 +882,10 @@ class ProductionTrainer:
                 opt_metrics = self.optimizer_step()
                 self.global_step += 1
                 
+                # Record step time
+                if self.time_estimator:
+                    self.time_estimator.record_step(self.global_step)
+                
                 # Update epoch metrics
                 epoch_metrics['total_loss'] += accumulation_metrics['loss']
                 epoch_metrics['total_accuracy'] += accumulation_metrics['accuracy'] / gradient_accumulation_steps
@@ -733,6 +901,10 @@ class ProductionTrainer:
                           f"PPL: {accumulation_metrics['perplexity']/gradient_accumulation_steps:.2f} | "
                           f"LR: {opt_metrics['lr']:.6f} | "
                           f"GradNorm: {opt_metrics['grad_norm']:.4f}")
+                    
+                    # Print time estimate
+                    if self.time_estimator and self.global_step > 5:
+                        self.time_estimator.print_estimate(self.global_step)
                 
                 # Reset accumulation metrics
                 accumulation_metrics = {'loss': 0.0, 'accuracy': 0.0, 'perplexity': 0.0}
@@ -774,6 +946,18 @@ class ProductionTrainer:
         if len(train_dataloader) == 0:
             print("ERROR: Train dataloader is empty!")
             return
+        
+        # Initialize time estimator
+        gradient_accumulation_steps = getattr(self.config, 'gradient_accumulation_steps', 1)
+        steps_per_epoch = len(train_dataloader) // gradient_accumulation_steps
+        self.time_estimator = TimeEstimator(self.config.num_epochs, steps_per_epoch)
+        self.time_estimator.start_training()
+        
+        print(f"\nTime Estimation Setup:")
+        print(f"  Total epochs: {self.config.num_epochs}")
+        print(f"  Steps per epoch: {steps_per_epoch}")
+        print(f"  Total training steps: {self.time_estimator.total_steps}")
+        print(f"  Gradient accumulation: {gradient_accumulation_steps}")
         
         # Setup scheduler for standard training
         if not self.use_deepspeed and self.config.lr_scheduler == "cosine":
@@ -964,6 +1148,11 @@ def main():
     print(f"DeepSpeed Available: {DEEPSPEED_AVAILABLE}")
     print(f"CUDA Available: {torch.cuda.is_available()}")
     print(f"GPU Count: {torch.cuda.device_count() if torch.cuda.is_available() else 0}")
+    if torch.cuda.is_available():
+        for i in range(torch.cuda.device_count()):
+            gpu_name = torch.cuda.get_device_name(i)
+            capability = torch.cuda.get_device_capability(i)
+            print(f"  GPU {i}: {gpu_name} (Compute: {capability[0]}.{capability[1]})")
     print("="*80)
     
     try:
@@ -992,6 +1181,34 @@ def main():
                     print(f"  {key}: {old_value} -> {value}")
                 else:
                     print(f"  NEW: {key} = {value}")
+        
+        # Step 2.5: Validate precision support
+        print(f"\nStep 2.5: Validating precision support")
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        training_precision = training_params.get('precision', 'fp32')
+        inference_precision = training_params.get('inference_precision', 'fp16')
+        
+        # Validate training precision
+        is_supported, error_msg = validate_precision_support(training_precision, device)
+        if not is_supported:
+            print(f"\n{'='*80}")
+            print("ERROR: UNSUPPORTED PRECISION FOR TRAINING")
+            print(f"{'='*80}")
+            print(f"{error_msg}")
+            print(f"{'='*80}\n")
+            return 1
+        else:
+            print(f"  Training precision '{training_precision}' is supported on {device.type}")
+        
+        # Validate inference precision
+        is_supported, error_msg = validate_precision_support(inference_precision, device)
+        if not is_supported:
+            print(f"  WARNING: Inference precision '{inference_precision}' is not supported.")
+            print(f"  {error_msg}")
+            print(f"  Inference will use training precision instead.")
+            config.inference_precision = training_precision
+        else:
+            print(f"  Inference precision '{inference_precision}' is supported on {device.type}")
         
         # Step 3: Validate configuration
         print(f"\nStep 3: Validating configuration")

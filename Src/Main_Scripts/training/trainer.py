@@ -604,6 +604,23 @@ class EnhancedConversationTrainer:
         
         # Setup training components
         self._setup_training()
+    
+    def _log_memory_usage(self, step_info: str):
+        """Log current memory usage."""
+        if not torch.cuda.is_available():
+            return
+    
+        try:
+            allocated = torch.cuda.memory_allocated() / 1e9
+            reserved = torch.cuda.memory_reserved() / 1e9
+            max_allocated = torch.cuda.max_memory_allocated() / 1e9
+
+            logging.info(f"Memory Usage at {step_info}:")
+            logging.info(f"  Allocated: {allocated:.2f}GB")
+            logging.info(f"  Reserved: {reserved:.2f}GB")
+            logging.info(f"  Peak: {max_allocated:.2f}GB")
+        except Exception as e:
+            logging.debug(f"Could not log memory usage: {e}")
         
     def _setup_training(self):
         """Setup training components based on DeepSpeed availability."""
