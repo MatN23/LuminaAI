@@ -1063,7 +1063,7 @@ def main():
     # =================================================
     
     # Base model configuration
-    config_choice = 'debug'  # Options: 'debug', 'b1', 'b7', 'b14', 'b50', 'b100', 'b200', 'b300'
+    config_choice = 'debug'  # Options: 'debug', 'debug_200m', 'b1', 'b7', 'b14', 'b50', 'b100', 'b200', 'b300'
     
     # Training mode selection
     use_advanced_infrastructure = TRAINING_INFRASTRUCTURE_AVAILABLE  # Set to False to force basic trainer
