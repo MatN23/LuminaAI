@@ -72,6 +72,26 @@ class MetaLearningEngine:
         self.training_history.append(outcome)
         self._update_meta_model()
     
+    def _update_meta_model(self):
+        """Update the meta-learning model based on training history."""
+        # This is a placeholder for future meta-learning implementation
+        # For now, just track successful strategies
+        if len(self.training_history) > 0:
+            recent_run = self.training_history[-1]
+            if recent_run['success_score'] > 0.7:
+                # Extract successful hyperparameters
+                strategy = {
+                    'learning_rate': recent_run['config'].get('learning_rate'),
+                    'batch_size': recent_run['config'].get('batch_size'),
+                    'success_score': recent_run['success_score'],
+                    'timestamp': time.time()
+                }
+                self.successful_strategies.append(strategy)
+                
+                # Keep only top 20 strategies
+                self.successful_strategies.sort(key=lambda x: x['success_score'], reverse=True)
+                self.successful_strategies = self.successful_strategies[:20]
+    
     def suggest_hyperparameters(self, current_metrics, config):
         """Suggest hyperparameter adjustments based on meta-learning."""
         if len(self.training_history) < 3:
@@ -90,6 +110,50 @@ class MetaLearningEngine:
         suggestions = self._synthesize_suggestions(successful_patterns, current_metrics)
         
         return suggestions
+    
+    def _conservative_suggestions(self, current_metrics):
+        """Conservative hyperparameter suggestions for cold start."""
+        return {
+            'learning_rate': {'value': current_metrics.learning_rate * 0.9, 'confidence': 0.5},
+            'batch_size': {'value': None, 'confidence': 0.3}  # Don't change batch size conservatively
+        }
+    
+    def _exploratory_suggestions(self, current_metrics):
+        """Exploratory suggestions when no similar runs found."""
+        return {
+            'learning_rate': {'value': current_metrics.learning_rate * 1.1, 'confidence': 0.4},
+            'warmup_steps': {'value': 500, 'confidence': 0.5}
+        }
+    
+    def _find_similar_runs(self, current_metrics, config):
+        """Find training runs with similar characteristics."""
+        # Simple similarity based on loss range
+        similar = []
+        current_loss = current_metrics.loss
+        
+        for run in self.training_history:
+            if len(run['metrics_progression']) > 0:
+                initial_loss = run['metrics_progression'][0].get('loss', float('inf'))
+                if abs(initial_loss - current_loss) < 2.0:  # Within 2.0 loss units
+                    similar.append(run)
+        
+        return similar
+    
+    def _synthesize_suggestions(self, successful_patterns, current_metrics):
+        """Synthesize suggestions from successful patterns."""
+        if not successful_patterns:
+            return {}
+        
+        # Average successful hyperparameters
+        avg_lr = sum(p['config'].get('learning_rate', 0.0001) for p in successful_patterns) / len(successful_patterns)
+        
+        return {
+            'learning_rate': {
+                'value': avg_lr,
+                'confidence': 0.7,
+                'reason': f'Average LR from {len(successful_patterns)} successful runs'
+            }
+        }
     
     def predict_training_trajectory(self, current_metrics, config):
         """Predict how training will progress."""
