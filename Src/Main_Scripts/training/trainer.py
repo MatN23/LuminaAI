@@ -907,7 +907,7 @@ class EnhancedConversationTrainer:
             quant_info = self.quantization_manager.get_quantization_info()
             print(f"Model quantized: {quant_info['method']} {quant_info['bits']}-bit")
         
-        print(f"✅ Standard training setup complete - Device: {self.device}")
+        print(f"Standard training setup complete - Device: {self.device}")
     
     def _create_standard_optimizer(self) -> torch.optim.Optimizer:
         """Create standard PyTorch optimizer."""
@@ -992,7 +992,10 @@ class EnhancedConversationTrainer:
     
     def compute_loss(self, logits: torch.Tensor, labels: torch.Tensor, 
                     loss_weights: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
-        """Compute weighted loss with MoE auxiliary losses and accuracy metrics."""
+        """Compute weighted loss with MoE auxiliary losses and accuracy metrics.
+        
+        FIXED: Proper perplexity calculation with numerical stability.
+        """
         
         # For next-token prediction, shift logits and labels
         shift_logits = logits[..., :-1, :].contiguous()
@@ -1011,7 +1014,7 @@ class EnhancedConversationTrainer:
             correct_predictions = (predictions == flat_labels).float() * mask
             accuracy = correct_predictions.sum() / mask.sum().clamp(min=1)
         
-        # Compute base loss
+        # Compute base loss (per-token, unreduced)
         loss = F.cross_entropy(flat_logits, flat_labels, reduction='none')
         
         # Apply weights if provided
@@ -1036,22 +1039,37 @@ class EnhancedConversationTrainer:
                 'accuracy': torch.tensor(0.0, device=loss.device)
             }
         
-        # Compute final loss
+        # Compute final weighted loss (for backprop)
         total_loss = weighted_loss.sum()
         total_weight = mask.sum().clamp(min=1)
         final_loss = total_loss / total_weight
         
-        # Compute additional metrics
-        raw_loss = (loss * mask).sum() / mask.sum().clamp(min=1)
-        clamped_loss = torch.clamp(raw_loss.detach(), min=0.0, max=10.0)
-        perplexity = torch.exp(clamped_loss)
+        # FIXED PERPLEXITY CALCULATION
+        # Compute raw loss (average per valid token, no weights)
+        raw_loss = (loss * mask).sum() / total_weight
+        
+        # Clamp BEFORE exp to prevent overflow
+        # Typical range: 0-10 is reasonable, >15 indicates serious issues
+        clamped_loss = torch.clamp(raw_loss, min=0.0, max=15.0)
+        
+        # Compute perplexity safely
+        # If loss is very high, perplexity will be capped at exp(15) ≈ 3.3M
+        try:
+            perplexity = torch.exp(clamped_loss)
+        except (OverflowError, RuntimeError):
+            # Fallback if exp still fails
+            perplexity = torch.tensor(float('inf'), device=loss.device)
+        
+        # Warn if loss is being clamped (indicates training issues)
+        if raw_loss.item() > 15.0:
+            logging.warning(f"Loss value {raw_loss.item():.2f} exceeds clamp threshold - training may be unstable")
         
         return {
             'loss': final_loss,
-            'raw_loss': raw_loss,
-            'perplexity': perplexity,
-            'valid_tokens': mask.sum(),
-            'accuracy': accuracy
+            'raw_loss': raw_loss.detach(),  # Detach for logging
+            'perplexity': perplexity.detach(),  # Detach for logging
+            'valid_tokens': mask.sum().detach(),
+            'accuracy': accuracy.detach()
         }
     
     def train_step(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
@@ -1311,7 +1329,7 @@ class EnhancedConversationTrainer:
     
     @torch.no_grad()
     def evaluate(self, eval_dataset, max_batches: int = 100) -> Dict[str, float]:
-        """Enhanced evaluation with DeepSpeed, quantization support, INT8 inference, and accuracy tracking."""
+        """Enhanced evaluation with proper perplexity calculation."""
         if self.use_deepspeed:
             self.deepspeed_engine.eval()
         else:
@@ -1397,7 +1415,19 @@ class EnhancedConversationTrainer:
         avg_loss = total_loss / num_batches
         avg_raw_loss = total_raw_loss / num_batches
         avg_accuracy = total_accuracy / num_batches
-        perplexity = math.exp(min(avg_raw_loss, 10))
+        
+        # FIXED PERPLEXITY CALCULATION FOR EVALUATION
+        # Clamp before exp to prevent overflow
+        clamped_avg_loss = min(avg_raw_loss, 15.0)
+        try:
+            perplexity = math.exp(clamped_avg_loss)
+        except OverflowError:
+            perplexity = float('inf')
+        
+        # Warn if perplexity calculation is hitting the clamp
+        if avg_raw_loss > 15.0:
+            logging.warning(f"Evaluation loss {avg_raw_loss:.2f} exceeds safe range - perplexity clamped at exp(15)")
+        
         throughput = total_tokens / eval_time if eval_time > 0 else 0
         
         # Calculate INT8 inference performance metrics
@@ -1537,7 +1567,6 @@ class EnhancedConversationTrainer:
                 tokens_per_sec = accumulation_metrics['tokens'] / step_time if step_time > 0 else 0
                 
                 # FORCE logging - log every step for the first 20 steps, then every 5 steps
-
                 log_frequency = getattr(self.config, 'log_every_n_steps', 50)
 
                 should_log = (
@@ -1655,10 +1684,10 @@ class EnhancedConversationTrainer:
             lr = opt_metrics.get('lr', 0.0)
             grad_norm = opt_metrics.get('grad_norm', 0.0)
             
-            # Safe perplexity calculation
+            # Safe perplexity calculation - FIXED
             try:
-                ppl_value = min(raw_loss, 50)  # Cap to prevent overflow
-                perplexity = math.exp(ppl_value)
+                clamped_loss = min(raw_loss, 15.0)  # Cap to prevent overflow
+                perplexity = math.exp(clamped_loss)
                 ppl_str = f"{perplexity:.2e}" if perplexity > 10000 else f"{perplexity:.2f}"
             except:
                 ppl_str = "N/A"
@@ -1930,7 +1959,15 @@ class EnhancedConversationTrainer:
             print(f"  {info}")
 
 
-# Update the print_quantization_recommendations to include INT8 inference
+def get_available_quantization_methods():
+    """Get dictionary of available quantization methods."""
+    return {
+        'bnb': BNB_AVAILABLE,
+        'gptq': GPTQ_AVAILABLE,
+        'quanto': QUANTO_AVAILABLE
+    }
+
+
 def print_quantization_recommendations():
     """Print recommendations for quantization setup including INT8 inference."""
     print("INT4/INT8 Quantization and Inference Setup Recommendations:")
