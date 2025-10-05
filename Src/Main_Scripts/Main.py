@@ -14,6 +14,7 @@ import signal
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List, Tuple
+from collections import deque
 
 import torch
 import torch.nn as nn
@@ -122,25 +123,44 @@ def validate_precision_support(precision: str, device: torch.device) -> Tuple[bo
     return True, ""
 
 
-class TimeEstimator:
-    """Estimates training time based on actual step timing."""
+class ImprovedTimeEstimator:
+    """Enhanced training time estimator with warmup handling and exponential smoothing."""
     
-    def __init__(self, total_epochs: int, steps_per_epoch: int):
+    def __init__(self, total_epochs: int, steps_per_epoch: int, warmup_steps: int = 10):
         self.total_epochs = total_epochs
         self.steps_per_epoch = steps_per_epoch
         self.total_steps = total_epochs * steps_per_epoch
+        self.warmup_steps = warmup_steps
         
-        self.step_times = []
-        self.start_time = None
-        self.last_step_time = None
+        # Timing data
+        self.step_times: deque = deque(maxlen=100)  # Keep last 100 steps
+        self.start_time: Optional[float] = None
+        self.last_step_time: Optional[float] = None
+        self.epoch_start_times: Dict[int, float] = {}
         
-        # Moving average window
-        self.window_size = 20
+        # Statistics tracking
+        self.completed_steps = 0
+        self.warmup_complete = False
+        
+        # Exponential smoothing parameters
+        self.alpha = 0.3  # Smoothing factor (0-1, higher = more weight on recent data)
+        self.smoothed_step_time: Optional[float] = None
+        
+        # Performance tracking
+        self.min_step_time = float('inf')
+        self.max_step_time = 0.0
         
     def start_training(self):
         """Mark the start of training."""
         self.start_time = time.time()
         self.last_step_time = self.start_time
+        print(f"[TimeEstimator] Training started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"[TimeEstimator] Warmup period: {self.warmup_steps} steps")
+        print(f"[TimeEstimator] Total steps to complete: {self.total_steps:,}")
+    
+    def start_epoch(self, epoch: int):
+        """Mark the start of an epoch."""
+        self.epoch_start_times[epoch] = time.time()
     
     def record_step(self, step_num: int):
         """Record the completion of a training step."""
@@ -148,40 +168,92 @@ class TimeEstimator:
         
         if self.last_step_time is not None:
             step_duration = current_time - self.last_step_time
-            self.step_times.append(step_duration)
             
-            # Keep only recent steps for moving average
-            if len(self.step_times) > self.window_size:
-                self.step_times.pop(0)
+            # Filter out extreme outliers (likely due to checkpointing or evaluation)
+            if len(self.step_times) > 0:
+                median = sorted(self.step_times)[len(self.step_times) // 2]
+                # Ignore steps that are 5x slower than median (likely checkpoint/eval)
+                if step_duration > median * 5:
+                    self.last_step_time = current_time
+                    return
+            
+            self.step_times.append(step_duration)
+            self.completed_steps += 1
+            
+            # Update min/max
+            self.min_step_time = min(self.min_step_time, step_duration)
+            self.max_step_time = max(self.max_step_time, step_duration)
+            
+            # Exponential smoothing
+            if self.smoothed_step_time is None:
+                self.smoothed_step_time = step_duration
+            else:
+                self.smoothed_step_time = (
+                    self.alpha * step_duration + 
+                    (1 - self.alpha) * self.smoothed_step_time
+                )
+            
+            # Check if warmup is complete
+            if not self.warmup_complete and self.completed_steps >= self.warmup_steps:
+                self.warmup_complete = True
+                print(f"\n[TimeEstimator] Warmup complete after {self.warmup_steps} steps")
+                print(f"[TimeEstimator] Average warmup step time: {self.get_average_step_time():.3f}s")
         
         self.last_step_time = current_time
     
     def get_average_step_time(self) -> float:
-        """Get average time per step."""
+        """Get average time per step (using all data)."""
         if not self.step_times:
             return 0.0
         return sum(self.step_times) / len(self.step_times)
     
+    def get_recent_step_time(self, window: int = 20) -> float:
+        """Get average of recent steps."""
+        if not self.step_times:
+            return 0.0
+        recent = list(self.step_times)[-window:]
+        return sum(recent) / len(recent)
+    
+    def get_smoothed_step_time(self) -> float:
+        """Get exponentially smoothed step time (most reliable for prediction)."""
+        if self.smoothed_step_time is None:
+            return self.get_average_step_time()
+        return self.smoothed_step_time
+    
+    def get_step_time_std(self) -> float:
+        """Get standard deviation of step times."""
+        if len(self.step_times) < 2:
+            return 0.0
+        avg = self.get_average_step_time()
+        variance = sum((t - avg) ** 2 for t in self.step_times) / len(self.step_times)
+        return math.sqrt(variance)
+    
     def estimate_remaining_time(self, current_step: int) -> Dict[str, Any]:
         """
-        Estimate remaining training time.
+        Estimate remaining training time with confidence intervals.
         
         Returns:
             Dictionary with time estimates and statistics
         """
         if not self.step_times or current_step == 0:
             return {
-                'avg_step_time': 0.0,
+                'status': 'initializing',
                 'remaining_steps': self.total_steps,
                 'estimated_remaining_seconds': 0.0,
-                'estimated_total_seconds': 0.0,
                 'eta': 'Calculating...',
-                'progress_percent': 0.0
+                'progress_percent': 0.0,
+                'warmup_complete': False
             }
         
-        avg_step_time = self.get_average_step_time()
+        # Use smoothed time for most accurate prediction
+        predicted_step_time = self.get_smoothed_step_time()
+        
+        # If still in warmup, use average instead
+        if not self.warmup_complete:
+            predicted_step_time = self.get_average_step_time()
+        
         remaining_steps = self.total_steps - current_step
-        estimated_remaining_seconds = remaining_steps * avg_step_time
+        estimated_remaining_seconds = remaining_steps * predicted_step_time
         
         elapsed_time = time.time() - self.start_time if self.start_time else 0
         estimated_total_seconds = elapsed_time + estimated_remaining_seconds
@@ -189,17 +261,54 @@ class TimeEstimator:
         # Calculate ETA
         eta_datetime = datetime.now() + timedelta(seconds=estimated_remaining_seconds)
         
+        # Progress calculation
         progress_percent = (current_step / self.total_steps) * 100 if self.total_steps > 0 else 0
         
+        # Calculate confidence interval (±1 std dev)
+        std_dev = self.get_step_time_std()
+        confidence_range_seconds = remaining_steps * std_dev
+        
+        eta_min = eta_datetime - timedelta(seconds=confidence_range_seconds)
+        eta_max = eta_datetime + timedelta(seconds=confidence_range_seconds)
+        
+        # Calculate throughput metrics
+        steps_per_second = 1.0 / predicted_step_time if predicted_step_time > 0 else 0.0
+        
         return {
-            'avg_step_time': avg_step_time,
+            'status': 'warmup' if not self.warmup_complete else 'training',
+            
+            # Step timing
+            'avg_step_time': self.get_average_step_time(),
+            'recent_step_time': self.get_recent_step_time(),
+            'smoothed_step_time': predicted_step_time,
+            'min_step_time': self.min_step_time if self.min_step_time != float('inf') else 0.0,
+            'max_step_time': self.max_step_time,
+            'step_time_std': std_dev,
+            
+            # Progress
+            'current_step': current_step,
             'remaining_steps': remaining_steps,
+            'total_steps': self.total_steps,
+            'progress_percent': progress_percent,
+            
+            # Time estimates
+            'elapsed_seconds': elapsed_time,
             'estimated_remaining_seconds': estimated_remaining_seconds,
             'estimated_total_seconds': estimated_total_seconds,
-            'elapsed_seconds': elapsed_time,
+            
+            # ETAs
             'eta': eta_datetime.strftime('%Y-%m-%d %H:%M:%S'),
-            'progress_percent': progress_percent,
-            'steps_per_second': 1.0 / avg_step_time if avg_step_time > 0 else 0.0
+            'eta_min': eta_min.strftime('%Y-%m-%d %H:%M:%S'),
+            'eta_max': eta_max.strftime('%Y-%m-%d %H:%M:%S'),
+            
+            # Throughput
+            'steps_per_second': steps_per_second,
+            'steps_per_minute': steps_per_second * 60,
+            'steps_per_hour': steps_per_second * 3600,
+            
+            # Status
+            'warmup_complete': self.warmup_complete,
+            'samples_collected': len(self.step_times),
         }
     
     def format_time(self, seconds: float) -> str:
@@ -214,27 +323,101 @@ class TimeEstimator:
             return f"{hours:.1f}h"
         else:
             days = seconds / 86400
-            return f"{days:.1f}d"
+            hours = (seconds % 86400) / 3600
+            return f"{days:.0f}d {hours:.1f}h"
     
-    def print_estimate(self, current_step: int):
+    def format_datetime_relative(self, dt: datetime) -> str:
+        """Format datetime relative to now."""
+        now = datetime.now()
+        if dt < now:
+            return "Now"
+        
+        delta = dt - now
+        seconds = delta.total_seconds()
+        
+        if seconds < 60:
+            return "< 1 minute"
+        elif seconds < 3600:
+            return f"in {seconds/60:.0f} minutes"
+        elif seconds < 86400:
+            hours = seconds / 3600
+            return f"in {hours:.1f} hours"
+        else:
+            return dt.strftime('%b %d at %H:%M')
+    
+    def print_estimate(self, current_step: int, show_detailed: bool = False):
         """Print formatted time estimate."""
         estimate = self.estimate_remaining_time(current_step)
         
-        if estimate['avg_step_time'] == 0:
+        if estimate['status'] == 'initializing':
             print("  [Time] Collecting timing data...")
             return
         
+        # Format times
         elapsed = self.format_time(estimate['elapsed_seconds'])
         remaining = self.format_time(estimate['estimated_remaining_seconds'])
         total = self.format_time(estimate['estimated_total_seconds'])
         
-        print(f"  [Time] Progress: {estimate['progress_percent']:.1f}% | "
-              f"Elapsed: {elapsed} | "
-              f"Remaining: ~{remaining} | "
-              f"Total: ~{total}")
-        print(f"         ETA: {estimate['eta']} | "
-              f"Speed: {estimate['steps_per_second']:.2f} steps/s | "
-              f"Avg: {estimate['avg_step_time']:.3f}s/step")
+        # Status indicator
+        status_text = "WARMUP" if not estimate['warmup_complete'] else "TRAINING"
+        
+        # Main progress line
+        print(f"\n  [{status_text}] Progress: {estimate['progress_percent']:.1f}% "
+              f"({estimate['current_step']:,}/{estimate['total_steps']:,} steps)")
+        
+        # Time breakdown
+        print(f"         Elapsed: {elapsed} | Remaining: ~{remaining} | Total: ~{total}")
+        
+        # ETA with confidence interval
+        eta_relative = self.format_datetime_relative(
+            datetime.strptime(estimate['eta'], '%Y-%m-%d %H:%M:%S')
+        )
+        print(f"         ETA: {estimate['eta']} ({eta_relative})")
+        
+        if estimate['warmup_complete'] and estimate['step_time_std'] > 0:
+            confidence_margin = self.format_time(estimate['step_time_std'] * estimate['remaining_steps'])
+            print(f"         Confidence: +/- {confidence_margin}")
+        
+        # Performance metrics
+        print(f"         Speed: {estimate['steps_per_second']:.2f} steps/s | "
+              f"{estimate['steps_per_minute']:.0f} steps/min | "
+              f"Avg: {estimate['smoothed_step_time']:.3f}s/step")
+        
+        # Detailed statistics (optional)
+        if show_detailed:
+            print(f"         Step timing: "
+                  f"min={estimate['min_step_time']:.3f}s, "
+                  f"max={estimate['max_step_time']:.3f}s, "
+                  f"std={estimate['step_time_std']:.3f}s")
+            print(f"         Samples: {estimate['samples_collected']} | "
+                  f"Status: {estimate['status']}")
+    
+    def get_epoch_summary(self, epoch: int) -> Dict[str, Any]:
+        """Get summary for completed epoch."""
+        if epoch not in self.epoch_start_times:
+            return {}
+        
+        epoch_time = time.time() - self.epoch_start_times[epoch]
+        
+        return {
+            'epoch': epoch,
+            'epoch_time': epoch_time,
+            'epoch_time_formatted': self.format_time(epoch_time),
+            'steps_completed': self.completed_steps,
+            'avg_step_time': self.get_average_step_time(),
+        }
+    
+    def print_epoch_summary(self, epoch: int, total_epochs: int):
+        """Print epoch completion summary."""
+        summary = self.get_epoch_summary(epoch)
+        if not summary:
+            return
+        
+        remaining_epochs = total_epochs - epoch
+        estimated_remaining = remaining_epochs * summary['epoch_time']
+        
+        print(f"\n  Epoch {epoch}/{total_epochs} completed in {summary['epoch_time_formatted']}")
+        print(f"    Remaining epochs: {remaining_epochs} (~{self.format_time(estimated_remaining)})")
 
 
 def create_dummy_training_data(file_path: Path, num_samples: int = 100):
@@ -287,11 +470,7 @@ def config_to_deepseek_config(config: Config):
 
 
 class ProductionTrainer:
-    """Complete production trainer with DeepSpeed, MoE, and proper training loop.
-    
-    This is the fallback trainer used when advanced training infrastructure is not available.
-    It provides the same basic training functionality as the original Main.py.
-    """
+    """Complete production trainer with DeepSpeed, MoE, and proper training loop."""
     
     def __init__(self, model, tokenizer, config, logger=None):
         self.model = model
@@ -841,6 +1020,10 @@ class ProductionTrainer:
         else:
             self.model.train()
         
+        # Start epoch timing
+        if self.time_estimator:
+            self.time_estimator.start_epoch(epoch)
+        
         epoch_metrics = {
             'total_loss': 0.0,
             'total_accuracy': 0.0,
@@ -856,7 +1039,6 @@ class ProductionTrainer:
         }
         
         gradient_accumulation_steps = getattr(self.config, 'gradient_accumulation_steps', 1)
-        epoch_start_time = time.time()
         
         print(f"Starting epoch {epoch + 1} with {len(train_dataloader)} batches")
         
@@ -902,16 +1084,16 @@ class ProductionTrainer:
                           f"LR: {opt_metrics['lr']:.6f} | "
                           f"GradNorm: {opt_metrics['grad_norm']:.4f}")
                     
-                    # Print time estimate
+                    # Print time estimate (every 10 steps after warmup)
                     if self.time_estimator and self.global_step > 5:
-                        self.time_estimator.print_estimate(self.global_step)
+                        # Show detailed stats every 50 steps
+                        show_detailed = (self.global_step % 50 == 0)
+                        self.time_estimator.print_estimate(self.global_step, show_detailed=show_detailed)
                 
                 # Reset accumulation metrics
                 accumulation_metrics = {'loss': 0.0, 'accuracy': 0.0, 'perplexity': 0.0}
         
         # Compute epoch statistics
-        epoch_time = time.time() - epoch_start_time
-        
         if epoch_metrics['num_batches'] > 0:
             avg_loss = epoch_metrics['total_loss'] / epoch_metrics['num_batches']
             avg_accuracy = epoch_metrics['total_accuracy'] / epoch_metrics['num_batches']
@@ -920,18 +1102,21 @@ class ProductionTrainer:
         else:
             avg_loss = avg_accuracy = avg_perplexity = avg_grad_norm = 0.0
         
-        print(f"Epoch {epoch+1} completed in {epoch_time:.2f}s | "
-              f"Avg Loss: {avg_loss:.6f} | "
-              f"Avg Accuracy: {avg_accuracy:.3f} | "
-              f"Avg Perplexity: {avg_perplexity:.2f} | "
-              f"Avg Grad Norm: {avg_grad_norm:.4f}")
+        # Print epoch summary
+        if self.time_estimator:
+            self.time_estimator.print_epoch_summary(epoch + 1, self.config.num_epochs)
+        
+        print(f"\nEpoch {epoch+1} Summary:")
+        print(f"  Avg Loss: {avg_loss:.6f}")
+        print(f"  Avg Accuracy: {avg_accuracy:.3f}")
+        print(f"  Avg Perplexity: {avg_perplexity:.2f}")
+        print(f"  Avg Grad Norm: {avg_grad_norm:.4f}")
         
         return {
             'avg_loss': avg_loss,
             'avg_accuracy': avg_accuracy,
             'avg_perplexity': avg_perplexity,
             'avg_grad_norm': avg_grad_norm,
-            'epoch_time': epoch_time
         }
     
     def train(self, train_dataset, eval_dataset=None):
@@ -950,14 +1135,16 @@ class ProductionTrainer:
         # Initialize time estimator
         gradient_accumulation_steps = getattr(self.config, 'gradient_accumulation_steps', 1)
         steps_per_epoch = len(train_dataloader) // gradient_accumulation_steps
-        self.time_estimator = TimeEstimator(self.config.num_epochs, steps_per_epoch)
+        warmup_steps = min(10, steps_per_epoch // 10)  # Use 10% of epoch or 10 steps
+        self.time_estimator = ImprovedTimeEstimator(self.config.num_epochs, steps_per_epoch, warmup_steps)
         self.time_estimator.start_training()
         
-        print(f"\nTime Estimation Setup:")
+        print(f"\nTraining Configuration:")
         print(f"  Total epochs: {self.config.num_epochs}")
         print(f"  Steps per epoch: {steps_per_epoch}")
         print(f"  Total training steps: {self.time_estimator.total_steps}")
         print(f"  Gradient accumulation: {gradient_accumulation_steps}")
+        print(f"  Effective batch size: {self.config.batch_size * gradient_accumulation_steps}")
         
         # Setup scheduler for standard training
         if not self.use_deepspeed and self.config.lr_scheduler == "cosine":
@@ -984,11 +1171,11 @@ class ProductionTrainer:
                 
                 # Evaluation
                 if eval_dataset is not None:
-                    print("Running evaluation...")
+                    print("\nRunning evaluation...")
                     eval_metrics = self.evaluate(eval_dataset)
                     epoch_metrics.update(eval_metrics)
                     
-                    print(f"Evaluation Results:")
+                    print(f"\nEvaluation Results:")
                     print(f"  Eval Loss: {eval_metrics['eval_loss']:.6f}")
                     print(f"  Eval Accuracy: {eval_metrics['eval_accuracy']:.3f}")
                     print(f"  Eval Perplexity: {eval_metrics['eval_perplexity']:.2f}")
@@ -1003,14 +1190,24 @@ class ProductionTrainer:
                 self.current_epoch = epoch + 1
         
         except KeyboardInterrupt:
-            print("Training interrupted by user")
+            print("\n\nTraining interrupted by user")
         except Exception as e:
-            print(f"Training error: {e}")
+            print(f"\n\nTraining error: {e}")
             traceback.print_exc()
             raise
         finally:
             total_training_time = time.time() - training_start_time
-            print(f"\nTraining finished after {total_training_time / 3600:.2f} hours")
+            
+            print("\n" + "="*80)
+            print("TRAINING COMPLETED")
+            print("="*80)
+            print(f"Total training time: {self.time_estimator.format_time(total_training_time)}")
+            print(f"Total steps completed: {self.global_step}")
+            print(f"Epochs completed: {self.current_epoch}/{self.config.num_epochs}")
+            
+            if self.time_estimator and len(self.time_estimator.step_times) > 0:
+                avg_step = self.time_estimator.get_average_step_time()
+                print(f"Average step time: {avg_step:.3f}s ({1.0/avg_step:.2f} steps/s)")
             
             # Final checkpoint
             self._save_checkpoint(self.current_epoch, final=True)
@@ -1020,18 +1217,20 @@ class ProductionTrainer:
         if eval_loss < self.best_eval_loss:
             self.best_eval_loss = eval_loss
             self.patience_counter = 0
+            print(f"  New best eval loss: {self.best_eval_loss:.6f}")
         else:
             self.patience_counter += 1
+            print(f"  No improvement. Patience: {self.patience_counter}/{self.config.early_stopping_patience}")
             
         if self.patience_counter >= self.config.early_stopping_patience:
-            print(f"Early stopping triggered after {self.patience_counter} epochs without improvement")
+            print(f"\nEarly stopping triggered after {self.patience_counter} epochs without improvement")
             self.should_stop = True
     
     def _save_checkpoint(self, epoch: int, final: bool = False):
         """Save checkpoint."""
         try:
             suffix = "final" if final else f"epoch_{epoch:03d}"
-            checkpoint_dir = Path(f"checkpoints/{suffix}_{self.global_step}")
+            checkpoint_dir = Path(f"checkpoints/{suffix}_step_{self.global_step}")
             checkpoint_dir.mkdir(parents=True, exist_ok=True)
             
             if self.use_deepspeed:
@@ -1047,7 +1246,8 @@ class ProductionTrainer:
                     'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler else None,
                     'global_step': self.global_step,
                     'epoch': epoch,
-                    'config': self.config
+                    'config': self.config,
+                    'best_eval_loss': self.best_eval_loss
                 }
                 torch.save(checkpoint_data, checkpoint_path)
                 print(f"PyTorch checkpoint saved: {checkpoint_path}")
@@ -1178,10 +1378,8 @@ def main():
             if value is not None:
                 old_value = getattr(config, key, None)
                 setattr(config, key, value)
-                if old_value is not None:
+                if old_value is not None and old_value != value:
                     print(f"  {key}: {old_value} -> {value}")
-                else:
-                    print(f"  NEW: {key} = {value}")
         
         # Step 2.5: Validate precision support
         print(f"\nStep 2.5: Validating precision support")
