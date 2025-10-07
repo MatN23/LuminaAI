@@ -449,10 +449,23 @@ def apply_rotary_pos_emb_optimized(
     k_real, k_imag = k.chunk(2, dim=-1)
     
     # Apply rotation formula
+    # Ensure cos/sin match q_real/q_imag shapes
+    if cos.shape[-1] != q_real.shape[-1]:
+    # Adjust cos/sin to match q_real
+        cos = cos[..., :q_real.shape[-1]]
+        sin = sin[..., :q_real.shape[-1]]
+
+    assert q_real.shape == cos.shape, (
+        f"Shape mismatch in rotary embeddings: "
+        f"q_real={q_real.shape}, cos={cos.shape}, sin={sin.shape}"
+    )
+
+    # Apply rotation formula safely
     q_rotated = torch.cat([
         q_real * cos - q_imag * sin,
         q_real * sin + q_imag * cos
     ], dim=-1)
+
     
     k_rotated = torch.cat([
         k_real * cos - k_imag * sin,
