@@ -566,7 +566,12 @@ class EnhancedConversationTrainer:
         self.tokenizer = tokenizer
         self.config = config
         self.logger = logger
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        if torch.cuda.is_available():
+            self.device = torch.device('cuda')
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            self.device = torch.device('mps')
+        else:
+            self.device = torch.device('cpu')
         
         # Enhanced managers
         self.quantization_manager = QuantizationManager(config)
@@ -582,7 +587,13 @@ class EnhancedConversationTrainer:
             logging.info(f"Quantization applied: {quant_info}")
         
         # DeepSpeed integration - CRITICAL FIX
-        self.use_deepspeed = DEEPSPEED_AVAILABLE and getattr(config, 'use_deepspeed', False)
+        is_mps = hasattr(torch.backends, 'mps') and torch.backends.mps.is_available() and not torch.cuda.is_available()
+        if is_mps and getattr(config, 'use_deepspeed', False):
+                logging.warning("DeepSpeed is not supported on MPS - disabling")
+                config.use_deepspeed = False
+
+        self.use_deepspeed = DEEPSPEED_AVAILABLE and getattr(config, 'use_deepspeed', False) and not is_mps
+
         self.deepspeed_engine = None
         
         # Training state
@@ -606,19 +617,29 @@ class EnhancedConversationTrainer:
         self._setup_training()
     
     def _log_memory_usage(self, step_info: str):
-        """Log current memory usage."""
-        if not torch.cuda.is_available():
-            return
-    
+        """Log current memory usage for CUDA, MPS, or CPU."""
         try:
-            allocated = torch.cuda.memory_allocated() / 1e9
-            reserved = torch.cuda.memory_reserved() / 1e9
-            max_allocated = torch.cuda.max_memory_allocated() / 1e9
-
-            logging.info(f"Memory Usage at {step_info}:")
-            logging.info(f"  Allocated: {allocated:.2f}GB")
-            logging.info(f"  Reserved: {reserved:.2f}GB")
-            logging.info(f"  Peak: {max_allocated:.2f}GB")
+            if self.device.type == 'cuda':
+                allocated = torch.cuda.memory_allocated() / 1e9
+                reserved = torch.cuda.memory_reserved() / 1e9
+                max_allocated = torch.cuda.max_memory_allocated() / 1e9
+            
+                logging.info(f"Memory Usage at {step_info}:")
+                logging.info(f"  Allocated: {allocated:.2f}GB")
+                logging.info(f"  Reserved: {reserved:.2f}GB")
+                logging.info(f"  Peak: {max_allocated:.2f}GB")
+            elif self.device.type == 'mps':
+                # MPS memory tracking (limited API)
+                allocated = torch.mps.current_allocated_memory() / 1e9
+                logging.info(f"Memory Usage at {step_info}:")
+                logging.info(f"  Allocated: {allocated:.2f}GB")
+            else:
+                # CPU memory tracking
+                import psutil
+                process = psutil.Process()
+                memory_info = process.memory_info()
+                logging.info(f"Memory Usage at {step_info}:")
+                logging.info(f"  RSS: {memory_info.rss / 1e9:.2f}GB")
         except Exception as e:
             logging.debug(f"Could not log memory usage: {e}")
         

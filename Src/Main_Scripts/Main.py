@@ -90,16 +90,7 @@ except ImportError:
 
 
 def validate_precision_support(precision: str, device: torch.device) -> Tuple[bool, str]:
-    """
-    Validate if the requested precision is supported by the hardware.
-    
-    Args:
-        precision: Precision string (fp32, fp16, bf16, mixed_fp16, mixed_bf16)
-        device: PyTorch device to validate against
-        
-    Returns:
-        Tuple of (is_supported, error_message)
-    """
+    """Validate if the requested precision is supported by the hardware."""
     if precision in ['fp32', 'float32']:
         return True, ""
     
@@ -113,6 +104,14 @@ def validate_precision_support(precision: str, device: torch.device) -> Tuple[bo
                 return True, ""
             except:
                 return False, f"BF16 precision '{precision}' is not supported on this CPU. Use 'fp32' instead."
+    
+    if device.type == 'mps':
+        # MPS supports FP16 and FP32, but BF16 support is limited
+        if precision in ['fp16', 'mixed_fp16']:
+            return True, ""
+        elif precision in ['bf16', 'mixed_bf16']:
+            return False, f"BF16 precision '{precision}' is not fully supported on MPS. Use 'fp16' or 'fp32' instead."
+        return True, ""
     
     if device.type == 'cuda':
         capability = torch.cuda.get_device_capability(device)
@@ -193,7 +192,17 @@ def print_system_diagnostics():
         print(f"  Python Version: {system_info.get('python_version', 'Unknown')[:70]}")
         print(f"  PyTorch Version: {system_info.get('pytorch_version', 'Unknown')}")
         print(f"  CUDA Available: {system_info.get('cuda_available', False)}")
+        print(f"  MPS Available: {system_info.get('mps_available', False)}")
         
+        # Display primary acceleration method
+        if system_info.get('cuda_available'):
+            print(f"  Primary Accelerator: NVIDIA CUDA")
+        elif system_info.get('mps_available'):
+            print(f"  Primary Accelerator: Apple Silicon (MPS)")
+        else:
+            print(f"  Primary Accelerator: CPU Only")
+        
+        # CUDA-specific information
         if system_info.get('cuda_available'):
             print(f"  CUDA Version: {system_info.get('cuda_version', 'Unknown')}")
             print(f"  GPU Count: {system_info.get('gpu_count', 0)}")
@@ -211,6 +220,36 @@ def print_system_diagnostics():
                     print(f"    Total Memory: {props.total_memory / 1e9:.2f} GB")
                     print(f"    Multi-Processors: {props.multi_processor_count}")
         
+        # MPS-specific information
+        if system_info.get('mps_available'):
+            print(f"  MPS Device: {system_info.get('device_type', 'Apple Silicon')}")
+            print(f"  MPS Backend: {system_info.get('mps_backend', 'Metal Performance Shaders')}")
+            print(f"  Unified Memory Architecture: Yes")
+            
+            # Check PyTorch version for MPS compatibility
+            pytorch_version = system_info.get('pytorch_version', '0.0.0')
+            try:
+                major, minor = pytorch_version.split('.')[:2]
+                version_num = float(f"{major}.{minor}")
+                if version_num >= 2.0:
+                    print(f"  MPS Support Level: Full (PyTorch >= 2.0)")
+                elif version_num >= 1.12:
+                    print(f"  MPS Support Level: Beta (PyTorch >= 1.12)")
+                else:
+                    print(f"  MPS Support Level: Not Available (Need PyTorch >= 1.12)")
+            except:
+                print(f"  MPS Support Level: Unknown")
+            
+            # MPS capabilities and limitations
+            print(f"  MPS Capabilities:")
+            print(f"    - FP32 Training: ✓ Supported")
+            print(f"    - FP16 Training: ✓ Supported")
+            print(f"    - BF16 Training: ✗ Limited Support (use FP16 instead)")
+            print(f"    - Flash Attention: ✗ Not Supported (CUDA only)")
+            print(f"    - DeepSpeed: ✗ Not Supported (CUDA only)")
+            print(f"    - Gradient Checkpointing: ✓ Supported")
+            print(f"    - Mixed Precision: ✓ Supported (FP16)")
+        
         print_section("System Resources")
         if system_info.get('system_memory_gb'):
             total_mem = system_info.get('system_memory_gb', 0)
@@ -220,6 +259,13 @@ def print_system_diagnostics():
             print(f"  Total System Memory: {total_mem:.2f} GB")
             print(f"  Available Memory: {avail_mem:.2f} GB")
             print(f"  Used Memory: {used_mem:.2f} GB ({mem_percent:.1f}%)")
+            
+            # Add MPS-specific memory note
+            if system_info.get('mps_available'):
+                print(f"  Note: MPS uses unified memory (shared with system)")
+                recommended_mem = 16.0  # GB
+                if total_mem < recommended_mem:
+                    print(f"  ⚠️  Warning: {recommended_mem:.0f}GB+ recommended for MPS training")
         
         if system_info.get('cpu_count'):
             print(f"  CPU Cores: {system_info.get('cpu_count', 0)}")
@@ -250,9 +296,18 @@ def print_system_diagnostics():
         if issues:
             print("  Detected Issues:")
             for i, issue in enumerate(issues, 1):
-                print(f"    {i}. {issue}")
+                # Color code issues
+                if "MPS" in issue or "Apple Silicon" in issue:
+                    symbol = "ℹ️ "
+                elif "insufficient" in issue.lower() or "low" in issue.lower():
+                    symbol = "⚠️  "
+                elif "slow" in issue.lower() or "not available" in issue.lower():
+                    symbol = "⚠️  "
+                else:
+                    symbol = "   "
+                print(f"    {symbol}{i}. {issue}")
         else:
-            print("  All environment checks passed successfully")
+            print("  ✓ All environment checks passed successfully")
         
         # Check for required libraries
         print_section("Library Availability")
@@ -261,18 +316,129 @@ def print_system_diagnostics():
             'Training Infrastructure': TRAINING_INFRASTRUCTURE_AVAILABLE,
             'Utils': UTILS_AVAILABLE,
         }
+        
+        # Add MPS-specific library notes
+        if system_info.get('mps_available'):
+            libraries['Flash Attention (CUDA only)'] = False
+            libraries['MPS Fallback'] = True  # Always available with MPS
+        
         for lib, available in libraries.items():
             status = "Available" if available else "Not Available"
             symbol = "✓" if available else "✗"
+            
+            # Special handling for expected unavailability on MPS
+            if system_info.get('mps_available') and 'CUDA only' in lib:
+                symbol = "ℹ️ "
+                status = "Not Available (Expected on MPS)"
+            
             print(f"  {symbol} {lib}: {status}")
+        
+        # Device-specific recommendations
+        print_section("Hardware-Specific Recommendations")
+        
+        if system_info.get('mps_available'):
+            print("  Apple Silicon (MPS) Detected:")
+            print("    1. Use FP16 precision for optimal performance")
+            print("    2. Disable DeepSpeed (not supported)")
+            print("    3. Disable Flash Attention (CUDA only)")
+            print("    4. Start with smaller batch sizes")
+            print("    5. Monitor unified memory usage")
+            print("    6. Consider disabling model compilation initially")
+            print("    7. Enable MPS fallback for unsupported ops")
+            print("")
+            print("  Recommended Configuration:")
+            print("    config.precision = 'fp16'")
+            print("    config.use_deepspeed = False")
+            print("    config.use_flash_attention = False")
+            print("    config.compile = False")
+            print("    config.batch_size = 2  # Start small")
+            
+        elif system_info.get('cuda_available'):
+            gpu_memory = system_info.get('gpu_memory_gb', 0)
+            print("  NVIDIA CUDA Detected:")
+            
+            if gpu_memory >= 80:
+                print("    - High-end GPU detected (80GB+)")
+                print("    - Can train large models with full features")
+                print("    - Flash Attention recommended")
+                print("    - DeepSpeed ZeRO-3 for very large models")
+            elif gpu_memory >= 40:
+                print("    - Professional GPU detected (40GB+)")
+                print("    - Can train medium to large models")
+                print("    - Flash Attention recommended")
+                print("    - Consider DeepSpeed ZeRO-2/3")
+            elif gpu_memory >= 16:
+                print("    - Consumer high-end GPU detected (16GB+)")
+                print("    - Can train small to medium models")
+                print("    - Flash Attention recommended")
+                print("    - Consider gradient checkpointing")
+            elif gpu_memory >= 8:
+                print("    - Consumer mid-range GPU detected (8GB+)")
+                print("    - Limited to small models")
+                print("    - Gradient checkpointing essential")
+                print("    - Small batch sizes required")
+            else:
+                print("    - Limited GPU memory detected")
+                print("    - Consider CPU training or upgrading GPU")
+            
+            # Check compute capability
+            if torch.cuda.is_available():
+                compute_cap = torch.cuda.get_device_capability(0)
+                major = compute_cap[0]
+                
+                if major >= 8:
+                    print("    - Ampere or newer: BF16 supported")
+                    print("    - Recommended precision: mixed_bf16")
+                elif major >= 7:
+                    print("    - Volta/Turing: FP16 supported")
+                    print("    - Recommended precision: mixed_fp16")
+                else:
+                    print("    - Older architecture: FP32 only")
+                    print("    - Recommended precision: fp32")
+        else:
+            print("  CPU Only Detected:")
+            print("    - Training will be significantly slower")
+            print("    - Recommended for debugging only")
+            print("    - Consider cloud GPU instances for production")
+            print("    - Use smaller models and batch sizes")
+        
+        # Memory recommendations
+        print_section("Memory Recommendations")
+        if system_info.get('mps_available'):
+            total_mem = system_info.get('system_memory_gb', 0)
+            if total_mem >= 32:
+                print("  ✓ Excellent memory (32GB+) for MPS training")
+            elif total_mem >= 16:
+                print("  ✓ Good memory (16GB+) for MPS training")
+            elif total_mem >= 8:
+                print("  ⚠️  Limited memory (8GB) - use small models only")
+            else:
+                print("  ⚠️  Insufficient memory (<8GB) - not recommended")
+        elif system_info.get('cuda_available'):
+            gpu_mem = system_info.get('gpu_memory_gb', 0)
+            sys_mem = system_info.get('system_memory_gb', 0)
+            print(f"  GPU Memory: {gpu_mem:.1f}GB")
+            print(f"  System Memory: {sys_mem:.1f}GB")
+            if sys_mem < 16:
+                print("  ⚠️  Consider 16GB+ system RAM for optimal performance")
         
     else:
         print("  Utils not available - showing basic diagnostics only")
         print(f"  PyTorch Version: {torch.__version__}")
         print(f"  CUDA Available: {torch.cuda.is_available()}")
+        print(f"  MPS Available: {hasattr(torch.backends, 'mps') and torch.backends.mps.is_available()}")
+        
         if torch.cuda.is_available():
             print(f"  GPU: {torch.cuda.get_device_name(0)}")
             print(f"  GPU Memory: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            print(f"  Device: Apple Silicon with MPS")
+            try:
+                import psutil
+                total_mem = psutil.virtual_memory().total / 1e9
+                print(f"  Unified Memory: {total_mem:.2f} GB")
+            except:
+                print(f"  Unified Memory: Unknown")
     
     print("="*80)
 
@@ -677,6 +843,27 @@ def main():
     
     # =================================================
     # END CONFIGURATION SECTION
+
+    if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        print_banner("MPS COMPATIBILITY CHECK")
+        is_compatible, issues = validate_mps_compatibility(config)
+        
+        if not is_compatible:
+            print("MPS Compatibility Issues Detected:")
+            for i, issue in enumerate(issues, 1):
+                print(f"  {i}. {issue}")
+            
+            print("\nApplying automatic fixes...")
+            config.apply_device_optimizations('mps')
+            
+            # Re-validate
+            is_compatible, remaining_issues = validate_mps_compatibility(config)
+            if remaining_issues:
+                print("\nRemaining issues after auto-fix:")
+                for issue in remaining_issues:
+                    print(f"  ⚠️  {issue}")
+        else:
+            print("✓ Configuration is MPS compatible")
     
     # Setup logging
     logging.basicConfig(

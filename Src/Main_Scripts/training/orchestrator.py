@@ -803,6 +803,9 @@ class AdaptiveTrainingOrchestrator:
         
         # Fallback to basic adaptive trainer
         self.trainer = self._create_adaptive_trainer()
+        
+        if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            self.config.apply_device_optimizations('mps')
     
     def _enhance_trainer_with_adaptive_features(self):
         """Add adaptive features to existing trainer."""
