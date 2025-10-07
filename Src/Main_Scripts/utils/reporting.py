@@ -11,21 +11,23 @@ from utils.data_processing import validate_data_comprehensive
 def create_data_summary_report(data_paths: List[str], tokenizer, 
                               output_path: str = "data_summary_report.html"):
     """Create comprehensive HTML report of dataset analysis."""
+    
+    # FIXED: Use double curly braces {{ }} to escape braces in CSS
     html_content = """
     <!DOCTYPE html>
     <html>
     <head>
         <title>Dataset Analysis Report</title>
         <style>
-            body { font-family: Arial, sans-serif; margin: 20px; }
-            .section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
-            .metric { display: inline-block; margin: 10px; padding: 10px; background: #f5f5f5; border-radius: 3px; }
-            .error { color: red; }
-            .warning { color: orange; }
-            .success { color: green; }
-            table { border-collapse: collapse; width: 100%; }
-            th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-            th { background-color: #f2f2f2; }
+            body {{ font-family: Arial, sans-serif; margin: 20px; }}
+            .section {{ margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }}
+            .metric {{ display: inline-block; margin: 10px; padding: 10px; background: #f5f5f5; border-radius: 3px; }}
+            .error {{ color: red; }}
+            .warning {{ color: orange; }}
+            .success {{ color: green; }}
+            table {{ border-collapse: collapse; width: 100%; }}
+            th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+            th {{ background-color: #f2f2f2; }}
         </style>
     </head>
     <body>
@@ -117,6 +119,7 @@ def create_training_report(experiment_path: str, output_path: str = None):
             for line in f:
                 metrics.append(json.loads(line))
     
+    # FIXED: Use double curly braces {{ }} to escape braces in CSS
     html_content = f"""
     <!DOCTYPE html>
     <html>

@@ -729,7 +729,7 @@ def save_experiment_metadata(experiment_dir: Path, config, model, datasets_info)
     
     # Add model parameters
     total_params = sum(p.numel() for p in model.parameters())
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     metadata['model_parameters'] = {
         'total': total_params,
         'trainable': trainable_params,
