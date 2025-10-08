@@ -1,26 +1,3 @@
-# Copyright (c) 2025 MatN23. All rights reserved.
-# Licensed under the Custom License below.
-
-"""
-DeepSeek-Style Transformer with Advanced Optimizations
-======================================================
-
-This module implements a highly optimized transformer architecture with:
-- Mixed dense and Mixture-of-Experts (MoE) layers
-- Grouped Query Attention (GQA) with optional Flash Attention
-- Rotary Position Embeddings (RoPE)
-- SwiGLU activation functions
-- Advanced load balancing for MoE
-- Extensive optimization and monitoring capabilities
-
-Key Features:
-- 10-30% faster than baseline implementations
-- 15-25% lower memory usage
-- Superior numerical stability
-- Comprehensive profiling and analysis tools
-- Production-ready with extensive error handling
-"""
-
 import math
 import logging
 import time
@@ -440,32 +417,28 @@ def apply_rotary_pos_emb_optimized(
         For complex number representation [real, imag]:
         rotated = [real * cos - imag * sin, real * sin + imag * cos]
     """
-    # Reshape cos/sin for broadcasting: [1, 1, seq_len, head_dim]
-    cos = cos.unsqueeze(0).unsqueeze(0)
-    sin = sin.unsqueeze(0).unsqueeze(0)
-    
-    # Split into real and imaginary parts
+    # Split into real and imaginary parts FIRST (before reshaping cos/sin)
     q_real, q_imag = q.chunk(2, dim=-1)
     k_real, k_imag = k.chunk(2, dim=-1)
     
+    # Now reshape cos/sin to match the chunked tensors
+    # q_real shape: [batch, heads, seq_len, head_dim/2]
+    # We need cos/sin to be: [1, 1, seq_len, head_dim/2]
+    
+    # Slice cos/sin to match head_dim/2 (since we chunked)
+    half_dim = q_real.shape[-1]
+    cos = cos[..., :half_dim]
+    sin = sin[..., :half_dim]
+    
+    # Add batch and head dimensions for broadcasting: [1, 1, seq_len, head_dim/2]
+    cos = cos.unsqueeze(0).unsqueeze(0)
+    sin = sin.unsqueeze(0).unsqueeze(0)
+    
     # Apply rotation formula
-    # Ensure cos/sin match q_real/q_imag shapes
-    if cos.shape[-1] != q_real.shape[-1]:
-    # Adjust cos/sin to match q_real
-        cos = cos[..., :q_real.shape[-1]]
-        sin = sin[..., :q_real.shape[-1]]
-
-    assert q_real.shape == cos.shape, (
-        f"Shape mismatch in rotary embeddings: "
-        f"q_real={q_real.shape}, cos={cos.shape}, sin={sin.shape}"
-    )
-
-    # Apply rotation formula safely
     q_rotated = torch.cat([
         q_real * cos - q_imag * sin,
         q_real * sin + q_imag * cos
     ], dim=-1)
-
     
     k_rotated = torch.cat([
         k_real * cos - k_imag * sin,
@@ -1332,9 +1305,7 @@ class TransformerBlock(nn.Module):
             ffn_out = self.ffn(self.post_attn_norm(x))
             x = x + ffn_out
             return x, None
-
-
-# ============================================================================
+        # ============================================================================
 # MAIN MODEL
 # ============================================================================
 
@@ -2156,4 +2127,25 @@ if __name__ == "__main__":
     print("="*80)
     print("\nThe model is ready for training with your existing scripts!")
     print("All function names and signatures are preserved for compatibility.")
-    print("="*80 + "\n")
+    print("="*80 + "\n")# Copyright (c) 2025 MatN23. All rights reserved.
+# Licensed under the Custom License below.
+
+"""
+DeepSeek-Style Transformer with Advanced Optimizations
+======================================================
+
+This module implements a highly optimized transformer architecture with:
+- Mixed dense and Mixture-of-Experts (MoE) layers
+- Grouped Query Attention (GQA) with optional Flash Attention
+- Rotary Position Embeddings (RoPE)
+- SwiGLU activation functions
+- Advanced load balancing for MoE
+- Extensive optimization and monitoring capabilities
+
+Key Features:
+- 10-30% faster than baseline implementations
+- 15-25% lower memory usage
+- Superior numerical stability
+- Comprehensive profiling and analysis tools
+- Production-ready with extensive error handling
+"""
