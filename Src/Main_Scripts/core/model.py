@@ -1,3 +1,26 @@
+# Copyright (c) 2025 MatN23. All rights reserved.
+# Licensed under the Custom License below.
+
+"""
+DeepSeek-Style Transformer with Advanced Optimizations
+======================================================
+
+This module implements a highly optimized transformer architecture with:
+- Mixed dense and Mixture-of-Experts (MoE) layers
+- Grouped Query Attention (GQA) with optional Flash Attention
+- Rotary Position Embeddings (RoPE)
+- SwiGLU activation functions
+- Advanced load balancing for MoE
+- Extensive optimization and monitoring capabilities
+
+Key Features:
+- 10-30% faster than baseline implementations
+- 15-25% lower memory usage
+- Superior numerical stability
+- Comprehensive profiling and analysis tools
+- Production-ready with extensive error handling
+"""
+
 import math
 import logging
 import time
@@ -2127,25 +2150,4 @@ if __name__ == "__main__":
     print("="*80)
     print("\nThe model is ready for training with your existing scripts!")
     print("All function names and signatures are preserved for compatibility.")
-    print("="*80 + "\n")# Copyright (c) 2025 MatN23. All rights reserved.
-# Licensed under the Custom License below.
-
-"""
-DeepSeek-Style Transformer with Advanced Optimizations
-======================================================
-
-This module implements a highly optimized transformer architecture with:
-- Mixed dense and Mixture-of-Experts (MoE) layers
-- Grouped Query Attention (GQA) with optional Flash Attention
-- Rotary Position Embeddings (RoPE)
-- SwiGLU activation functions
-- Advanced load balancing for MoE
-- Extensive optimization and monitoring capabilities
-
-Key Features:
-- 10-30% faster than baseline implementations
-- 15-25% lower memory usage
-- Superior numerical stability
-- Comprehensive profiling and analysis tools
-- Production-ready with extensive error handling
-"""
+    print("="*80 + "\n")
