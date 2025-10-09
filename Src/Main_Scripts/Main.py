@@ -1016,6 +1016,19 @@ def main():
             print("Using training data for evaluation")
             eval_dataset = train_dataset
         
+        print("\n" + "="*80)
+        print("DATASET & TRAINING CALCULATION VERIFICATION")
+        print("="*80)
+        print(f"Dataset size: {len(train_dataset):,} conversations")
+        print(f"Batch size: {config.batch_size}")
+        print(f"Expected batches per epoch: {len(train_dataset) / config.batch_size:.2f}")
+        print(f"Gradient accumulation steps: {config.gradient_accumulation_steps}")
+        print(f"Expected optimizer steps per epoch: {len(train_dataset) / (config.batch_size * config.gradient_accumulation_steps):.2f}")
+        print(f"Effective batch size: {config.batch_size * config.gradient_accumulation_steps}")
+        print(f"Total epochs: {config.num_epochs}")
+        print(f"Total optimizer steps for training: {(len(train_dataset) / (config.batch_size * config.gradient_accumulation_steps)) * config.num_epochs:.0f}")
+        print("="*80 + "\n")
+        
         # Step 8: Estimate training time (ADVANCED)
         if advanced_features.get('estimate_training_time'):
             estimate_and_display_training_time(config, len(train_dataset))
