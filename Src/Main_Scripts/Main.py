@@ -24,6 +24,12 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import OneCycleLR, CosineAnnealingLR
 from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
+import warnings
+import os
+
+# Suppress warnings
+warnings.filterwarnings('ignore')
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 # Add the current directory to Python path for imports
 sys.path.insert(0, str(Path(__file__).parent))
