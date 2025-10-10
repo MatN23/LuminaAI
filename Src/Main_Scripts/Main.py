@@ -778,6 +778,7 @@ def main():
     # Training parameters
     training_params = {
         'use_moe': True,
+        'use_mod': True,
         'num_epochs': 20,
         'learning_rate': 1e-4,
         'min_lr': 1e-6,
@@ -801,7 +802,7 @@ def main():
     data_params = {
         'train_data_path': 'oasst1_data/oasst1_train.jsonl',
         'eval_data_path': 'oasst1_data/oasst1_train.jsonl',
-        'raw_oasst_path': 'raw_data/oasst1.jsonl',  # Optional: raw OASST data to process
+        'raw_oasst_path': None,  # Optional: raw OASST data to process
         'max_conversations_per_file': 50000,
     }
     

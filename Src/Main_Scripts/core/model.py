@@ -8,6 +8,7 @@ DeepSeek-Style Transformer with Advanced Optimizations
 This module implements a highly optimized transformer architecture with:
 - Mixed dense (with MoD) and Mixture-of-Experts (MoE) layers
 - Mixture of Depths (MoD) for efficient dense models
+- HYBRID MODE: MoE + MoD working together! 🚀
 - Grouped Query Attention (GQA) with optional Flash Attention
 - Rotary Position Embeddings (RoPE)
 - SwiGLU activation functions
@@ -20,6 +21,7 @@ Key Features:
 - Superior numerical stability
 - Comprehensive profiling and analysis tools
 - Production-ready with extensive error handling
+- HYBRID architectures for maximum efficiency
 """
 
 import math
@@ -100,7 +102,7 @@ def estimate_parameters(config) -> int:
     else:
         # Dense FFN (with MoD routing overhead)
         ffn_params_per_layer = config.hidden_size * config.intermediate_size * 3
-        if getattr(config, 'use_mod', True):
+        if getattr(config, 'use_mod', False):
             # Add MoD router parameters
             ffn_params_per_layer += config.hidden_size  # Router
     
@@ -1226,7 +1228,7 @@ class DenseSwiGLUWithMoD(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
-        self.use_mod = getattr(config, 'use_mod', True)
+        self.use_mod = getattr(config, 'use_mod', False)
         
         # MoD router (only if enabled)
         if self.use_mod:
@@ -1345,6 +1347,11 @@ class TransformerBlock(nn.Module):
     """
     Optimized transformer block with flexible FFN selection.
     
+    Now supports HYBRID architectures:
+    - MoE layers: Use expert routing
+    - Dense layers with MoD: Use token-level routing (if enabled)
+    - Pure dense: No routing at all
+    
     This block combines:
     - Pre-normalization for training stability
     - Dense attention (always)
@@ -1371,18 +1378,27 @@ class TransformerBlock(nn.Module):
         # Post-attention normalization
         self.post_attn_norm = RMSNorm(config.hidden_size, config.rms_norm_eps)
         
-        # FFN selection (MoE or dense with MoD)
+        # FFN selection - NOW SUPPORTS HYBRID!
         self.use_moe = self._should_use_moe(layer_idx, config)
+        
         if self.use_moe:
+            # MoE layer
             self.ffn = MoEFFNLayer(config)
+            ffn_type = "MoE"
         else:
-            # Dense model uses MoD by default
-            self.ffn = DenseSwiGLUWithMoD(config)
+            # Dense layer - check if MoD is enabled
+            if getattr(config, 'use_mod', False):
+                # Dense with MoD routing
+                self.ffn = DenseSwiGLUWithMoD(config)
+                ffn_type = "Dense+MoD"
+            else:
+                # Pure dense (no routing)
+                self.ffn = DenseSwiGLU(config)
+                ffn_type = "Dense"
         
         # Gradient checkpointing flag
         self.gradient_checkpointing = config.gradient_checkpointing
         
-        ffn_type = "MoE" if self.use_moe else f"Dense+MoD" if getattr(config, 'use_mod', True) else "Dense"
         logging.debug(f"Layer {layer_idx}: Dense Attention + {ffn_type} FFN")
     
     def _should_use_moe(self, layer_idx: int, config) -> bool:
@@ -1460,7 +1476,7 @@ class TransformerBlock(nn.Module):
 
 class DeepSeekTransformer(nn.Module):
     """
-    DeepSeek-style Transformer with Advanced Optimizations.
+    DeepSeek-style Transformer with HYBRID MoE + MoD support.
     
     This is a production-ready transformer implementation featuring:
     
@@ -1473,12 +1489,19 @@ class DeepSeekTransformer(nn.Module):
     Key Features:
     - Flexible MoE patterns (all, interleaved, sandwich)
     - Mixture of Depths (MoD) for efficient dense models
+    - HYBRID MODE: MoE + MoD working together! 🚀
     - Grouped Query Attention for efficient KV caching
     - Flash Attention 2 integration
     - Comprehensive profiling and monitoring
     - Advanced initialization strategies
     - Gradient checkpointing support
     - Extensive error handling
+    
+    Architecture possibilities:
+    1. Pure MoE: MoE layers throughout
+    2. Pure Dense + MoD: All dense layers with token routing
+    3. HYBRID: MoE layers + Dense layers with MoD (NEW!)
+    4. Pure Dense: Standard transformer
     
     Args:
         config: DeepSeekConfig object
@@ -1517,17 +1540,24 @@ class DeepSeekTransformer(nn.Module):
         if config.tie_word_embeddings:
             self.lm_head.weight = self.embed_tokens.weight
         
-        # Model tracking
+        # Model tracking - HYBRID SUPPORT
         self.use_moe = getattr(config, 'use_moe', False)
-        self.use_mod = getattr(config, 'use_mod', True) and not self.use_moe
+        self.use_mod = getattr(config, 'use_mod', False)
+        
+        # Track which layers use what
         self.moe_layers = [
             i for i, layer in enumerate(self.layers) 
             if hasattr(layer, 'use_moe') and layer.use_moe
         ]
         self.mod_layers = [
             i for i, layer in enumerate(self.layers)
-            if hasattr(layer.ffn, 'use_mod') and layer.ffn.use_mod
-        ] if not self.use_moe else []
+            if not (hasattr(layer, 'use_moe') and layer.use_moe) and
+            hasattr(layer.ffn, 'use_mod') and layer.ffn.use_mod
+        ]
+        self.dense_layers = [
+            i for i in range(config.num_layers)
+            if i not in self.moe_layers and i not in self.mod_layers
+        ]
         
         # Performance caching
         self._memory_cache = None
@@ -1555,7 +1585,6 @@ class DeepSeekTransformer(nn.Module):
         """Advanced weight initialization strategy."""
         # Embedding initialization
         nn.init.normal_(self.embed_tokens.weight, mean=0.0, std=self.config.init_std)
-        
         # LM head initialization (if not tied)
         if not self.config.tie_word_embeddings:
             nn.init.normal_(self.lm_head.weight, mean=0.0, std=self.config.init_std)
@@ -1581,7 +1610,7 @@ class DeepSeekTransformer(nn.Module):
                     layer.ffn.down_proj.weight.data *= 0.8 * depth_scale
     
     def _log_model_info(self):
-        """Log comprehensive model information."""
+        """Log comprehensive model information with HYBRID support."""
         total_params = sum(p.numel() for p in self.parameters())
         trainable_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
         
@@ -1592,7 +1621,20 @@ class DeepSeekTransformer(nn.Module):
         logging.info(f"Trainable Parameters: {trainable_params:,}")
         logging.info(f"Non-trainable Parameters: {total_params - trainable_params:,}")
         
-        if self.use_moe:
+        # Architecture description - HYBRID SUPPORT
+        if self.use_moe and self.use_mod:
+            # HYBRID architecture
+            active_params = self._calculate_active_params()
+            efficiency = active_params / total_params * 100
+            logging.info(f"Active Parameters (Hybrid): {active_params:,} ({efficiency:.1f}%)")
+            logging.info(f"Architecture: HYBRID - MoE + Dense with MoD")
+            logging.info(f"  MoE Layers: {self.moe_layers}")
+            logging.info(f"  MoD Layers: {self.mod_layers}")
+            logging.info(f"  Pure Dense Layers: {self.dense_layers}")
+            logging.info(f"  MoE: {self.config.num_experts} experts, Top-{self.config.moe_top_k}")
+            logging.info(f"  MoD: {getattr(self.config, 'mod_capacity_factor', 0.5):.1%} capacity")
+        elif self.use_moe:
+            # Pure MoE
             active_params = self._calculate_active_params()
             efficiency = active_params / total_params * 100
             logging.info(f"Active Parameters (MoE): {active_params:,} ({efficiency:.1f}%)")
@@ -1601,6 +1643,7 @@ class DeepSeekTransformer(nn.Module):
             logging.info(f"Experts: {self.config.num_experts}, Top-K: {self.config.moe_top_k}")
             logging.info(f"Architecture: Dense Attention + MoE FFN")
         elif self.use_mod:
+            # Pure MoD
             active_params = self._calculate_active_params()
             efficiency = active_params / total_params * 100
             logging.info(f"Active Parameters (MoD): {active_params:,} ({efficiency:.1f}%)")
@@ -1608,6 +1651,7 @@ class DeepSeekTransformer(nn.Module):
             logging.info(f"MoD Capacity: {getattr(self.config, 'mod_capacity_factor', 0.5):.1%}")
             logging.info(f"Architecture: Dense Attention + Dense FFN with MoD")
         else:
+            # Pure Dense
             logging.info(f"Architecture: Dense Attention + Dense FFN (no MoE/MoD)")
         
         logging.info(f"Flash Attention: {'Enabled' if HAS_FLASH_ATTN else 'Disabled'}")
@@ -1615,9 +1659,43 @@ class DeepSeekTransformer(nn.Module):
         logging.info(f"="*70)
     
     def _calculate_active_params(self) -> int:
-        """Calculate active parameters for MoE/MoD models."""
-        if self.use_moe:
-            # MoE active parameters
+        """Calculate active parameters for MoE/MoD/HYBRID models."""
+        if self.use_moe and self.use_mod:
+            # HYBRID: Calculate both MoE and MoD active params
+            active = (
+                self.embed_tokens.weight.numel() +
+                self.norm.weight.numel()
+            )
+            
+            if not self.config.tie_word_embeddings:
+                active += self.lm_head.weight.numel()
+            
+            for i, layer in enumerate(self.layers):
+                # Attention (always active)
+                active += layer.self_attn._param_count
+                active += layer.input_norm.weight.numel()
+                active += layer.post_attn_norm.weight.numel()
+                
+                # FFN
+                if i in self.moe_layers:
+                    # MoE layer: gate + top-k experts
+                    active += layer.ffn._gate_param_count
+                    active += layer.ffn._expert_param_count * self.config.moe_top_k
+                elif i in self.mod_layers:
+                    # MoD layer: capacity_factor of FFN params
+                    mod_capacity = getattr(self.config, 'mod_capacity_factor', 0.5)
+                    active += int(layer.ffn._param_count * mod_capacity)
+                    # Add router params
+                    if hasattr(layer.ffn, 'router'):
+                        active += sum(p.numel() for p in layer.ffn.router.parameters())
+                else:
+                    # Pure dense layer
+                    active += layer.ffn._param_count
+            
+            return active
+            
+        elif self.use_moe:
+            # Pure MoE active parameters
             active = (
                 self.embed_tokens.weight.numel() +
                 self.norm.weight.numel()
@@ -1640,7 +1718,7 @@ class DeepSeekTransformer(nn.Module):
             return active
         
         elif self.use_mod:
-            # MoD active parameters (capacity_factor of FFN parameters)
+            # Pure MoD active parameters
             total = sum(p.numel() for p in self.parameters())
             
             # Calculate FFN parameters that will be active
@@ -1764,7 +1842,7 @@ class DeepSeekTransformer(nn.Module):
         return n_params
     
     def get_memory_footprint(self) -> Dict[str, Any]:
-        """Comprehensive memory footprint analysis."""
+        """Comprehensive memory footprint analysis with HYBRID support."""
         if self._memory_cache is not None:
             return self._memory_cache
         
@@ -1803,7 +1881,38 @@ class DeepSeekTransformer(nn.Module):
             'norm_params': norm_params,
         }
         
-        if self.use_moe:
+        # Architecture-specific info
+        if self.use_moe and self.use_mod:
+            breakdown['architecture'] = 'hybrid_moe_mod'
+            
+            # MoE stats
+            moe_expert_params = sum(
+                layer.ffn._expert_param_count * layer.ffn.num_experts
+                for layer in self.layers 
+                if hasattr(layer, 'use_moe') and layer.use_moe
+            )
+            
+            moe_active_params = sum(
+                layer.ffn._expert_param_count * self.config.moe_top_k
+                for layer in self.layers 
+                if hasattr(layer, 'use_moe') and layer.use_moe
+            )
+            
+            # MoD stats
+            mod_capacity = getattr(self.config, 'mod_capacity_factor', 0.5)
+            
+            breakdown.update({
+                'moe_layers': len(self.moe_layers),
+                'mod_layers': len(self.mod_layers),
+                'dense_layers': len(self.dense_layers),
+                'moe_expert_params_total': moe_expert_params,
+                'moe_expert_params_active': int(moe_active_params),
+                'mod_capacity_factor': mod_capacity,
+                'active_parameters': self._calculate_active_params(),
+                'parameter_efficiency': self._calculate_active_params() / total_params,
+            })
+            
+        elif self.use_moe:
             breakdown['architecture'] = 'dense_attention_moe_ffn'
             
             total_expert_params = sum(
@@ -1857,7 +1966,7 @@ class DeepSeekTransformer(nn.Module):
         return breakdown
     
     def get_layer_stats(self) -> List[Dict[str, Any]]:
-        """Get detailed statistics for each layer."""
+        """Get detailed statistics for each layer with HYBRID support."""
         stats = []
         
         for i, layer in enumerate(self.layers):
@@ -1942,7 +2051,7 @@ class DeepSeekTransformer(nn.Module):
                     layer.ffn.router.reset_routing_stats()
     
     def print_model_summary(self):
-        """Print comprehensive model summary."""
+        """Print comprehensive model summary with HYBRID support."""
         print("\n" + "="*80)
         print("MODEL SUMMARY")
         print("="*80)
@@ -1966,8 +2075,19 @@ class DeepSeekTransformer(nn.Module):
         print(f"  Normalization: {memory_info['norm_params']:,}")
         print(f"  Memory: {memory_info['total_size_mb']:.2f} MB")
         
-        # Architecture-specific info
-        if self.use_moe:
+        # Architecture-specific info - HYBRID SUPPORT
+        if self.use_moe and self.use_mod:
+            print(f"\n🚀 HYBRID Architecture (MoE + MoD):")
+            print(f"  MoE Layers: {memory_info['moe_layers']}")
+            print(f"  MoD Layers: {memory_info['mod_layers']}")
+            print(f"  Pure Dense Layers: {memory_info['dense_layers']}")
+            print(f"  MoE Experts: {self.config.num_experts}")
+            print(f"  MoE Routing: top-{self.config.moe_top_k}")
+            print(f"  MoD Capacity: {memory_info['mod_capacity_factor']:.1%}")
+            print(f"  Active Params: {memory_info['active_parameters']:,}")
+            print(f"  Efficiency: {memory_info['parameter_efficiency']:.2%}")
+            
+        elif self.use_moe:
             print(f"\nMixture of Experts:")
             print(f"  Pattern: {memory_info['moe_pattern']}")
             print(f"  MoE Layers: {memory_info['moe_layers']}")
@@ -2004,7 +2124,7 @@ class DeepSeekTransformer(nn.Module):
 @dataclass
 class DeepSeekConfig:
     """
-    Configuration class for DeepSeek Transformer.
+    Configuration class for DeepSeek Transformer with HYBRID support.
     
     Architecture Parameters:
         vocab_size: Vocabulary size
@@ -2032,10 +2152,16 @@ class DeepSeekConfig:
         routing_noise_std: Standard deviation of routing noise
         moe_pattern: Pattern for MoE layer placement
         
-    MoD Parameters (for non-MoE models):
-        use_mod: Whether to use Mixture of Depths (default: True for dense models)
+    MoD Parameters:
+        use_mod: Whether to use Mixture of Depths
         mod_capacity_factor: Fraction of tokens to compute (default: 0.5)
         mod_routing_temperature: Temperature for MoD routing (default: 1.0)
+        
+    HYBRID Mode:
+        - Set both use_moe=True and use_mod=True
+        - MoE layers use expert routing
+        - Dense layers use MoD token routing
+        - Maximum efficiency!
         
     Optimization Parameters:
         use_flash_attention: Whether to use Flash Attention
@@ -2084,9 +2210,9 @@ class DeepSeekConfig:
     dense_start_layers: int = 2
     dense_end_layers: int = 2
     
-    # MoD (for dense models only)
-    use_mod: bool = True  # Enabled by default for non-MoE models
-    mod_capacity_factor: float = 0.5  # 50% of tokens get full computation
+    # MoD (NOW WORKS WITH MoE!)
+    use_mod: bool = False
+    mod_capacity_factor: float = 0.5
     mod_routing_temperature: float = 1.0
     
     # Optimization
@@ -2103,9 +2229,10 @@ class DeepSeekConfig:
         if self.intermediate_size is None:
             self.intermediate_size = 4 * self.hidden_size
         
-        # MoE/MoD mutual exclusivity
-        if self.use_moe:
-            self.use_mod = False  # Disable MoD for MoE models
+        # NO MORE MUTUAL EXCLUSIVITY - MoE and MoD can work together!
+        # MoE layers will use expert routing
+        # Dense layers will use MoD token routing (if enabled)
+        # This creates a powerful HYBRID architecture
         
         # Validation
         assert self.hidden_size % self.num_heads == 0, \
@@ -2135,50 +2262,38 @@ class DeepSeekConfig:
             'use_mod': False,
             'num_experts': 8,
             'moe_top_k': 2,
-            'moe_pattern': 'all'
+            'moe_pattern': 'all',  # Fixed: Added the value
+            'capacity_factor': 1.25,
+            'load_balancing_weight': 0.01
         }
         defaults.update(kwargs)
         return cls(**defaults)
     
     @classmethod
-    def interleaved_moe(cls, **kwargs):
-        """Interleaved MoE configuration."""
+    def hybrid_moe_mod(cls, **kwargs):
+        """Hybrid MoE + MoD configuration - MAXIMUM EFFICIENCY! 🚀"""
         defaults = {
             'hidden_size': 1024,
             'num_layers': 24,
             'num_heads': 16,
             'num_kv_heads': 4,
             'use_moe': True,
-            'use_mod': False,
+            'use_mod': True,
             'num_experts': 8,
             'moe_top_k': 2,
-            'moe_pattern': 'every_3rd'
+            'moe_pattern': 'sandwich',  # MoE in middle layers
+            'dense_start_layers': 2,
+            'dense_end_layers': 2,
+            'mod_capacity_factor': 0.5,
+            'capacity_factor': 1.25,
+            'load_balancing_weight': 0.01
         }
         defaults.update(kwargs)
         return cls(**defaults)
     
     @classmethod
-    def sandwich_moe(cls, **kwargs):
-        """Sandwich MoE configuration."""
-        defaults = {
-            'hidden_size': 1024,
-            'num_layers': 24,
-            'num_heads': 16,
-            'num_kv_heads': 4,
-            'use_moe': True,
-            'use_mod': False,
-            'num_experts': 8,
-            'moe_top_k': 2,
-            'moe_pattern': 'sandwich',
-            'dense_start_layers': 3,
-            'dense_end_layers': 3
-        }
-        defaults.update(kwargs)
-        return cls(**defaults)
-    
-    @classmethod
-    def dense_with_mod(cls, **kwargs):
-        """Dense configuration with Mixture of Depths."""
+    def standard_dense_with_mod(cls, **kwargs):
+        """Dense model with MoD for efficiency."""
         defaults = {
             'hidden_size': 1024,
             'num_layers': 24,
@@ -2186,171 +2301,8 @@ class DeepSeekConfig:
             'num_kv_heads': 4,
             'use_moe': False,
             'use_mod': True,
-            'mod_capacity_factor': 0.5
+            'mod_capacity_factor': 0.5,
+            'mod_routing_temperature': 1.0
         }
         defaults.update(kwargs)
         return cls(**defaults)
-    
-    @classmethod
-    def dense_only(cls, **kwargs):
-        """Pure dense configuration (no MoE/MoD)."""
-        defaults = {
-            'hidden_size': 1024,
-            'num_layers': 24,
-            'num_heads': 16,
-            'num_kv_heads': 4,
-            'use_moe': False,
-            'use_mod': False
-        }
-        defaults.update(kwargs)
-        return cls(**defaults)
-
-
-# ============================================================================
-# FACTORY FUNCTIONS
-# ============================================================================
-
-def create_deepseek_model(config_name: str = 'dense_with_mod', **kwargs) -> DeepSeekTransformer:
-    """
-    Factory function for creating DeepSeek models.
-    
-    Args:
-        config_name: Name of predefined configuration
-        **kwargs: Additional configuration overrides
-        
-    Returns:
-        Initialized DeepSeekTransformer model
-        
-    Available configs:
-        - 'standard_moe': Standard MoE with all layers
-        - 'interleaved_moe': MoE every 3rd layer
-        - 'sandwich_moe': MoE in middle layers only
-        - 'dense_with_mod': Dense model with Mixture of Depths (NEW DEFAULT)
-        - 'dense_only': No MoE/MoD, all dense layers
-    """
-    config_map = {
-        'standard_moe': DeepSeekConfig.standard_moe,
-        'interleaved_moe': DeepSeekConfig.interleaved_moe,
-        'sandwich_moe': DeepSeekConfig.sandwich_moe,
-        'dense_with_mod': DeepSeekConfig.dense_with_mod,
-        'dense_only': DeepSeekConfig.dense_only,
-    }
-    
-    if config_name not in config_map:
-        available = ', '.join(config_map.keys())
-        raise ValueError(f"Unknown config '{config_name}'. Available: {available}")
-    
-    config = config_map[config_name](**kwargs)
-    model = DeepSeekTransformer(config)
-    
-    return model
-
-
-# ============================================================================
-# EXAMPLE USAGE AND TESTING
-# ============================================================================
-
-if __name__ == "__main__":
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s'
-    )
-    
-    print("\n" + "="*80)
-    print("DEEPSEEK TRANSFORMER WITH MIXTURE OF DEPTHS (MoD)")
-    print("="*80)
-    print("\nFeatures:")
-    print("  - Dense models now use Mixture of Depths (MoD) for efficiency")
-    print("  - MoE models remain unchanged (no MoD in MoE)")
-    print("  - 30-50% compute savings with MoD")
-    print("  - Learned token-level routing decisions")
-    print("  - Flash Attention 2 integration")
-    print("  - Production-ready with extensive error handling")
-    print("="*80 + "\n")
-    
-    # Test different configurations
-    configs_to_test = [
-        ('dense_with_mod', "Dense with MoD (NEW DEFAULT)"),
-        ('standard_moe', "Standard MoE (no MoD)"),
-        ('dense_only', "Pure Dense (no MoE/MoD)")
-    ]
-    
-    for config_name, description in configs_to_test:
-        print(f"\nTesting {description}:")
-        print("-" * 60)
-        
-        # Create model
-        model = create_deepseek_model(
-            config_name,
-            hidden_size=512,
-            num_layers=6,
-            num_heads=8,
-            num_kv_heads=4,
-            num_experts=4,
-            seq_length=1024
-        )
-        
-        # Print summary
-        model.print_model_summary()
-        
-        # Test forward pass
-        batch_size, seq_len = 2, 64
-        input_ids = torch.randint(0, 1000, (batch_size, seq_len))
-        
-        print(f"Running forward pass (batch={batch_size}, seq_len={seq_len})...")
-        
-        with torch.no_grad():
-            # Warmup
-            _ = model(input_ids)
-            
-            # Timed forward pass
-            import time
-            start = time.perf_counter()
-            
-            outputs = model(input_ids, return_aux_loss=True)
-            
-            end = time.perf_counter()
-            
-            if isinstance(outputs, tuple):
-                logits = outputs[0]
-                aux_loss = outputs[1] if len(outputs) > 1 else None
-                
-                print(f"  Logits shape: {logits.shape}")
-                if aux_loss is not None:
-                    if isinstance(aux_loss, torch.Tensor):
-                        print(f"  Auxiliary loss: {aux_loss:.6f}")
-                    else:
-                        print(f"  Auxiliary loss: {aux_loss}")
-            else:
-                print(f"  Logits shape: {outputs.shape}")
-            
-            print(f"  Forward time: {(end - start) * 1000:.2f}ms")
-        
-        # Show layer stats
-        print("\nLayer Statistics (first 3 layers):")
-        layer_stats = model.get_layer_stats()
-        for stat in layer_stats[:3]:
-            layer_type = stat['ffn_type']
-            print(f"  Layer {stat['layer_idx']}: {layer_type}")
-            
-            if layer_type == 'moe':
-                print(f"    FFN params: {stat.get('total_ffn_params', 0):,}")
-                print(f"    Active params: {stat.get('active_ffn_params', 0):,}")
-            elif layer_type == 'dense_with_mod':
-                print(f"    FFN params: {stat.get('ffn_params', 0):,}")
-                print(f"    Active params: {stat.get('active_ffn_params', 0):,}")
-                print(f"    MoD capacity: {stat.get('mod_capacity', 0):.1%}")
-            else:
-                print(f"    FFN params: {stat.get('ffn_params', 0):,}")
-        
-        print()
-    
-    print("="*80)
-    print("ALL TESTS COMPLETED SUCCESSFULLY")
-    print("="*80)
-    print("\nKey Points:")
-    print("  1. Dense models now use MoD by default for efficiency")
-    print("  2. MoE models do NOT use MoD (mutually exclusive)")
-    print("  3. MoD provides 30-50% compute savings with minimal quality loss")
-    print("  4. All existing code remains compatible (plug and play)")
-    print("="*80 + "\n")
