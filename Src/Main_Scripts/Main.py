@@ -762,6 +762,60 @@ def save_experiment_metadata(experiment_dir: Path, config, model, datasets_info)
         json.dump(metadata, f, indent=2, default=str)
     print(f"  Experiment metadata saved: {metadata_path}")
 
+    # Add this to Main.py to fix multi-dataset support
+
+def setup_multi_dataset_training(config, data_params):
+    """
+    Setup training with multi-dataset support.
+    
+    This replaces the direct data_path usage with MultiDatasetManager.
+    """
+    from core.dataset import MultiDatasetManager
+    
+    print_section("Multi-Dataset Setup")
+    
+    # Initialize dataset manager
+    dataset_manager = MultiDatasetManager(data_params)
+    
+    # Validate all datasets
+    if data_params.get('validate_datasets', True):
+        print("Validating datasets...")
+        validation_stats = dataset_manager.validate_all_datasets()
+        
+        if validation_stats.get('validation_errors'):
+            print("Validation errors found:")
+            for error in validation_stats['validation_errors']:
+                print(f"  ❌ {error}")
+        
+        print(f"\nTraining datasets: {len(validation_stats.get('train_datasets', []))}")
+        for ds in validation_stats.get('train_datasets', []):
+            print(f"  - {Path(ds['path']).name}: {ds['conversations']:,} conversations ({ds['size_mb']:.1f} MB)")
+        
+        print(f"\nEvaluation datasets: {len(validation_stats.get('eval_datasets', []))}")
+        for ds in validation_stats.get('eval_datasets', []):
+            print(f"  - {Path(ds['path']).name}: {ds['conversations']:,} conversations ({ds['size_mb']:.1f} MB)")
+        
+        print(f"\nTotal training conversations: {validation_stats.get('total_train_conversations', 0):,}")
+        print(f"Total evaluation conversations: {validation_stats.get('total_eval_conversations', 0):,}")
+    
+    # Prepare combined datasets
+    print("\nPreparing combined training data...")
+    train_data_path = dataset_manager.prepare_training_data(
+        force_rebuild=data_params.get('force_rebuild', False)
+    )
+    print(f"Training data ready: {train_data_path}")
+    
+    eval_data_path = None
+    if dataset_manager.eval_paths:
+        print("\nPreparing combined evaluation data...")
+        eval_data_path = dataset_manager.prepare_evaluation_data()
+        print(f"Evaluation data ready: {eval_data_path}")
+    
+    # Update config with final paths
+    config.train_data_path = train_data_path
+    config.eval_data_path = eval_data_path if eval_data_path else train_data_path
+    
+    return train_data_path, eval_data_path
 
 def main():
     """Main training function with advanced features and comprehensive logging."""
@@ -1026,23 +1080,46 @@ def main():
         # Step 7: Setup datasets
         print_banner("STEP 7: SETTING UP DATASETS")
         
-        train_dataset = ConversationDataset(str(train_data_path), tokenizer, config, "train")
-        if not train_data_path.exists():
-            print(f"ERROR: Training data not found: {train_data_path}")
+        # Use MultiDatasetManager if multiple datasets are specified
+        has_multiple_train = isinstance(data_params.get('train_data_paths'), list) and len(data_params.get('train_data_paths', [])) > 1
+        has_multiple_eval = isinstance(data_params.get('eval_data_paths'), list) and len(data_params.get('eval_data_paths', [])) > 1
+        
+        if has_multiple_train or has_multiple_eval:
+            print("Using MultiDatasetManager for multiple datasets")
+            train_data_path, eval_data_path = setup_multi_dataset_training(config, data_params)
+        else:
+            # Single dataset - use original logic
+            print("Using single dataset mode")
+            train_data_path = Path(data_params.get('train_data_path') or data_params.get('train_data_paths', [''])[0])
+            eval_data_path = Path(data_params.get('eval_data_path') or data_params.get('eval_data_paths', [''])[0])
+            
+            # Update config
+            config.train_data_path = str(train_data_path)
+            config.eval_data_path = str(eval_data_path) if eval_data_path.exists() else str(train_data_path)
+        
+        # Validate paths exist
+        train_path_obj = Path(config.train_data_path)
+        if not train_path_obj.exists():
+            print(f"ERROR: Training data not found: {train_path_obj}")
             return 1
         
-        print(f"Loading training dataset from: {train_data_path}")
+        print(f"\nFinal dataset paths:")
+        print(f"  Training: {config.train_data_path}")
+        print(f"  Evaluation: {config.eval_data_path}")
+        
+        # Load datasets
+        print(f"\nLoading training dataset...")
         train_dataset = ConversationDataset(
-            str(train_data_path), tokenizer, config, "train"
+            str(config.train_data_path), tokenizer, config, "train"
         )
         print(f"Training dataset loaded: {len(train_dataset):,} samples")
         
         eval_dataset = None
-        eval_data_path = Path(data_params['eval_data_path'])
-        if eval_data_path.exists() and eval_data_path != train_data_path:
-            print(f"Loading evaluation dataset from: {eval_data_path}")
+        eval_path_obj = Path(config.eval_data_path)
+        if eval_path_obj.exists() and eval_path_obj != train_path_obj:
+            print(f"Loading evaluation dataset...")
             eval_dataset = ConversationDataset(
-                str(eval_data_path), tokenizer, config, "eval"
+                str(config.eval_data_path), tokenizer, config, "eval"
             )
             print(f"Evaluation dataset loaded: {len(eval_dataset):,} samples")
         else:

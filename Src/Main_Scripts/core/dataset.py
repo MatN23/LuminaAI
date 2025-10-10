@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any, Iterator, Union
 import torch
 from torch.utils.data import Dataset, DataLoader, IterableDataset
-
+import random
 
 class ConversationDataset(Dataset):
     """Enhanced dataset with better error handling and monitoring."""
