@@ -19,12 +19,17 @@ except ImportError:
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+# CONFIGURATION
+MAX_FILE_SIZE_MB = 100  # Maximum file size in MB
+DATASET_NAME = "OpenAssistant/oasst2"  # Using OASST2
+
 def setup_output_directory(project_root: Optional[str] = None) -> Path:
     """Setup and create output directory for dataset files."""
     if project_root is None:
         script_dir = Path(__file__).parent.absolute()
         project_root = script_dir
     
+    # Keep the same path as before (oasst1_data)
     output_dir = Path(project_root) / "oasst1_data"
     
     # Ensure the directory exists
@@ -37,6 +42,7 @@ def setup_output_directory(project_root: Optional[str] = None) -> Path:
     
     logger.info(f"Project root: {project_root}")
     logger.info(f"Output directory: {output_dir}")
+    logger.info(f"📏 Max file size: {MAX_FILE_SIZE_MB}MB per file")
     
     return output_dir
 
@@ -188,15 +194,96 @@ def analyze_conversations(conversations: List[Dict], split_name: str):
     for role, count in role_counts.items():
         logger.info(f"    {role}: {count:,} messages ({count/total_turns*100:.1f}%)")
 
+def get_file_size_mb(file_path: Path) -> float:
+    """Get file size in MB."""
+    if not file_path.exists():
+        return 0
+    return file_path.stat().st_size / (1024 * 1024)
+
+def save_conversations_with_size_limit(
+    conversations: List[Dict], 
+    output_dir: Path, 
+    split_name: str,
+    max_size_mb: int = 100
+) -> List[Path]:
+    """
+    Save conversations to files, splitting into multiple files if needed to stay under size limit.
+    
+    Returns:
+        List of file paths created
+    """
+    if not conversations:
+        logger.warning(f"No conversations to save for {split_name}")
+        return []
+    
+    saved_files = []
+    file_index = 0
+    current_file_convs = []
+    current_size_estimate = 0
+    
+    # Estimate average size per conversation (in bytes)
+    sample_conv = json.dumps(conversations[0], ensure_ascii=False) + '\n'
+    avg_conv_size = len(sample_conv.encode('utf-8'))
+    max_size_bytes = max_size_mb * 1024 * 1024
+    
+    logger.info(f"📦 Estimated average conversation size: {avg_conv_size / 1024:.1f} KB")
+    logger.info(f"📦 Target file size: <{max_size_mb}MB")
+    
+    for i, conv in enumerate(conversations):
+        conv_json = json.dumps(conv, ensure_ascii=False) + '\n'
+        conv_size = len(conv_json.encode('utf-8'))
+        
+        # Check if adding this conversation would exceed the limit
+        if current_size_estimate + conv_size > max_size_bytes and current_file_convs:
+            # Save current batch
+            output_file = output_dir / f"oasst1_{split_name}.jsonl" if file_index == 0 else output_dir / f"oasst1_{split_name}_part{file_index+1}.jsonl"
+            logger.info(f"💾 Saving batch {file_index + 1}: {len(current_file_convs):,} conversations (~{current_size_estimate / (1024*1024):.1f}MB)")
+            
+            with open(output_file, 'w', encoding='utf-8') as f:
+                for c in current_file_convs:
+                    f.write(json.dumps(c, ensure_ascii=False) + '\n')
+            
+            actual_size = get_file_size_mb(output_file)
+            logger.info(f"✅ Saved {output_file.name}: {actual_size:.1f}MB, {len(current_file_convs):,} conversations")
+            saved_files.append(output_file)
+            
+            # Reset for next batch
+            file_index += 1
+            current_file_convs = []
+            current_size_estimate = 0
+        
+        # Add conversation to current batch
+        current_file_convs.append(conv)
+        current_size_estimate += conv_size
+        
+        # Progress update
+        if (i + 1) % 1000 == 0:
+            logger.info(f"  Processed {i+1:,}/{len(conversations):,} conversations...")
+    
+    # Save remaining conversations
+    if current_file_convs:
+        output_file = output_dir / f"oasst1_{split_name}.jsonl" if file_index == 0 else output_dir / f"oasst1_{split_name}_part{file_index+1}.jsonl"
+        logger.info(f"💾 Saving final batch {file_index + 1}: {len(current_file_convs):,} conversations (~{current_size_estimate / (1024*1024):.1f}MB)")
+        
+        with open(output_file, 'w', encoding='utf-8') as f:
+            for c in current_file_convs:
+                f.write(json.dumps(c, ensure_ascii=False) + '\n')
+        
+        actual_size = get_file_size_mb(output_file)
+        logger.info(f"✅ Saved {output_file.name}: {actual_size:.1f}MB, {len(current_file_convs):,} conversations")
+        saved_files.append(output_file)
+    
+    return saved_files
+
 def download_and_process_conversations(output_dir: Path) -> bool:
-    """Download OASST1 dataset and process into conversation format."""
+    """Download OASST2 dataset and process into conversation format with size limits."""
     try:
-        logger.info("📦 Loading OpenAssistant dataset (oasst1)...")
+        logger.info(f"📦 Loading OpenAssistant dataset ({DATASET_NAME})...")
         logger.info("This may take a few minutes for the first download...")
         
         # Load dataset with error handling
         try:
-            ds = load_dataset("OpenAssistant/oasst1", trust_remote_code=True)
+            ds = load_dataset(DATASET_NAME, trust_remote_code=True)
         except Exception as e:
             logger.error(f"Failed to load dataset: {e}")
             logger.info("💡 Possible solutions:")
@@ -208,29 +295,29 @@ def download_and_process_conversations(output_dir: Path) -> bool:
         logger.info("✅ Dataset loaded successfully!")
         logger.info(f"📊 Available splits: {list(ds.keys())}")
         
-        # Process train, validation, and evaluation splits
+        # Process train and validation splits
         splits_to_process = ['train', 'validation']
         
-        # Check if evaluation split exists and add it
+        # Check if test/eval split exists
         if 'test' in ds:
             splits_to_process.append('test')
-        elif 'eval' in ds:
-            splits_to_process.append('eval')
-        elif 'evaluation' in ds:
-            splits_to_process.append('evaluation')
+        
+        all_saved_files = []
         
         for split_name in splits_to_process:
             if split_name not in ds:
                 logger.warning(f"Split '{split_name}' not found in dataset")
                 continue
                 
+            logger.info(f"\n{'='*70}")
             logger.info(f"📄 Processing {split_name} split...")
+            logger.info(f"{'='*70}")
             
             # Get split data
             split_data = ds[split_name]
             logger.info(f"📊 Total messages in {split_name}: {len(split_data):,}")
             
-            # Filter for messages - very relaxed filtering to maximize data
+            # Filter for messages
             valid_messages = []
             
             for i, msg in enumerate(split_data):
@@ -238,7 +325,7 @@ def download_and_process_conversations(output_dir: Path) -> bool:
                 if i > 0 and i % 10000 == 0:
                     logger.info(f"  Processed {i:,}/{len(split_data):,} messages...")
                 
-                # Very basic validation - keep as much data as possible
+                # Very basic validation
                 if (msg.get('text', '').strip() and  # Has some content
                     msg.get('message_tree_id')):  # Has tree ID
                     valid_messages.append(msg)
@@ -254,7 +341,7 @@ def download_and_process_conversations(output_dir: Path) -> bool:
             
             logger.info(f"📊 Conversation trees in {split_name}: {len(tree_messages):,}")
             
-            # Build conversations - extract more paths per tree
+            # Build conversations
             all_conversations = []
             processed_trees = 0
             
@@ -272,18 +359,6 @@ def download_and_process_conversations(output_dir: Path) -> bool:
                     for path in paths:
                         conv = format_conversation(path)
                         all_conversations.append(conv)
-                        
-                        # Also create sub-conversations from longer paths to maximize data
-                        if len(path) > 4:  # If conversation is long enough
-                            # Create sub-conversations starting from different points
-                            for start_idx in range(0, len(path) - 3, 2):  # Every 2 messages
-                                if start_idx > 0:
-                                    sub_path = path[start_idx:]
-                                    if len(sub_path) >= 2:  # Ensure minimum length
-                                        sub_conv = format_conversation(sub_path)
-                                        # Add suffix to make unique ID
-                                        sub_conv['conversation_id'] = f"{sub_conv['conversation_id']}_sub_{start_idx}"
-                                        all_conversations.append(sub_conv)
             
             logger.info(f"📊 Raw conversations extracted from {split_name}: {len(all_conversations):,}")
             
@@ -295,32 +370,26 @@ def download_and_process_conversations(output_dir: Path) -> bool:
             logger.info(f"\n--- Analysis for {split_name} ---")
             analyze_conversations(filtered_conversations, split_name)
             
-            # Save main conversation file
+            # Save with size limit
             if not filtered_conversations:
                 logger.warning(f"No conversations to save for {split_name}")
                 continue
-                
-            output_file = output_dir / f"oasst1_{split_name}_conversations.jsonl"
-            logger.info(f"💾 Saving {len(filtered_conversations):,} {split_name} conversations to: {output_file}")
             
-            # Ensure parent directory exists before writing
-            output_file.parent.mkdir(parents=True, exist_ok=True)
+            logger.info(f"\n💾 Saving {split_name} conversations with {MAX_FILE_SIZE_MB}MB size limit...")
+            saved_files = save_conversations_with_size_limit(
+                filtered_conversations,
+                output_dir,
+                split_name,
+                max_size_mb=MAX_FILE_SIZE_MB
+            )
             
-            saved_count = 0
-            with open(output_file, 'w', encoding='utf-8') as f:
-                for conv in filtered_conversations:
-                    try:
-                        f.write(json.dumps(conv, ensure_ascii=False) + '\n')
-                        saved_count += 1
-                        
-                        if saved_count % 5000 == 0:
-                            logger.info(f"  Saved {saved_count:,}/{len(filtered_conversations):,} conversations...")
-                            
-                    except Exception as e:
-                        logger.warning(f"Error saving conversation: {e}")
-                        continue
+            all_saved_files.extend(saved_files)
             
-            logger.info(f"✅ Saved {saved_count:,} {split_name} conversations")
+            logger.info(f"✅ {split_name} split complete: {len(saved_files)} file(s) created")
+        
+        logger.info(f"\n{'='*70}")
+        logger.info(f"✅ All splits processed: {len(all_saved_files)} total files")
+        logger.info(f"{'='*70}")
         
         return True
         
@@ -333,7 +402,7 @@ def download_and_process_conversations(output_dir: Path) -> bool:
 def validate_conversation_files(output_dir: Path) -> bool:
     """Validate that conversation files exist and are readable."""
     # Get all conversation files in the directory
-    conversation_files = list(output_dir.glob("oasst1_*_conversations.jsonl"))
+    conversation_files = list(output_dir.glob("oasst1_*.jsonl"))
     
     if not conversation_files:
         logger.error("❌ No conversation files found")
@@ -344,9 +413,14 @@ def validate_conversation_files(output_dir: Path) -> bool:
             logger.error(f"❌ Missing file: {file_path}")
             return False
         
-        if file_path.stat().st_size == 0:
+        file_size_mb = get_file_size_mb(file_path)
+        
+        if file_size_mb == 0:
             logger.error(f"❌ Empty file: {file_path}")
             return False
+        
+        if file_size_mb > MAX_FILE_SIZE_MB:
+            logger.warning(f"⚠️  File exceeds {MAX_FILE_SIZE_MB}MB limit: {file_path} ({file_size_mb:.1f}MB)")
         
         # Test reading and parsing
         try:
@@ -383,7 +457,7 @@ def validate_conversation_files(output_dir: Path) -> bool:
                             logger.error(f"❌ Invalid JSON in {file_path} line {i+1}: {e}")
                             return False
             
-            logger.info(f"✅ {file_path.name}: {line_count:,} conversations validated")
+            logger.info(f"✅ {file_path.name}: {file_size_mb:.1f}MB, {line_count:,} conversations validated")
                         
         except Exception as e:
             logger.error(f"❌ Cannot read file {file_path}: {e}")
@@ -395,12 +469,12 @@ def validate_conversation_files(output_dir: Path) -> bool:
 def check_existing_files(output_dir: Path) -> bool:
     """Check if dataset files already exist and are valid."""
     # Look for any existing conversation files
-    existing_files = list(output_dir.glob("oasst1_*_conversations.jsonl"))
+    existing_files = list(output_dir.glob("oasst1_*.jsonl"))
     
     if existing_files:
         logger.info("🔍 Found existing conversation files!")
         for file_path in existing_files:
-            size_mb = file_path.stat().st_size / (1024 * 1024)
+            size_mb = get_file_size_mb(file_path)
             logger.info(f"  - {file_path.name}: {size_mb:.1f} MB")
         
         logger.info("🔄 Validating existing files...")
@@ -409,8 +483,10 @@ def check_existing_files(output_dir: Path) -> bool:
     return False
 
 def main():
-    """Main function to download and prepare OASST1 conversational dataset."""
-    logger.info("🚀 Starting OASST1 Conversational Dataset Download...")
+    """Main function to download and prepare OASST2 conversational dataset."""
+    logger.info("🚀 Starting OASST2 Conversational Dataset Download...")
+    logger.info(f"📦 Dataset: {DATASET_NAME}")
+    logger.info(f"📏 Max file size: {MAX_FILE_SIZE_MB}MB")
     logger.info("=" * 70)
     
     try:
@@ -442,15 +518,23 @@ def main():
         logger.info("=" * 70)
         logger.info("🎉 Conversational dataset preparation completed!")
         logger.info(f"📁 Files saved in: {output_dir}")
+        logger.info(f"📦 Dataset source: {DATASET_NAME}")
         logger.info("")
         logger.info("📋 Generated Files:")
         
         # List all generated files with sizes
-        for file_path in sorted(output_dir.glob("*.jsonl")):
-            size_mb = file_path.stat().st_size / (1024 * 1024)
+        total_size = 0
+        total_convs = 0
+        for file_path in sorted(output_dir.glob("oasst1_*.jsonl")):
+            size_mb = get_file_size_mb(file_path)
             line_count = sum(1 for _ in open(file_path, 'r', encoding='utf-8'))
-            logger.info(f"   ✅ {file_path.name}: {size_mb:.1f} MB, {line_count:,} conversations")
+            total_size += size_mb
+            total_convs += line_count
+            status = "✅" if size_mb <= MAX_FILE_SIZE_MB else "⚠️"
+            logger.info(f"   {status} {file_path.name}: {size_mb:.1f}MB, {line_count:,} conversations")
         
+        logger.info("")
+        logger.info(f"📊 Total: {total_size:.1f}MB across {total_convs:,} conversations")
         logger.info("")
         logger.info("📋 Dataset Format:")
         logger.info("   Each line contains a complete conversation with:")

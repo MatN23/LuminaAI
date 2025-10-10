@@ -777,3 +777,290 @@ def create_memory_efficient_dataloader(data_path: str,
         dataset = ConversationDataset(data_path, tokenizer, config, split)
     
     return create_dataloader(dataset, config, shuffle=(split == "train"))
+
+class MultiDatasetManager:
+    """Manages multiple datasets with flexible mixing strategies."""
+    
+    def __init__(self, data_params: Dict[str, Any]):
+        # Handle both singular and plural parameter names for backward compatibility
+        train_paths = data_params.get('train_data_paths', data_params.get('train_data_path', []))
+        eval_paths = data_params.get('eval_data_paths', data_params.get('eval_data_path', []))
+        
+        # Ensure paths are lists
+        self.train_paths = [train_paths] if isinstance(train_paths, str) else (train_paths if train_paths else [])
+        self.eval_paths = [eval_paths] if isinstance(eval_paths, str) else (eval_paths if eval_paths else [])
+        
+        # Remove empty strings
+        self.train_paths = [p for p in self.train_paths if p]
+        self.eval_paths = [p for p in self.eval_paths if p]
+        
+        self.mixing_strategy = data_params.get('dataset_mixing_strategy', 'concatenate')
+        self.dataset_weights = data_params.get('dataset_weights', None)
+        self.interleave_probabilities = data_params.get('interleave_probabilities', None)
+        self.max_conversations_per_dataset = data_params.get('max_conversations_per_dataset', None)
+        self.validate_datasets = data_params.get('validate_datasets', True)
+        self.cache_combined = data_params.get('cache_combined_dataset', True)
+        self.cached_path = data_params.get('cached_dataset_path', 'data/combined_train_cache.jsonl')
+        
+        logging.info(f"MultiDatasetManager initialized with {len(self.train_paths)} training dataset(s)")
+    
+    def prepare_training_data(self, force_rebuild: bool = False) -> str:
+        """Prepare combined training data. Returns path to dataset."""
+        if len(self.train_paths) == 0:
+            raise ValueError("No training datasets specified")
+        
+        # Single dataset - return directly
+        if len(self.train_paths) == 1:
+            return str(self.train_paths[0])
+        
+        # Check cache
+        cached_path = Path(self.cached_path)
+        if self.cache_combined and cached_path.exists() and not force_rebuild:
+            logging.info(f"Using cached dataset: {cached_path}")
+            return str(cached_path)
+        
+        # Build combined dataset
+        logging.info(f"Building combined dataset: {self.mixing_strategy}")
+        
+        if self.mixing_strategy == 'concatenate':
+            return self._concatenate_datasets()
+        elif self.mixing_strategy == 'interleave':
+            return self._interleave_datasets()
+        elif self.mixing_strategy == 'weighted':
+            return self._weighted_mix_datasets()
+        else:
+            logging.warning(f"Unknown strategy '{self.mixing_strategy}', using concatenate")
+            return self._concatenate_datasets()
+    
+    def prepare_evaluation_data(self) -> str:
+        """Prepare evaluation data. Returns path to dataset."""
+        if len(self.eval_paths) == 0:
+            return ""
+        
+        if len(self.eval_paths) == 1:
+            return str(self.eval_paths[0])
+        
+        # Concatenate multiple eval datasets
+        eval_cache = Path(self.cached_path).parent / "combined_eval_cache.jsonl"
+        logging.info(f"Combining {len(self.eval_paths)} evaluation datasets")
+        
+        total = 0
+        with open(eval_cache, 'w', encoding='utf-8') as out_f:
+            for path in self.eval_paths:
+                path_obj = Path(path)
+                if not path_obj.exists():
+                    logging.warning(f"Eval dataset not found: {path_obj}")
+                    continue
+                
+                count = 0
+                with open(path_obj, 'r', encoding='utf-8') as in_f:
+                    for line in in_f:
+                        if line.strip():
+                            out_f.write(line)
+                            count += 1
+                            total += 1
+                
+                logging.info(f"  Added {count:,} from {path_obj.name}")
+        
+        logging.info(f"Total eval conversations: {total:,}")
+        return str(eval_cache)
+    
+    def _concatenate_datasets(self) -> str:
+        """Concatenate all datasets in order."""
+        output_path = Path(self.cached_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        total = 0
+        with open(output_path, 'w', encoding='utf-8') as out_f:
+            for i, dataset_path in enumerate(self.train_paths):
+                path = Path(dataset_path)
+                if not path.exists():
+                    logging.warning(f"Dataset not found: {path}")
+                    continue
+                
+                logging.info(f"Adding dataset {i+1}/{len(self.train_paths)}: {path.name}")
+                
+                count = 0
+                with open(path, 'r', encoding='utf-8') as in_f:
+                    for line in in_f:
+                        if not line.strip():
+                            continue
+                        
+                        if self.max_conversations_per_dataset and count >= self.max_conversations_per_dataset:
+                            break
+                        
+                        out_f.write(line)
+                        count += 1
+                        total += 1
+                
+                logging.info(f"  Added {count:,} conversations")
+        
+        logging.info(f"Total: {total:,} conversations")
+        return str(output_path)
+    
+    def _interleave_datasets(self) -> str:
+        """Interleave datasets with probability weighting."""
+        output_path = Path(self.cached_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Open all files
+        files = []
+        for path in self.train_paths:
+            p = Path(path)
+            if p.exists():
+                files.append(open(p, 'r', encoding='utf-8'))
+        
+        if not files:
+            raise ValueError("No valid datasets found")
+        
+        # Calculate probabilities
+        if self.interleave_probabilities is None:
+            probs = [1.0 / len(files)] * len(files)
+        else:
+            total_p = sum(self.interleave_probabilities)
+            probs = [p / total_p for p in self.interleave_probabilities]
+        
+        logging.info(f"Interleaving with probabilities: {probs}")
+        
+        total = 0
+        active = len(files)
+        exhausted = [False] * len(files)
+        
+        try:
+            with open(output_path, 'w', encoding='utf-8') as out_f:
+                while active > 0:
+                    # Choose file based on probabilities
+                    weights = [p if not e else 0 for p, e in zip(probs, exhausted)]
+                    if sum(weights) == 0:
+                        break
+                    
+                    idx = random.choices(range(len(files)), weights=weights)[0]
+                    line = files[idx].readline()
+                    
+                    if not line:
+                        exhausted[idx] = True
+                        active -= 1
+                        continue
+                    
+                    if line.strip():
+                        out_f.write(line)
+                        total += 1
+                    
+                    if total % 10000 == 0:
+                        logging.info(f"Interleaved {total:,} conversations...")
+        finally:
+            for f in files:
+                f.close()
+        
+        logging.info(f"Total interleaved: {total:,} conversations")
+        return str(output_path)
+    
+    def _weighted_mix_datasets(self) -> str:
+        """Mix datasets with specified weights."""
+        output_path = Path(self.cached_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Default weights
+        if self.dataset_weights is None:
+            self.dataset_weights = [1.0] * len(self.train_paths)
+        
+        # Normalize
+        total_weight = sum(self.dataset_weights)
+        weights = [w / total_weight for w in self.dataset_weights]
+        
+        logging.info(f"Mixing with weights: {weights}")
+        
+        all_conversations = []
+        
+        # Load all datasets
+        for i, (path, weight) in enumerate(zip(self.train_paths, weights)):
+            path_obj = Path(path)
+            if not path_obj.exists():
+                logging.warning(f"Dataset not found: {path_obj}")
+                continue
+            
+            logging.info(f"Loading {path_obj.name}...")
+            
+            dataset_convs = []
+            count = 0
+            
+            with open(path_obj, 'r', encoding='utf-8') as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    
+                    if self.max_conversations_per_dataset and count >= self.max_conversations_per_dataset:
+                        break
+                    
+                    dataset_convs.append(line)
+                    count += 1
+            
+            logging.info(f"  Loaded {len(dataset_convs):,} conversations")
+            
+            # Sample based on weight
+            sample_size = int(len(dataset_convs) * weight * len(self.train_paths))
+            sample_size = min(sample_size, len(dataset_convs))
+            
+            if sample_size > len(dataset_convs):
+                sampled = random.choices(dataset_convs, k=sample_size)
+            else:
+                sampled = random.sample(dataset_convs, k=sample_size)
+            
+            all_conversations.extend(sampled)
+            logging.info(f"  Sampled {len(sampled):,} (weight: {weight:.2f})")
+        
+        # Shuffle
+        random.shuffle(all_conversations)
+        
+        # Write
+        with open(output_path, 'w', encoding='utf-8') as out_f:
+            for conv in all_conversations:
+                out_f.write(conv)
+        
+        logging.info(f"Total weighted mix: {len(all_conversations):,} conversations")
+        return str(output_path)
+    
+    def validate_all_datasets(self) -> Dict[str, Any]:
+        """Validate all datasets and return stats."""
+        if not self.validate_datasets:
+            return {}
+        
+        stats = {
+            'train_datasets': [],
+            'eval_datasets': [],
+            'total_train_conversations': 0,
+            'total_eval_conversations': 0,
+            'validation_errors': []
+        }
+        
+        # Validate training datasets
+        for path in self.train_paths:
+            path_obj = Path(path)
+            if not path_obj.exists():
+                stats['validation_errors'].append(f"Not found: {path}")
+                continue
+            
+            count = sum(1 for line in open(path_obj, 'r', encoding='utf-8') if line.strip())
+            stats['train_datasets'].append({
+                'path': str(path),
+                'conversations': count,
+                'size_mb': path_obj.stat().st_size / (1024 * 1024)
+            })
+            stats['total_train_conversations'] += count
+        
+        # Validate eval datasets
+        for path in self.eval_paths:
+            path_obj = Path(path)
+            if not path_obj.exists():
+                stats['validation_errors'].append(f"Not found: {path}")
+                continue
+            
+            count = sum(1 for line in open(path_obj, 'r', encoding='utf-8') if line.strip())
+            stats['eval_datasets'].append({
+                'path': str(path),
+                'conversations': count,
+                'size_mb': path_obj.stat().st_size / (1024 * 1024)
+            })
+            stats['total_eval_conversations'] += count
+        
+        return stats

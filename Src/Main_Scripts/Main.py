@@ -71,7 +71,7 @@ except ImportError:
     try:
         from tokenizer import ConversationTokenizer
         from model import DeepSeekTransformer, DeepSeekConfig
-        from dataset import ConversationDataset, create_dataloader
+        from core.dataset import ConversationDataset, create_dataloader, MultiDatasetManager
     except ImportError:
         print("ERROR: Could not import core modules")
         sys.exit(1)
@@ -800,10 +800,36 @@ def main():
     
     # Data configuration
     data_params = {
-        'train_data_path': 'oasst1_data/oasst1_train.jsonl',
-        'eval_data_path': 'oasst1_data/oasst1_train.jsonl',
-        'raw_oasst_path': None,  # Optional: raw OASST data to process
-        'max_conversations_per_file': 50000,
+        # Multiple training datasets (list of paths)
+        'train_data_paths': [
+            'oasst1_data/oasst1_train.jsonl',
+            'oasst1_data/oasst1_train_part2.jsonl',
+            'oasst1_data/oasst1_train_part3.jsonl',
+        ],
+
+        # Multiple evaluation datasets (list of paths)
+        'eval_data_paths': [
+            'oasst1_data/oasst1_validation.jsonl',
+        ],
+
+        # Dataset mixing strategy
+        'dataset_mixing_strategy': 'concatenate',  # Options: 'concatenate', 'interleave', 'weighted'
+
+        # Weights for weighted mixing (only used if strategy is 'weighted')
+        'dataset_weights': [1.0, 1.0, 1.0],  # Relative weights for each dataset
+
+        # Interleaving settings (only used if strategy is 'interleave')
+        'interleave_probabilities': None,  # Auto-calculate if None, or provide list of probabilities
+
+        # Maximum conversations per dataset (None for unlimited)
+        'max_conversations_per_dataset': None,
+
+        # Validate each dataset before training
+        'validate_datasets': True,
+
+        # Cache combined dataset (speeds up subsequent runs)
+        'cache_combined_dataset': True,
+        'cached_dataset_path': 'oasst1_data/combined_train_cache.jsonl',
     }
     
     # DeepSpeed configuration
@@ -1000,7 +1026,7 @@ def main():
         # Step 7: Setup datasets
         print_banner("STEP 7: SETTING UP DATASETS")
         
-        train_data_path = Path(data_params['train_data_path'])
+        train_dataset = ConversationDataset(str(train_data_path), tokenizer, config, "train")
         if not train_data_path.exists():
             print(f"ERROR: Training data not found: {train_data_path}")
             return 1

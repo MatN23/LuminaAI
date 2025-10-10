@@ -766,7 +766,7 @@ class EnhancedConversationTrainer:
                 "params": {
                     "warmup_min_lr": 1e-6,
                     "warmup_max_lr": self.config.learning_rate,
-                    "warmup_num_steps": 1000  # Fixed number instead of calculation
+                    "warmup_num_steps": 200  # Fixed number instead of calculation
                 }
             },
             
