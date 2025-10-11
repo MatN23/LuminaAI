@@ -841,6 +841,11 @@ def main():
         'gradient_accumulation_steps': 8,
         'precision': "fp16",
         'inference_precision': "int8",
+        
+        # Comment these out if your not using MoE
+        'num_experts': None,
+        'moe_top_k': None,
+        
         'compile': True,
         'max_memory_usage': 0.85,
         'save_every_n_batches': 1000,
