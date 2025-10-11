@@ -831,7 +831,7 @@ def main():
     
     # Training parameters
     training_params = {
-        'use_moe': True,
+        'use_moe': False,
         'use_mod': True,
         'num_epochs': 20,
         'learning_rate': 1e-4,

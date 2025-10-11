@@ -66,6 +66,7 @@ class Config:
     
     # MoE parameters
     use_moe: bool = True
+    use_mod: bool= True,
     num_experts: int = 8
     moe_top_k: int = 1
     capacity_factor: float = 1.5
@@ -839,7 +840,8 @@ class ConfigPresets:
             num_workers=2,
 
             # MoE
-            use_moe=True,
+            use_moe=False,
+            use_mod=True,
             num_experts=32,
             moe_top_k=2,
             capacity_factor=1.2,
@@ -898,7 +900,8 @@ class ConfigPresets:
             num_workers=4,
             
             # MoE settings - 8x pattern
-            use_moe=True,
+            use_moe=False,
+            use_mod=True,
             num_experts=8,
             moe_top_k=1,
             capacity_factor=1.25,
@@ -958,7 +961,8 @@ class ConfigPresets:
             num_workers=8,
             
             # MoE settings - 8x pattern like Mixtral
-            use_moe=True,
+            use_moe=False,
+            use_mod=True,
             num_experts=8,
             moe_top_k=1,
             capacity_factor=1.25,
@@ -1025,7 +1029,8 @@ class ConfigPresets:
             num_workers=8,
             
             # MoE settings - 8x pattern
-            use_moe=True,
+            use_moe=False,
+            use_mod=True,
             num_experts=8,
             moe_top_k=1,
             capacity_factor=1.25,
@@ -1065,6 +1070,469 @@ class ConfigPresets:
             # Monitoring
             enable_wandb=False,
             profile_memory=True,
+            log_throughput=True
+        )
+    
+    @staticmethod
+    def b30() -> Config:
+        """30B active parameter model (8x30B = 240B total)."""
+        return Config(
+            # Model architecture for ~30B active parameters
+            hidden_size=6656,
+            num_layers=48,
+            num_heads=52,
+            num_kv_heads=13,
+            seq_length=8192,
+            intermediate_size=None,
+            
+            # Training settings
+            batch_size=64,
+            micro_batch_size=1,
+            gradient_accumulation_steps=32,
+            num_epochs=2,
+            learning_rate=6e-5,
+            weight_decay=0.01,
+            eval_every_n_batches=3000,
+            save_every_n_batches=10000,
+            precision="auto",
+            inference_precision="auto",
+            compile=True,
+            num_workers=12,
+            
+            # MoE settings - 8x pattern
+            use_moe=False,
+            use_mod=True,
+            num_experts=8,
+            moe_top_k=1,
+            capacity_factor=1.25,
+            load_balancing_weight=0.02,
+            
+            # DeepSpeed settings
+            use_deepspeed=True,
+            zero_stage=3,
+            cpu_offload=True,
+            cpu_offload_optimizer=True,
+            cpu_offload_parameters=True,
+            gradient_compression=True,
+            overlap_comm=True,
+            contiguous_gradients=True,
+            
+            # Production settings
+            experiment_name="b30_8x30b",
+            log_level="INFO",
+            health_check_interval=300,
+            save_total_limit=20,
+            early_stopping_patience=20,
+            backup_every_n_hours=3,
+            lr_scheduler="cosine",
+            gradient_checkpointing=True,
+            use_flash_attention=True,
+            warmup_ratio=0.03,
+            
+            # Precision settings
+            auto_tune_precision=False,
+            precision_target="quality",
+            dynamic_precision=False,
+            tf32_enabled=True,
+            
+            # Memory settings
+            max_memory_usage=0.95,
+            streaming_threshold_gb=50.0,
+            enable_cpu_adam=True,
+            partition_activations=True,
+            
+            # Monitoring
+            enable_wandb=False,
+            profile_memory=True,
+            profile_communication=True,
+            log_throughput=True
+        )
+    
+    @staticmethod
+    def b50() -> Config:
+        """50B active parameter model (8x50B = 400B total)."""
+        return Config(
+            # Model architecture for ~50B active parameters
+            hidden_size=8192,
+            num_layers=56,
+            num_heads=64,
+            num_kv_heads=16,
+            seq_length=8192,
+            intermediate_size=None,
+            
+            # Training settings
+            batch_size=128,
+            micro_batch_size=1,
+            gradient_accumulation_steps=64,
+            num_epochs=2,
+            learning_rate=4e-5,
+            weight_decay=0.01,
+            eval_every_n_batches=5000,
+            save_every_n_batches=15000,
+            precision="auto",
+            inference_precision="auto",
+            compile=True,
+            num_workers=16,
+            
+            # MoE settings - 8x pattern
+            use_moe=False,
+            use_mod=True,
+            num_experts=8,
+            moe_top_k=1,
+            capacity_factor=1.25,
+            load_balancing_weight=0.02,
+            
+            # DeepSpeed settings
+            use_deepspeed=True,
+            zero_stage=3,
+            cpu_offload=True,
+            cpu_offload_optimizer=True,
+            cpu_offload_parameters=True,
+            aggressive_cpu_offload=True,
+            gradient_compression=True,
+            overlap_comm=True,
+            contiguous_gradients=True,
+            
+            # Production settings
+            experiment_name="b50_8x50b",
+            log_level="INFO",
+            health_check_interval=500,
+            save_total_limit=25,
+            early_stopping_patience=25,
+            backup_every_n_hours=2,
+            lr_scheduler="cosine",
+            gradient_checkpointing=True,
+            use_flash_attention=True,
+            warmup_ratio=0.02,
+            
+            # Precision settings
+            auto_tune_precision=False,
+            precision_target="quality",
+            dynamic_precision=False,
+            tf32_enabled=True,
+            
+            # Memory settings
+            max_memory_usage=0.95,
+            streaming_threshold_gb=100.0,
+            enable_cpu_adam=True,
+            partition_activations=True,
+            
+            # Monitoring
+            enable_wandb=False,
+            profile_memory=True,
+            profile_communication=True,
+            log_throughput=True
+        )
+    
+    @staticmethod
+    def b75() -> Config:
+        """75B active parameter model (8x75B = 600B total)."""
+        return Config(
+            # Model architecture for ~75B active parameters
+            hidden_size=10240,
+            num_layers=64,
+            num_heads=80,
+            num_kv_heads=20,
+            seq_length=8192,
+            intermediate_size=None,
+            
+            # Training settings
+            batch_size=256,
+            micro_batch_size=1,
+            gradient_accumulation_steps=128,
+            num_epochs=1,
+            learning_rate=3e-5,
+            weight_decay=0.01,
+            eval_every_n_batches=8000,
+            save_every_n_batches=20000,
+            precision="auto",
+            inference_precision="auto",
+            compile=True,
+            num_workers=16,
+            
+            # MoE settings - 8x pattern
+            use_moe=False,
+            use_mod=True,
+            num_experts=8,
+            moe_top_k=1,
+            capacity_factor=1.25,
+            load_balancing_weight=0.025,
+            
+            # DeepSpeed settings
+            use_deepspeed=True,
+            zero_stage=3,
+            cpu_offload=True,
+            cpu_offload_optimizer=True,
+            cpu_offload_parameters=True,
+            aggressive_cpu_offload=True,
+            gradient_compression=True,
+            overlap_comm=True,
+            contiguous_gradients=True,
+            nvme_offload_optimizer=False,
+            nvme_offload_parameters=False,
+            
+            # Production settings
+            experiment_name="b75_8x75b",
+            log_level="INFO",
+            health_check_interval=800,
+            save_total_limit=30,
+            early_stopping_patience=30,
+            backup_every_n_hours=2,
+            lr_scheduler="cosine",
+            gradient_checkpointing=True,
+            use_flash_attention=True,
+            warmup_ratio=0.02,
+            
+            # Precision settings
+            auto_tune_precision=False,
+            precision_target="quality",
+            dynamic_precision=False,
+            tf32_enabled=True,
+            
+            # Memory settings
+            max_memory_usage=0.95,
+            streaming_threshold_gb=150.0,
+            enable_cpu_adam=True,
+            partition_activations=True,
+            
+            # Monitoring
+            enable_wandb=False,
+            profile_memory=True,
+            profile_communication=True,
+            log_throughput=True
+        )
+    
+    @staticmethod
+    def b100() -> Config:
+        """100B active parameter model (8x100B = 800B total)."""
+        return Config(
+            # Model architecture for ~100B active parameters
+            hidden_size=12288,
+            num_layers=72,
+            num_heads=96,
+            num_kv_heads=24,
+            seq_length=8192,
+            intermediate_size=None,
+            
+            # Training settings
+            batch_size=512,
+            micro_batch_size=1,
+            gradient_accumulation_steps=256,
+            num_epochs=1,
+            learning_rate=2e-5,
+            weight_decay=0.01,
+            eval_every_n_batches=10000,
+            save_every_n_batches=25000,
+            precision="auto",
+            inference_precision="auto",
+            compile=True,
+            num_workers=16,
+            
+            # MoE settings - 8x pattern
+            use_moe=False,
+            use_mod=True,
+            num_experts=8,
+            moe_top_k=1,
+            capacity_factor=1.25,
+            load_balancing_weight=0.025,
+            
+            # DeepSpeed settings
+            use_deepspeed=True,
+            zero_stage=3,
+            cpu_offload=True,
+            cpu_offload_optimizer=True,
+            cpu_offload_parameters=True,
+            aggressive_cpu_offload=True,
+            gradient_compression=True,
+            overlap_comm=True,
+            contiguous_gradients=True,
+            nvme_offload_optimizer=False,
+            nvme_offload_parameters=False,
+            
+            # Production settings
+            experiment_name="b100_8x100b",
+            log_level="INFO",
+            health_check_interval=1000,
+            save_total_limit=40,
+            early_stopping_patience=40,
+            backup_every_n_hours=1,
+            lr_scheduler="cosine",
+            gradient_checkpointing=True,
+            use_flash_attention=True,
+            warmup_ratio=0.01,
+            
+            # Precision settings
+            auto_tune_precision=False,
+            precision_target="quality",
+            dynamic_precision=False,
+            tf32_enabled=True,
+            
+            # Memory settings
+            max_memory_usage=0.95,
+            streaming_threshold_gb=200.0,
+            enable_cpu_adam=True,
+            partition_activations=True,
+            
+            # Monitoring
+            enable_wandb=False,
+            profile_memory=True,
+            profile_communication=True,
+            log_throughput=True
+        )
+    
+    @staticmethod
+    def b200() -> Config:
+        """200B active parameter model (8x200B = 1.6T total)."""
+        return Config(
+            # Model architecture for ~200B active parameters
+            hidden_size=16384,
+            num_layers=88,
+            num_heads=128,
+            num_kv_heads=32,
+            seq_length=8192,
+            intermediate_size=None,
+            
+            # Training settings
+            batch_size=1024,
+            micro_batch_size=1,
+            gradient_accumulation_steps=512,
+            num_epochs=1,
+            learning_rate=1.5e-5,
+            weight_decay=0.01,
+            eval_every_n_batches=15000,
+            save_every_n_batches=30000,
+            precision="auto",
+            inference_precision="auto",
+            compile=True,
+            num_workers=16,
+            
+            # MoE settings - 8x pattern
+            use_moe=False,
+            use_mod=True,
+            num_experts=8,
+            moe_top_k=1,
+            capacity_factor=1.25,
+            load_balancing_weight=0.03,
+            
+            # DeepSpeed settings
+            use_deepspeed=True,
+            zero_stage=3,
+            cpu_offload=True,
+            cpu_offload_optimizer=True,
+            cpu_offload_parameters=True,
+            aggressive_cpu_offload=True,
+            gradient_compression=True,
+            overlap_comm=True,
+            contiguous_gradients=True,
+            nvme_offload_optimizer=False,
+            nvme_offload_parameters=False,
+            
+            # Production settings
+            experiment_name="b200_8x200b",
+            log_level="INFO",
+            health_check_interval=2000,
+            save_total_limit=50,
+            early_stopping_patience=50,
+            backup_every_n_hours=1,
+            lr_scheduler="cosine",
+            gradient_checkpointing=True,
+            use_flash_attention=True,
+            warmup_ratio=0.01,
+            
+            # Precision settings
+            auto_tune_precision=False,
+            precision_target="quality",
+            dynamic_precision=False,
+            tf32_enabled=True,
+            
+            # Memory settings
+            max_memory_usage=0.95,
+            streaming_threshold_gb=400.0,
+            enable_cpu_adam=True,
+            partition_activations=True,
+            
+            # Monitoring
+            enable_wandb=False,
+            profile_memory=True,
+            profile_communication=True,
+            log_throughput=True
+        )
+    
+    @staticmethod
+    def b300() -> Config:
+        """300B active parameter model (8x300B = 2.4T total)."""
+        return Config(
+            # Model architecture for ~300B active parameters
+            hidden_size=20480,
+            num_layers=96,
+            num_heads=160,
+            num_kv_heads=40,
+            seq_length=8192,
+            intermediate_size=None,
+            
+            # Training settings
+            batch_size=2048,
+            micro_batch_size=1,
+            gradient_accumulation_steps=1024,
+            num_epochs=1,
+            learning_rate=1e-5,
+            weight_decay=0.01,
+            eval_every_n_batches=20000,
+            save_every_n_batches=40000,
+            precision="auto",
+            inference_precision="auto",
+            compile=True,
+            num_workers=16,
+            
+            # MoE settings - 8x pattern
+            use_moe=False,
+            use_mod=True,
+            num_experts=8,
+            moe_top_k=1,
+            capacity_factor=1.25,
+            load_balancing_weight=0.03,
+            
+            # DeepSpeed settings
+            use_deepspeed=True,
+            zero_stage=3,
+            cpu_offload=True,
+            cpu_offload_optimizer=True,
+            cpu_offload_parameters=True,
+            aggressive_cpu_offload=True,
+            gradient_compression=True,
+            overlap_comm=True,
+            contiguous_gradients=True,
+            nvme_offload_optimizer=False,
+            nvme_offload_parameters=False,
+            
+            # Production settings
+            experiment_name="b300_8x300b",
+            log_level="INFO",
+            health_check_interval=3000,
+            save_total_limit=60,
+            early_stopping_patience=60,
+            backup_every_n_hours=1,
+            lr_scheduler="cosine",
+            gradient_checkpointing=True,
+            use_flash_attention=True,
+            warmup_ratio=0.01,
+            
+            # Precision settings
+            auto_tune_precision=False,
+            precision_target="quality",
+            dynamic_precision=False,
+            tf32_enabled=True,
+            
+            # Memory settings
+            max_memory_usage=0.95,
+            streaming_threshold_gb=600.0,
+            enable_cpu_adam=True,
+            partition_activations=True,
+            
+            # Monitoring
+            enable_wandb=False,
+            profile_memory=True,
+            profile_communication=True,
             log_throughput=True
         )
     
@@ -1136,6 +1604,84 @@ class ConfigPresets:
                 "deepspeed": "ZeRO-3 with CPU offload",
                 "hardware": "Multiple A100-80GB or H100",
                 "mps_compatible": False
+            },
+            "b30": {
+                "description": "30B active parameter model (8x30B total)",
+                "use_case": "Advanced research, large-scale applications",
+                "active_params": "~30B",
+                "total_params": "~240B (8x30B)",
+                "memory_usage": "Extreme (~120GB)",
+                "training_speed": "Very Slow",
+                "precision": "Mixed BF16 with TF32",
+                "moe_pattern": "8x experts, top-1 routing",
+                "deepspeed": "ZeRO-3 with aggressive CPU offload",
+                "hardware": "Multiple A100-80GB or H100 (8+ GPUs)",
+                "mps_compatible": False
+            },
+            "b50": {
+                "description": "50B active parameter model (8x50B total)",
+                "use_case": "Enterprise-scale research and applications",
+                "active_params": "~50B",
+                "total_params": "~400B (8x50B)",
+                "memory_usage": "Massive (~200GB)",
+                "training_speed": "Very Slow",
+                "precision": "Mixed BF16 with TF32",
+                "moe_pattern": "8x experts, top-1 routing",
+                "deepspeed": "ZeRO-3 with aggressive CPU offload",
+                "hardware": "Multiple H100 (16+ GPUs)",
+                "mps_compatible": False
+            },
+            "b75": {
+                "description": "75B active parameter model (8x75B total)",
+                "use_case": "Frontier research, state-of-the-art performance",
+                "active_params": "~75B",
+                "total_params": "~600B (8x75B)",
+                "memory_usage": "Massive (~300GB)",
+                "training_speed": "Very Slow",
+                "precision": "Mixed BF16 with TF32",
+                "moe_pattern": "8x experts, top-1 routing",
+                "deepspeed": "ZeRO-3 with aggressive CPU offload",
+                "hardware": "Large H100 cluster (32+ GPUs)",
+                "mps_compatible": False
+            },
+            "b100": {
+                "description": "100B active parameter model (8x100B total)",
+                "use_case": "Cutting-edge research, flagship models",
+                "active_params": "~100B",
+                "total_params": "~800B (8x100B)",
+                "memory_usage": "Massive (~400GB)",
+                "training_speed": "Extremely Slow",
+                "precision": "Mixed BF16 with TF32",
+                "moe_pattern": "8x experts, top-1 routing",
+                "deepspeed": "ZeRO-3 with aggressive CPU offload",
+                "hardware": "Large H100 cluster (64+ GPUs)",
+                "mps_compatible": False
+            },
+            "b200": {
+                "description": "200B active parameter model (8x200B total)",
+                "use_case": "Frontier research, extremely large-scale models",
+                "active_params": "~200B",
+                "total_params": "~1.6T (8x200B)",
+                "memory_usage": "Extreme (~800GB)",
+                "training_speed": "Extremely Slow",
+                "precision": "Mixed BF16 with TF32",
+                "moe_pattern": "8x experts, top-1 routing",
+                "deepspeed": "ZeRO-3 with aggressive CPU/NVMe offload",
+                "hardware": "Large H100/H200 cluster (128+ GPUs)",
+                "mps_compatible": False
+            },
+            "b300": {
+                "description": "300B active parameter model (8x300B total)",
+                "use_case": "Ultra-scale research, breaking boundaries",
+                "active_params": "~300B",
+                "total_params": "~2.4T (8x300B)",
+                "memory_usage": "Extreme (~1.2TB)",
+                "training_speed": "Extremely Slow",
+                "precision": "Mixed BF16 with TF32",
+                "moe_pattern": "8x experts, top-1 routing",
+                "deepspeed": "ZeRO-3 with aggressive CPU/NVMe offload",
+                "hardware": "Massive H100/H200 cluster (256+ GPUs)",
+                "mps_compatible": False
             }
         }
     
@@ -1153,6 +1699,12 @@ class ConfigPresets:
             'b1': ConfigPresets.b1(),
             'b7': ConfigPresets.b7(),
             'b14': ConfigPresets.b14(),
+            'b30': ConfigPresets.b30(),
+            'b50': ConfigPresets.b50(),
+            'b75': ConfigPresets.b75(),
+            'b100': ConfigPresets.b100(),
+            'b200': ConfigPresets.b200(),
+            'b300': ConfigPresets.b300(),
         }
         
         comparison = {}
@@ -1199,10 +1751,24 @@ class ConfigManager:
         """Create a configuration with optional overrides and hardware optimization."""
         
         # Get base configuration
-        if hasattr(ConfigPresets, preset):
-            config = getattr(ConfigPresets, preset)()
+        preset_methods = {
+            'debug': ConfigPresets.debug,
+            'debug_200m': ConfigPresets.debug_200m,
+            'b1': ConfigPresets.b1,
+            'b7': ConfigPresets.b7,
+            'b14': ConfigPresets.b14,
+            'b30': ConfigPresets.b30,
+            'b50': ConfigPresets.b50,
+            'b75': ConfigPresets.b75,
+            'b100': ConfigPresets.b100,
+            'b200': ConfigPresets.b200,
+            'b300': ConfigPresets.b300,
+        }
+        
+        if preset in preset_methods:
+            config = preset_methods[preset]()
         else:
-            raise ValueError(f"Unknown preset: {preset}. Available: {list(ConfigPresets.get_preset_info().keys())}")
+            raise ValueError(f"Unknown preset: {preset}. Available: {list(preset_methods.keys())}")
         
         # Apply overrides
         if overrides:
