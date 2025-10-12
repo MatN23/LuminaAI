@@ -615,6 +615,146 @@ class EnhancedConversationTrainer:
         
         # Setup training components
         self._setup_training()
+
+    def train_with_oom_fallback(self, train_dataset, eval_dataset=None):
+        """Train with automatic batch size reduction on OOM errors.
+    
+        This method wraps the normal train() method and catches OOM errors,
+        automatically reducing batch size and retrying.
+        """
+        original_batch_size = self.config.batch_size
+        original_grad_accum = getattr(self.config, 'gradient_accumulation_steps', 1)
+        min_batch_size = 1
+
+        # Calculate effective batch size
+        effective_batch_size = original_batch_size * original_grad_accum
+
+        print(f"Starting training with OOM protection")
+        print(f"  Initial batch size: {original_batch_size}")
+        print(f"  Gradient accumulation: {original_grad_accum}")
+        print(f"  Effective batch size: {effective_batch_size}")
+
+        while self.config.batch_size >= min_batch_size:
+            try:
+                print(f"\nAttempting training with:")
+                print(f"  Batch size: {self.config.batch_size}")
+                print(f"  Gradient accumulation: {self.config.gradient_accumulation_steps}")
+                print(f"  Effective batch size: {self.config.batch_size * self.config.gradient_accumulation_steps}")
+
+                # Call the normal train method
+                self.train(train_dataset, eval_dataset)
+
+                # Success!
+                break
+                
+            except RuntimeError as e:
+                error_msg = str(e).lower()
+                is_oom = any(x in error_msg for x in ["out of memory", "oom", "cuda out of memory", "mps out of memory"])
+
+                if is_oom:
+                    print(f"\n{'='*80}")
+                    print(f"OOM ERROR DETECTED!")
+                    print(f"{'='*80}")
+                    print(f"Error: {str(e)[:200]}")
+
+                    # Clear cache based on device
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                        print("Cleared CUDA cache")
+                    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                        torch.mps.empty_cache()
+                        print("Cleared MPS cache")
+
+                    # Strategy: Try to maintain effective batch size by adjusting gradient accumulation
+                    # First, try increasing gradient accumulation
+                    if self.config.gradient_accumulation_steps < 16:
+                        # Double gradient accumulation, halve batch size
+                        new_batch_size = max(min_batch_size, self.config.batch_size // 2)
+                        new_grad_accum = self.config.gradient_accumulation_steps * 2
+
+                        print(f"\nStrategy: Increase gradient accumulation")
+                        print(f"  New batch size: {new_batch_size}")
+                        print(f"  New gradient accumulation: {new_grad_accum}")
+
+                        self.config.batch_size = new_batch_size
+                        self.config.gradient_accumulation_steps = new_grad_accum
+                    else:
+                        # Just reduce batch size
+                        new_batch_size = max(min_batch_size, self.config.batch_size // 2)
+
+                        if new_batch_size < min_batch_size:
+                            print(f"\nCannot reduce batch size below {min_batch_size}. OOM error persists.")
+                            print(f"Suggestions:")
+                            print(f"  - Reduce model size")
+                            print(f"  - Reduce sequence length")
+                            print(f"  - Enable gradient checkpointing")
+                            print(f"  - Use a smaller precision (fp16/bf16)")
+                            raise
+                            
+                        print(f"\nStrategy: Reduce batch size only")
+                        print(f"  New batch size: {new_batch_size}")
+
+                        self.config.batch_size = new_batch_size
+
+                    # Reset training state for clean restart
+                    print("\nResetting training state...")
+                    self.global_step = 0
+                    self.current_epoch = 0
+                    self.best_eval_loss = float('inf')
+                    self.patience_counter = 0
+                    self.should_stop = False
+
+                    # Clear metrics
+                    self.metrics = {
+                        'train_losses': [],
+                        'eval_losses': [],
+                        'learning_rates': [],
+                        'gradient_norms': [],
+                        'throughput': [],
+                        'epoch_times': []
+                    }
+
+                    # Re-setup training components with new batch size
+                    print("Re-initializing training components...")
+                    self._setup_training()
+
+                    print(f"\nRetrying training with new configuration...")
+
+                else:
+                    # Not an OOM error, re-raise
+                    print(f"\nNon-OOM error detected: {str(e)[:200]}")
+                    raise
+    
+        # Report final configuration
+        if self.config.batch_size != original_batch_size or self.config.gradient_accumulation_steps != original_grad_accum:
+            print(f"\n{'='*80}")
+            print(f"TRAINING COMPLETED WITH ADJUSTED CONFIGURATION")
+            print(f"{'='*80}")
+            print(f"Original configuration:")
+            print(f"  Batch size: {original_batch_size}")
+            print(f"  Gradient accumulation: {original_grad_accum}")
+            print(f"  Effective batch size: {effective_batch_size}")
+            print(f"\nFinal configuration:")
+            print(f"  Batch size: {self.config.batch_size}")
+            print(f"  Gradient accumulation: {self.config.gradient_accumulation_steps}")
+            print(f"  Effective batch size: {self.config.batch_size * self.config.gradient_accumulation_steps}")
+
+            # Save optimal configuration
+            try:
+                optimal_config = {
+                    'batch_size': self.config.batch_size,
+                    'gradient_accumulation_steps': self.config.gradient_accumulation_steps,
+                    'effective_batch_size': self.config.batch_size * self.config.gradient_accumulation_steps,
+                    'original_batch_size': original_batch_size,
+                    'original_gradient_accumulation': original_grad_accum
+                }
+            
+                import json
+                with open('optimal_batch_config.json', 'w') as f:
+                    json.dump(optimal_config, f, indent=2)
+                print(f"\nSaved optimal configuration to optimal_batch_config.json")
+            except Exception as e:
+                print(f"Could not save optimal configuration: {e}")
     
     def _log_memory_usage(self, step_info: str):
         """Log current memory usage for CUDA, MPS, or CPU."""

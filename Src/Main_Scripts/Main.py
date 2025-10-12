@@ -94,6 +94,202 @@ except ImportError:
     except ImportError:
         print("⚠ Advanced training infrastructure not available - will use fallback")
 
+def wrap_orchestrator_with_oom_protection(orchestrator, train_dataset, eval_dataset):
+    """
+    Wrap the orchestrator's adaptive training with OOM protection.
+    
+    This function catches OOM errors from the orchestrator and automatically
+    adjusts batch size, then recreates the orchestrator with new settings.
+    """
+    original_batch_size = orchestrator.config.batch_size
+    original_grad_accum = getattr(orchestrator.config, 'gradient_accumulation_steps', 1)
+    min_batch_size = 1
+    
+    attempt = 0
+    max_attempts = 10  # Prevent infinite loops
+    
+    print(f"\n{'='*80}")
+    print(f"ADAPTIVE TRAINING WITH OOM PROTECTION")
+    print(f"{'='*80}")
+    print(f"Initial configuration:")
+    print(f"  Batch size: {original_batch_size}")
+    print(f"  Gradient accumulation: {original_grad_accum}")
+    print(f"  Effective batch size: {original_batch_size * original_grad_accum}")
+    print(f"  Max attempts: {max_attempts}")
+    
+    while orchestrator.config.batch_size >= min_batch_size and attempt < max_attempts:
+        attempt += 1
+        
+        try:
+            print(f"\n{'='*80}")
+            print(f"TRAINING ATTEMPT {attempt}/{max_attempts}")
+            print(f"{'='*80}")
+            print(f"Current configuration:")
+            print(f"  Batch size: {orchestrator.config.batch_size}")
+            print(f"  Gradient accumulation: {orchestrator.config.gradient_accumulation_steps}")
+            print(f"  Effective batch size: {orchestrator.config.batch_size * orchestrator.config.gradient_accumulation_steps}")
+            
+            # Run adaptive training
+            orchestrator.run_adaptive_training()
+            
+            # Success!
+            print(f"\n{'='*80}")
+            print(f"✓ TRAINING COMPLETED SUCCESSFULLY")
+            print(f"{'='*80}")
+            break
+            
+        except RuntimeError as e:
+            error_msg = str(e).lower()
+            is_oom = any(x in error_msg for x in ["out of memory", "oom", "cuda out of memory", "mps out of memory"])
+            
+            if is_oom:
+                print(f"\n{'='*80}")
+                print(f"⚠ OOM ERROR DETECTED IN ORCHESTRATOR (Attempt {attempt})")
+                print(f"{'='*80}")
+                print(f"Error message: {str(e)[:300]}")
+                
+                # Clear cache
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    print("✓ Cleared CUDA cache")
+                elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                    torch.mps.empty_cache()
+                    print("✓ Cleared MPS cache")
+                
+                # Force garbage collection
+                import gc
+                gc.collect()
+                print("✓ Ran garbage collection")
+                
+                # Adaptive strategy for batch size reduction
+                current_batch = orchestrator.config.batch_size
+                current_grad_accum = orchestrator.config.gradient_accumulation_steps
+                
+                # Strategy 1: If gradient accumulation is reasonable, increase it and reduce batch size
+                if current_grad_accum < 16 and current_batch > 1:
+                    new_batch_size = max(1, current_batch // 2)
+                    new_grad_accum = min(32, current_grad_accum * 2)
+                    strategy = "Halve batch size, double gradient accumulation"
+                
+                # Strategy 2: Just reduce batch size
+                elif current_batch > 1:
+                    new_batch_size = max(1, current_batch // 2)
+                    new_grad_accum = current_grad_accum
+                    strategy = "Halve batch size only"
+                
+                # Strategy 3: Can't reduce further
+                else:
+                    print(f"\n{'='*80}")
+                    print(f"✗ CANNOT REDUCE BATCH SIZE FURTHER")
+                    print(f"{'='*80}")
+                    print(f"Current batch size: {current_batch}")
+                    print(f"Current gradient accumulation: {current_grad_accum}")
+                    print(f"\nSuggestions to reduce memory usage:")
+                    print(f"  1. Reduce sequence length (current: {orchestrator.config.seq_length})")
+                    print(f"  2. Reduce model size (layers: {orchestrator.config.num_layers}, hidden: {orchestrator.config.hidden_size})")
+                    print(f"  3. Enable gradient checkpointing: config.gradient_checkpointing = True")
+                    print(f"  4. Use lower precision: config.precision = 'fp16' or 'bf16'")
+                    print(f"  5. Enable CPU offloading: config.cpu_offload = True")
+                    print(f"  6. Use DeepSpeed ZeRO: config.use_deepspeed = True, config.zero_stage = 3")
+                    if hasattr(orchestrator.config, 'use_moe') and orchestrator.config.use_moe:
+                        print(f"  7. Reduce number of experts: config.num_experts (current: {orchestrator.config.num_experts})")
+                    raise
+                
+                print(f"\n{'='*80}")
+                print(f"APPLYING RECOVERY STRATEGY: {strategy}")
+                print(f"{'='*80}")
+                print(f"  Previous batch size: {current_batch}")
+                print(f"  Previous gradient accumulation: {current_grad_accum}")
+                print(f"  Previous effective batch: {current_batch * current_grad_accum}")
+                print(f"  →")
+                print(f"  New batch size: {new_batch_size}")
+                print(f"  New gradient accumulation: {new_grad_accum}")
+                print(f"  New effective batch: {new_batch_size * new_grad_accum}")
+                
+                # Update configuration
+                orchestrator.config.batch_size = new_batch_size
+                orchestrator.config.gradient_accumulation_steps = new_grad_accum
+                
+                # Recreate orchestrator with new configuration
+                print(f"\nRecreating orchestrator with adjusted configuration...")
+                try:
+                    # Import here to avoid circular dependency
+                    from training.orchestrator import AdaptiveTrainingOrchestrator
+                    orchestrator = AdaptiveTrainingOrchestrator(orchestrator.config)
+                    print(f"✓ Orchestrator recreated successfully")
+                except ImportError:
+                    from orchestrator import AdaptiveTrainingOrchestrator
+                    orchestrator = AdaptiveTrainingOrchestrator(orchestrator.config)
+                    print(f"✓ Orchestrator recreated successfully")
+                
+                print(f"\nPreparing to retry training (attempt {attempt + 1}/{max_attempts})...")
+                
+            else:
+                # Not an OOM error, re-raise
+                print(f"\n{'='*80}")
+                print(f"✗ NON-OOM ERROR DETECTED")
+                print(f"{'='*80}")
+                print(f"Error type: {type(e).__name__}")
+                print(f"Error message: {str(e)[:500]}")
+                raise
+        
+        except KeyboardInterrupt:
+            print(f"\n{'='*80}")
+            print(f"TRAINING INTERRUPTED BY USER")
+            print(f"{'='*80}")
+            raise
+        
+        except Exception as e:
+            print(f"\n{'='*80}")
+            print(f"✗ UNEXPECTED ERROR")
+            print(f"{'='*80}")
+            print(f"Error type: {type(e).__name__}")
+            print(f"Error message: {str(e)[:500]}")
+            raise
+    
+    # Check if we exhausted attempts
+    if attempt >= max_attempts:
+        print(f"\n{'='*80}")
+        print(f"✗ MAXIMUM ATTEMPTS REACHED")
+        print(f"{'='*80}")
+        print(f"Training failed after {max_attempts} attempts")
+        raise RuntimeError(f"Could not complete training after {max_attempts} OOM recovery attempts")
+    
+    # Report final configuration
+    final_batch = orchestrator.config.batch_size
+    final_grad_accum = orchestrator.config.gradient_accumulation_steps
+    
+    if final_batch != original_batch_size or final_grad_accum != original_grad_accum:
+        print(f"\n{'='*80}")
+        print(f"TRAINING COMPLETED WITH ADJUSTED CONFIGURATION")
+        print(f"{'='*80}")
+        print(f"Original → Final:")
+        print(f"  Batch size: {original_batch_size} → {final_batch}")
+        print(f"  Gradient accumulation: {original_grad_accum} → {final_grad_accum}")
+        print(f"  Effective batch size: {original_batch_size * original_grad_accum} → {final_batch * final_grad_accum}")
+        
+        # Save optimal configuration
+        try:
+            optimal_config = {
+                'batch_size': final_batch,
+                'gradient_accumulation_steps': final_grad_accum,
+                'effective_batch_size': final_batch * final_grad_accum,
+                'original_batch_size': original_batch_size,
+                'original_gradient_accumulation': original_grad_accum,
+                'attempts_needed': attempt,
+                'device': str(orchestrator.trainer.device) if hasattr(orchestrator, 'trainer') else 'unknown'
+            }
+            
+            optimal_path = Path("optimal_batch_config.json")
+            with open(optimal_path, 'w') as f:
+                json.dump(optimal_config, f, indent=2)
+            print(f"\n✓ Saved optimal configuration to {optimal_path}")
+            print(f"  Use these settings for future runs to avoid OOM errors")
+        except Exception as e:
+            print(f"⚠ Could not save optimal configuration: {e}")
+    
+    return orchestrator
+
 
 def validate_precision_support(precision: str, device: torch.device) -> Tuple[bool, str]:
     """Validate if the requested precision is supported by the hardware."""
@@ -1279,9 +1475,13 @@ def main():
         
         training_start_time = time.time()
         
-        # Run adaptive training
+        # Run adaptive training with OOM protection
         try:
-            orchestrator.run_adaptive_training()
+            orchestrator = wrap_orchestrator_with_oom_protection(
+                orchestrator, 
+                train_dataset, 
+                eval_dataset
+            )
         except KeyboardInterrupt:
             print("\n" + "="*80)
             print("TRAINING INTERRUPTED BY USER")
