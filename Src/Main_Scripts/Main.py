@@ -12,6 +12,7 @@ import time
 import math
 import signal
 import shutil
+import traceback
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List, Tuple
@@ -93,6 +94,152 @@ except ImportError:
         print("✓ Advanced training infrastructure available (Orchestrator + Trainer + Checkpoint)")
     except ImportError:
         print("⚠ Advanced training infrastructure not available - will use fallback")
+
+"""
+Path Validator Helper
+Add this function to Main.py right after your imports and before main()
+"""
+
+def validate_data_paths(data_params: dict) -> bool:
+    """
+    Validate all data paths before training starts.
+    Returns True if all paths are valid, False otherwise.
+    """
+    print("\n" + "="*80)
+    print("VALIDATING DATA PATHS")
+    print("="*80)
+    
+    training_mode = data_params.get('training_mode', 'finetuning_only')
+    print(f"Training Mode: {training_mode}\n")
+    
+    all_valid = True
+    checked_paths = []
+    
+    # Check base training paths
+    if training_mode in ['base_only', 'hybrid', 'interleaved']:
+        base_paths = data_params.get('base_training_paths', [])
+        if base_paths:
+            print("Base Training Paths:")
+            for i, path_str in enumerate(base_paths, 1):
+                path = Path(path_str)
+                
+                # Check if it's a directory (ERROR)
+                if path.is_dir():
+                    print(f"  ❌ [{i}] {path_str} - ERROR: This is a directory, not a file!")
+                    all_valid = False
+                # Check if file exists
+                elif path.exists() and path.is_file():
+                    size = path.stat().st_size / (1024*1024)
+                    print(f"  ✅ [{i}] {path_str} ({size:.2f} MB)")
+                    checked_paths.append(str(path))
+                else:
+                    print(f"  ❌ [{i}] {path_str} - File not found!")
+                    all_valid = False
+    
+    # Check fine-tuning paths
+    if training_mode in ['finetuning_only', 'hybrid', 'interleaved']:
+        ft_paths = data_params.get('finetuning_paths', [])
+        if ft_paths:
+            print("\nFine-tuning Paths:")
+            for i, path_str in enumerate(ft_paths, 1):
+                path = Path(path_str)
+                
+                # Check if it's a directory (ERROR)
+                if path.is_dir():
+                    print(f"  ❌ [{i}] {path_str} - ERROR: This is a directory, not a file!")
+                    all_valid = False
+                # Check if file exists
+                elif path.exists() and path.is_file():
+                    size = path.stat().st_size / (1024*1024)
+                    print(f"  ✅ [{i}] {path_str} ({size:.2f} MB)")
+                    checked_paths.append(str(path))
+                else:
+                    print(f"  ❌ [{i}] {path_str} - File not found!")
+                    all_valid = False
+        else:
+            print("\n❌ No fine-tuning paths specified for finetuning_only mode!")
+            all_valid = False
+    
+    # Check eval paths
+    eval_paths = []
+    if training_mode == 'base_only':
+        eval_paths = data_params.get('base_eval_paths', [])
+    elif training_mode == 'finetuning_only':
+        eval_paths = data_params.get('finetuning_eval_paths', [])
+    
+    if eval_paths:
+        print("\nEvaluation Paths:")
+        for i, path_str in enumerate(eval_paths, 1):
+            path = Path(path_str)
+            
+            if path.is_dir():
+                print(f"  ❌ [{i}] {path_str} - ERROR: This is a directory, not a file!")
+                all_valid = False
+            elif path.exists() and path.is_file():
+                size = path.stat().st_size / (1024*1024)
+                print(f"  ✅ [{i}] {path_str} ({size:.2f} MB)")
+            else:
+                print(f"  ⚠️  [{i}] {path_str} - File not found (will use training data)")
+    
+    # Summary
+    print("\n" + "="*80)
+    if all_valid and checked_paths:
+        print(f"✅ VALIDATION PASSED - All {len(checked_paths)} file(s) are valid")
+        print("="*80 + "\n")
+        return True
+    else:
+        print("❌ VALIDATION FAILED - Please fix the issues above")
+        print("="*80 + "\n")
+        return False
+    
+def validate_mps_compatibility(config) -> Tuple[bool, List[str]]:
+    """
+    Validate configuration for MPS (Apple Silicon) compatibility.
+    
+    Returns:
+        Tuple of (is_compatible, list_of_issues)
+    """
+    issues = []
+    
+    # Check if we're actually on MPS
+    if not (hasattr(torch.backends, 'mps') and torch.backends.mps.is_available()):
+        return True, []  # Not MPS, no issues
+    
+    # Check DeepSpeed (not supported on MPS)
+    if getattr(config, 'use_deepspeed', False):
+        issues.append("DeepSpeed is not supported on MPS. Set use_deepspeed=False")
+    
+    # Check Flash Attention (not supported on MPS)
+    if getattr(config, 'use_flash_attention', True):
+        issues.append("Flash Attention is not supported on MPS. Set use_flash_attention=False")
+    
+    # Check precision (BF16 has limited support)
+    precision = getattr(config, 'precision', 'fp32')
+    if precision in ['bf16', 'mixed_bf16']:
+        issues.append("BF16 precision has limited support on MPS. Use 'fp16' or 'fp32' instead")
+    
+    # Check model compilation (can be problematic)
+    if getattr(config, 'compile', False):
+        issues.append("Model compilation may cause issues on MPS. Consider setting compile=False")
+    
+    # Check batch size (MPS uses unified memory)
+    batch_size = getattr(config, 'batch_size', 1)
+    if batch_size > 8:
+        issues.append(f"Large batch size ({batch_size}) may cause memory issues on MPS. Consider starting with batch_size=2-4")
+    
+    is_compatible = len(issues) == 0
+    return is_compatible, issues
+
+
+# Add this to your main() function right after data_params is defined:
+# Example usage in main():
+"""
+    # After defining data_params:
+    if not validate_data_paths(data_params):
+        print("\n❌ Data path validation failed. Cannot continue.")
+        print("Please check your file paths in the data_params configuration.\n")
+        return 1
+"""
 
 def wrap_orchestrator_with_oom_protection(orchestrator, train_dataset, eval_dataset):
     """
@@ -1101,6 +1248,11 @@ def main():
         'cache_combined_dataset': True,
         'streaming_threshold_gb': 10.0,  # Use streaming for files > 10GB
     }
+    # Validate data paths FIRST
+    if not validate_data_paths(data_params):
+        print("\n❌ Data path validation failed. Cannot continue.")
+        print("Please check your file paths in the data_params configuration.\n")
+        return 1
     
     # DeepSpeed configuration
     deepspeed_params = {
@@ -1293,55 +1445,72 @@ def main():
             print_banner("STEP 6: DATA PREPARATION (BASIC)")
             print("Skipping advanced data validation")
         
+        # Complete replacement for Step 7 in Main.py (around line 1270-1350)
+        # This handles both single and multiple dataset files correctly
+
         # Step 7: Setup datasets
         print_banner("STEP 7: SETTING UP DATASETS")
         
-        # Use MultiDatasetManager if multiple datasets are specified
-        has_multiple_train = isinstance(data_params.get('train_data_paths'), list) and len(data_params.get('train_data_paths', [])) > 1
-        has_multiple_eval = isinstance(data_params.get('eval_data_paths'), list) and len(data_params.get('eval_data_paths', [])) > 1
-        
-        if has_multiple_train or has_multiple_eval:
-            print("Using MultiDatasetManager for multiple datasets")
-            train_data_path, eval_data_path = setup_multi_dataset_training(config, data_params)
-        else:
-            # Single dataset - use original logic
-            print("Using single dataset mode")
-            train_data_path = Path(data_params.get('train_data_path') or data_params.get('train_data_paths', [''])[0])
-            eval_data_path = Path(data_params.get('eval_data_path') or data_params.get('eval_data_paths', [''])[0])
-            
-            # Update config
-            config.train_data_path = str(train_data_path)
-            config.eval_data_path = str(eval_data_path) if eval_data_path.exists() else str(train_data_path)
-        
-        # Validate paths exist
-        train_path_obj = Path(config.train_data_path)
-        if not train_path_obj.exists():
-            print(f"ERROR: Training data not found: {train_path_obj}")
-            return 1
-        
-        print(f"\nFinal dataset paths:")
-        print(f"  Training: {config.train_data_path}")
-        print(f"  Evaluation: {config.eval_data_path}")
-        
-        # Load datasets
-        print(f"\nLoading training dataset...")
-        train_dataset = ConversationDataset(
-            str(config.train_data_path), tokenizer, config, "train"
-        )
-        print(f"Training dataset loaded: {len(train_dataset):,} samples")
-        
-        eval_dataset = None
-        eval_path_obj = Path(config.eval_data_path)
-        if eval_path_obj.exists() and eval_path_obj != train_path_obj:
-            print(f"Loading evaluation dataset...")
-            eval_dataset = ConversationDataset(
-                str(config.eval_data_path), tokenizer, config, "eval"
-            )
-            print(f"Evaluation dataset loaded: {len(eval_dataset):,} samples")
-        else:
-            print("Using training data for evaluation")
-            eval_dataset = train_dataset
-        
+        # Use the HybridDatasetManager from dataset.py
+        from core.dataset import HybridDatasetManager, setup_datasets
+
+        # First, transfer data_params to config attributes
+        # This ensures the HybridDatasetManager can read them
+        config.base_training_paths = data_params.get('base_training_paths', [])
+        config.base_eval_paths = data_params.get('base_eval_paths', [])
+        config.finetuning_paths = data_params.get('finetuning_paths', [])
+        config.finetuning_eval_paths = data_params.get('finetuning_eval_paths', [])
+        config.training_mode = data_params.get('training_mode', 'finetuning_only')
+        config.data_cache_dir = data_params.get('data_cache_dir', 'data/cache')
+        config.streaming_threshold_gb = data_params.get('streaming_threshold_gb', 10.0)
+
+        # Additional config settings
+        config.base_finetuning_ratio = data_params.get('base_finetuning_ratio', 0.5)
+        config.max_conversations_per_dataset = data_params.get('max_conversations_per_dataset', None)
+
+        print(f"\nTraining mode: {config.training_mode}")
+        print(f"Fine-tuning paths: {config.finetuning_paths}")
+        print(f"Fine-tuning eval paths: {config.finetuning_eval_paths}")
+
+        # Use the setup_datasets function which handles everything
+        print("\nSetting up datasets using HybridDatasetManager...")
+        try:
+            train_dataset, eval_dataset = setup_datasets(config, tokenizer)
+
+            print(f"\n✓ Datasets loaded successfully!")
+            print(f"  Training dataset: {len(train_dataset):,} samples")
+            if eval_dataset != train_dataset:
+                print(f"  Evaluation dataset: {len(eval_dataset):,} samples")
+            else:
+                print(f"  Using training data for evaluation")
+
+        except Exception as e:
+            print(f"\n✗ Dataset loading failed: {e}")
+            import traceback
+            traceback.print_exc()
+
+            # Provide helpful error messages
+            print("\n" + "="*80)
+            print("TROUBLESHOOTING DATASET ERROR")
+            print("="*80)
+            print("\nPlease check:")
+            print("1. All file paths in finetuning_paths exist:")
+            for i, path in enumerate(config.finetuning_paths, 1):
+                exists = Path(path).exists()
+                status = "✓" if exists else "✗"
+                print(f"   {status} [{i}] {path}")
+
+            print("\n2. Files are valid JSONL format")
+            print("3. Directory permissions allow reading")
+
+        # Try to give specific advice based on the error
+            if "IsADirectoryError" in str(e):
+                print("\n⚠️  ERROR: A directory path was passed instead of a file path")
+                print("   Check that all paths in finetuning_paths point to actual files, not directories")
+
+            sys.exit(1)
+
+        # Display dataset statistics if available
         print("\n" + "="*80)
         print("DATASET & TRAINING CALCULATION VERIFICATION")
         print("="*80)

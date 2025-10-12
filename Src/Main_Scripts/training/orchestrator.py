@@ -1116,47 +1116,58 @@ class AdaptiveTrainingOrchestrator:
     def _setup_datasets(self):
         """Setup datasets with adaptive loading strategies."""
         logging.info("Setting up datasets with adaptive loading...")
-        
-        train_data_path = Path(self.config.train_data_path)
+
+        # Handle the case where train_data_path might not be set
+        train_data_path_str = getattr(self.config, 'train_data_path', None)
+    
+        if not train_data_path_str:
+            raise ValueError("train_data_path not set in config. Please ensure data paths are properly configured.")
+    
+        train_data_path = Path(train_data_path_str)
+    
+        # Additional validation
         if not train_data_path.exists():
-            raise FileNotFoundError(f"Training data not found: {self.config.train_data_path}")
-        
+            raise FileNotFoundError(f"Training data not found: {train_data_path}")
+
         try:
-            from core.dataset import ConversationDataset, StreamingConversationDataset
+            # FIXED: Import only what exists
+            from core.dataset import ConversationDataset
         except ImportError:
             try:
-                from dataset import ConversationDataset, StreamingConversationDataset
+                from dataset import ConversationDataset
             except ImportError:
                 raise ImportError("Could not import dataset classes")
-        
+
         # Determine optimal loading strategy
         file_size_gb = train_data_path.stat().st_size / (1024**3)
-        
-        if file_size_gb > 10:
-            # Use streaming for large datasets
-            train_dataset = StreamingConversationDataset(
-                str(train_data_path), self.tokenizer, self.config, "train"
-            )
-            logging.info(f"Using streaming dataset for {file_size_gb:.1f}GB file")
-        else:
-            train_dataset = ConversationDataset(
-                str(train_data_path), self.tokenizer, self.config, "train"
-            )
-            logging.info(f"Using standard dataset for {file_size_gb:.1f}GB file")
-        
+
+        # For now, just use standard ConversationDataset
+        # Streaming is handled by the HybridDatasetManager if needed
+        logging.info(f"Loading dataset from {train_data_path} ({file_size_gb:.1f}GB)")
+
+        train_dataset = ConversationDataset(
+            str(train_data_path), self.tokenizer, self.config, "train"
+        )
+
         # Setup evaluation dataset
         eval_dataset = None
         if (hasattr(self.config, 'eval_data_path') and 
             self.config.eval_data_path and 
             Path(self.config.eval_data_path).exists()):
-            eval_dataset = ConversationDataset(
-                self.config.eval_data_path, self.tokenizer, self.config, "eval"
-            )
-        
-        logging.info(f"Train dataset ready with adaptive loading")
-        if eval_dataset:
-            logging.info(f"Eval dataset: {len(eval_dataset)} samples")
-        
+
+            eval_path = Path(self.config.eval_data_path)
+            if eval_path != train_data_path:
+                eval_dataset = ConversationDataset(
+                    str(eval_path), self.tokenizer, self.config, "eval"
+                )
+                logging.info(f"Eval dataset: {len(eval_dataset)} samples")
+            else:
+                eval_dataset = train_dataset
+        else:
+            eval_dataset = train_dataset
+
+        logging.info(f"Train dataset ready: {len(train_dataset)} samples")
+
         return train_dataset, eval_dataset
     
     def _save_emergency_adaptive_state(self):
