@@ -763,16 +763,27 @@ class InterleavedDataset(Dataset):
             return self.finetuning_dataset[dataset_idx]
 
 
+# Add this to the END of your dataset.py file (after all class definitions)
+
 def create_dataloader(dataset: Union[Dataset, IterableDataset], 
                      config, 
                      shuffle: bool = True) -> DataLoader:
     """Create optimized dataloader with error handling."""
     try:
-        if isinstance(dataset, (StreamingConversationDataset, StreamingBaseTrainingDataset)):
+        # FIXED: Check using isinstance with actual class objects
+        is_streaming = isinstance(dataset, IterableDataset)
+        
+        # Also check for our custom streaming classes by name (safer)
+        is_custom_streaming = (
+            hasattr(dataset, '__class__') and 
+            'Streaming' in dataset.__class__.__name__
+        )
+        
+        if is_streaming or is_custom_streaming:
             return DataLoader(
                 dataset,
                 batch_size=config.batch_size,
-                num_workers=0,
+                num_workers=0,  # Streaming datasets don't support num_workers > 0
                 pin_memory=torch.cuda.is_available(),
                 drop_last=True,
             )
@@ -789,11 +800,12 @@ def create_dataloader(dataset: Union[Dataset, IterableDataset],
             )
     except Exception as e:
         logging.warning(f"Failed to create optimized dataloader: {e}")
+        # SAFER FALLBACK - just create basic dataloader
         return DataLoader(
             dataset,
             batch_size=config.batch_size,
             shuffle=shuffle if not isinstance(dataset, IterableDataset) else False,
-            num_workers=0,
+            num_workers=0,  # Safest option
             drop_last=True
         )
 
@@ -806,3 +818,15 @@ def setup_datasets(config, tokenizer):
     """
     manager = HybridDatasetManager(config)
     return manager.get_datasets(tokenizer)
+
+
+# Make sure these are exported
+__all__ = [
+    'BaseTrainingDataset',
+    'StreamingBaseTrainingDataset', 
+    'ConversationDataset',
+    'HybridDatasetManager',
+    'InterleavedDataset',
+    'create_dataloader',
+    'setup_datasets'
+]

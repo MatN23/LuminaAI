@@ -1361,6 +1361,17 @@ def main():
             print(f"Base configuration loaded successfully")
         else:
             raise ValueError(f"Unknown config preset: {config_choice}")
+
+        # After: config = getattr(ConfigPresets, config_choice)()
+        
+        # FORCE REMOVE ANY LIMITS
+        config.limit_train_batches = None
+        config.max_train_steps = None  
+        config.fast_dev_run = False
+
+        print("="*80)
+        print("DEBUG: FORCING FULL DATASET TRAINING")
+        print("="*80)   
         
         # Apply all parameter overrides
         all_params = {

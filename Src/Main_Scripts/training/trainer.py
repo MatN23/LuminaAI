@@ -1902,6 +1902,15 @@ class EnhancedConversationTrainer:
         
         # Setup data loaders
         train_dataloader = create_dataloader(train_dataset, self.config, shuffle=True)
+
+        print("="*80)
+        print("DATALOADER DEBUG INFO")
+        print("="*80)
+        print(f"Dataset size: {len(train_dataset):,}")
+        print(f"Batch size: {self.config.batch_size}")
+        print(f"Expected batches: {len(train_dataset) // self.config.batch_size}")
+        print(f"Actual dataloader batches: {len(train_dataloader)}")
+        print("="*80)
         
         if len(train_dataloader) == 0:
             print("ERROR: Train dataloader is empty!")
