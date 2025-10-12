@@ -859,36 +859,51 @@ def main():
     
     # Data configuration
     data_params = {
-        # Multiple training datasets (list of paths)
-        'train_data_paths': [
+        # ===================================================================
+        # BASE TRAINING (Pre-training on raw text like The Pile, C4, etc.)
+        # ===================================================================
+        'base_training_paths': [
+            # 'data/pile/pile_shard_00.jsonl',
+            # 'data/pile/pile_shard_01.jsonl',
+            # 'data/c4/c4_train.jsonl',
+        ],
+
+        'base_eval_paths': [
+            # 'data/pile/pile_eval.jsonl',
+        ],
+
+        # ===================================================================
+        # FINE-TUNING (Instruction tuning on conversations)
+        # ===================================================================
+        'finetuning_paths': [
             'oasst1_data/oasst1_train.jsonl',
             'oasst1_data/oasst1_train_part2.jsonl',
             'oasst1_data/oasst1_train_part3.jsonl',
         ],
 
-        # Multiple evaluation datasets (list of paths)
-        'eval_data_paths': [
+        'finetuning_eval_paths': [
             'oasst1_data/oasst1_validation.jsonl',
         ],
 
-        # Dataset mixing strategy
-        'dataset_mixing_strategy': 'concatenate',  # Options: 'concatenate', 'interleave', 'weighted'
+        # ===================================================================
+        # TRAINING MODE
+        # ===================================================================
+        'training_mode': 'finetuning_only',  # Options:
+        # - 'base_only': Only base/pre-training on raw text
+        # - 'finetuning_only': Only instruction/chat fine-tuning (default)
+        # - 'hybrid': Sequential - base training THEN fine-tuning
+        # - 'interleaved': Mixed - alternate between base and fine-tuning
 
-        # Weights for weighted mixing (only used if strategy is 'weighted')
-        'dataset_weights': [1.0, 1.0, 1.0],  # Relative weights for each dataset
+        # For 'interleaved' mode only:
+        'base_finetuning_ratio': 0.7,  # 70% base, 30% fine-tuning
 
-        # Interleaving settings (only used if strategy is 'interleave')
-        'interleave_probabilities': None,  # Auto-calculate if None, or provide list of probabilities
-
-        # Maximum conversations per dataset (None for unlimited)
+        # ===================================================================
+        # DATASET PROCESSING
+        # ===================================================================
         'max_conversations_per_dataset': None,
-
-        # Validate each dataset before training
         'validate_datasets': True,
-
-        # Cache combined dataset (speeds up subsequent runs)
         'cache_combined_dataset': True,
-        'cached_dataset_path': 'oasst1_data/combined_train_cache.jsonl',
+        'streaming_threshold_gb': 10.0,  # Use streaming for files > 10GB
     }
     
     # DeepSpeed configuration
