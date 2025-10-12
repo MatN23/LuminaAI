@@ -860,20 +860,20 @@ def main():
     # Data configuration
     data_params = {
         # ===================================================================
-        # BASE TRAINING (Pre-training on raw text like The Pile, C4, etc.)
+        # BASE TRAINING (Pre-training on raw text like The Pile, C4, etc. Works on .txt and .jsonl)
         # ===================================================================
         'base_training_paths': [
-            # 'data/pile/pile_shard_00.jsonl',
+            # 'data/pile/pile_shard_00.txt',
             # 'data/pile/pile_shard_01.jsonl',
-            # 'data/c4/c4_train.jsonl',
+            # 'data/c4/c4_train.txt',
         ],
 
-        'base_eval_paths': [
+        'base_eval_paths': [ # Only .jsonl
             # 'data/pile/pile_eval.jsonl',
         ],
 
         # ===================================================================
-        # FINE-TUNING (Instruction tuning on conversations)
+        # FINE-TUNING (Instruction tuning on conversations. Only works on .jsonl)
         # ===================================================================
         'finetuning_paths': [
             'oasst1_data/oasst1_train.jsonl',
