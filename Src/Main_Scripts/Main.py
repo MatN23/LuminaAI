@@ -941,17 +941,20 @@ def estimate_and_display_training_time(config, dataset_size: int):
     print(f"    Hours: {estimates['estimated_hours']:.1f}")
     print(f"    Days: {estimates['estimated_days']:.2f}")
     
-    # Convert to more readable format
+    # Convert estimated hours to a human-readable format
     hours = estimates['estimated_hours']
     if hours < 1:
-        print(f"    Human Readable: {hours * 60:.0f} minutes")
+        human_readable = f"{hours * 60:.0f} minutes"
     elif hours < 24:
-        print(f"    Human Readable: {hours:.1f} hours")
+        human_readable = f"{hours:.1f} hours"
     else:
         days = int(hours // 24)
         remaining_hours = hours % 24
-        print(f"    Human Readable: {days} days, {remaining_hours:.1f} hours")
+        human_readable = f"{days} days, {remaining_hours:.1f} hours"
     
+    print(f"    Human Readable: {human_readable}")
+    
+    # Continue with resource and recommendation messages...
     print_section("Resource Utilization")
     print(f"  Estimated Memory Utilization: {estimates['memory_utilization']:.1%}")
     
@@ -961,7 +964,6 @@ def estimate_and_display_training_time(config, dataset_size: int):
     else:
         print(f"  Memory utilization within safe limits")
     
-    # Additional resource recommendations
     print_section("Optimization Recommendations")
     if estimates['memory_utilization'] > 0.85:
         print(f"  Memory:")
@@ -1171,7 +1173,7 @@ def main():
     
     # Training mode selection
     use_adaptive_training = TRAINING_INFRASTRUCTURE_AVAILABLE  # Orchestrator with AI-driven optimization
-    
+
     # Training parameters
     training_params = {
         'use_moe': False,
@@ -1536,8 +1538,10 @@ def main():
         print("="*80 + "\n")
         
         # Step 8: Estimate training time (ADVANCED)
+        print_banner("STEP 8: ESTIMATE TRAINING TIME")
         if advanced_features.get('estimate_training_time'):
             estimate_and_display_training_time(config, len(train_dataset))
+        
         
         # Step 9: Initialize model
         print_banner("STEP 9: INITIALIZING MODEL")
