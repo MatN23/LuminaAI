@@ -1729,10 +1729,11 @@ class EnhancedConversationTrainer:
                 
                 # FORCE logging - log every step for the first 20 steps, then every 5 steps
                 log_frequency = getattr(self.config, 'log_every_n_steps', 50)
+                time_since_last_log = time.time() - last_log_time
 
                 should_log = (
-                    self.global_step % log_frequency == 0 or 
-                    time.time() - last_log_time > 60
+                    self.global_step % log_frequency == 0 or           # Every 50 steps
+                    time_since_last_log > 600                           # OR 10 minutes (emergency only)
                 )
                 
                 if should_log:
