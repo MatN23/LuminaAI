@@ -1278,19 +1278,21 @@ def main():
             'datasets/stackoverflow_1.txt',
             'datasets/stackoverflow_2.txt',
             'datasets/gutenberg_1.txt',
+            'datasets/arxiv_1.txt',
+            'datasets/arxiv_2.txt',
         ],
 
         'base_eval_paths': [ # Only .jsonl
-            # 'data/pile/pile_eval.jsonl',
+            'datasets/oasst1_validation.jsonl',
         ],
 
         # ===================================================================
         # FINE-TUNING (Instruction tuning on conversations. Only works on .jsonl)
         # ===================================================================
         'finetuning_paths': [
-            'oasst1_data/wikipedia.txt',
-            'oasst1_data/gutenberg.txt',
-            'oasst1_data/stackexchange.txt'
+            'datasets/oasst1_train.jsonl',
+            'datasets/oasst1_train_part2.jsonl',
+            'datasets/oasst1_train_part3.jsonl',
         ],
 
         'finetuning_eval_paths': [
