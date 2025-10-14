@@ -928,56 +928,121 @@ def estimate_and_display_training_time(config, dataset_size: int):
         dataset_size: Number of samples in dataset
     """
     if not UTILS_AVAILABLE:
+        print("  Utils not available - skipping estimation")
         return
     
-    print_banner("TRAINING TIME & RESOURCE ESTIMATION")
-    
-    estimates = estimate_training_time(config, dataset_size)
-    
     print_section("Time Estimates")
-    print(f"  Total Tokens to Process: {estimates['total_tokens']:,}")
-    print(f"  Estimated Throughput: {estimates['tokens_per_second']:,.0f} tokens/second")
-    print(f"  Estimated Training Time:")
-    print(f"    Hours: {estimates['estimated_hours']:.1f}")
-    print(f"    Days: {estimates['estimated_days']:.2f}")
     
-    # Convert estimated hours to a human-readable format
-    hours = estimates['estimated_hours']
-    if hours < 1:
-        human_readable = f"{hours * 60:.0f} minutes"
-    elif hours < 24:
-        human_readable = f"{hours:.1f} hours"
-    else:
-        days = int(hours // 24)
-        remaining_hours = hours % 24
-        human_readable = f"{days} days, {remaining_hours:.1f} hours"
+    try:
+        estimates = estimate_training_time(config, dataset_size)
+        
+        # Display basic estimates
+        print(f"  Total Tokens to Process: {estimates['total_tokens']:,}")
+        print(f"  Estimated Throughput: {estimates['tokens_per_second']:,.0f} tokens/second")
+        print(f"  Device Type: {estimates['device_type']}")
+        
+        # Time estimates
+        print(f"\n  Estimated Training Time:")
+        hours = estimates['estimated_hours']
+        
+        # Convert to human-readable format
+        if hours < 0.1:
+            human_readable = f"{hours * 60:.1f} minutes"
+        elif hours < 1:
+            human_readable = f"{hours * 60:.0f} minutes"
+        elif hours < 24:
+            human_readable = f"{hours:.1f} hours"
+        else:
+            days = int(hours // 24)
+            remaining_hours = hours % 24
+            human_readable = f"{days} days, {remaining_hours:.1f} hours"
+        
+        print(f"    Total Hours: {hours:.2f}")
+        print(f"    Total Days: {estimates['estimated_days']:.2f}")
+        print(f"    Human Readable: {human_readable}")
+        
+        # Memory estimates
+        print(f"\n  Memory Estimates:")
+        print(f"    Estimated Memory Needed: {estimates['estimated_memory_needed_gb']:.2f} GB")
+        print(f"    Memory Utilization: {estimates['memory_utilization']:.1%}")
+        
+        if estimates.get('memory_warning'):
+            print(f"    ⚠️  WARNING: High memory utilization expected!")
+            print(f"       Consider reducing batch size or enabling gradient checkpointing")
+        else:
+            print(f"    ✓ Memory utilization within safe limits")
+        
+        # Model info
+        print(f"\n  Model Information:")
+        print(f"    Total Parameters: {estimates['model_parameters']:,}")
+        
+        # Device-specific info
+        print(f"\n  Device-Specific Details:")
+        if estimates['device_type'] == 'cuda':
+            print(f"    CUDA acceleration enabled")
+            print(f"    Recommended precision: mixed_fp16 or mixed_bf16")
+        elif estimates['device_type'] == 'mps':
+            print(f"    Apple Silicon (MPS) acceleration")
+            print(f"    Recommended precision: fp16")
+            print(f"    Note: Some operations may fall back to CPU")
+        else:
+            print(f"    CPU only - training will be slow")
+            print(f"    Consider using a GPU for production training")
+        
+        # Optimization recommendations
+        print(f"\n  Optimization Recommendations:")
+        
+        if estimates['memory_utilization'] > 0.85:
+            print(f"    Memory Optimization:")
+            print(f"      - Reduce batch size")
+            print(f"      - Enable gradient checkpointing")
+            print(f"      - Use gradient accumulation")
+            print(f"      - Consider mixed precision training")
+        
+        if estimates['estimated_hours'] > 48:
+            print(f"    Training Time Optimization:")
+            print(f"      - Consider using multiple GPUs")
+            print(f"      - Enable mixed precision training")
+            print(f"      - Use DeepSpeed ZeRO optimization")
+            print(f"      - Reduce dataset size for initial experiments")
+        
+        if estimates['estimated_hours'] < 1:
+            print(f"    ✓ Training time is reasonable")
+        elif estimates['estimated_hours'] < 12:
+            print(f"    Training time is moderate")
+        else:
+            print(f"    Training will take significant time - ensure stable environment")
+        
+        # Training schedule recommendation
+        print(f"\n  Recommended Training Schedule:")
+        if hours < 2:
+            print(f"    Single session training recommended")
+        elif hours < 12:
+            print(f"    Can complete in one work session")
+            print(f"    Ensure checkpoint saving every 1-2 hours")
+        elif hours < 24:
+            print(f"    Day-long training session")
+            print(f"    Enable checkpoint saving every hour")
+            print(f"    Monitor progress regularly")
+        else:
+            days = int(hours // 24) + 1
+            print(f"    Multi-day training ({days} days)")
+            print(f"    Enable checkpoint saving every 2-4 hours")
+            print(f"    Set up monitoring and alerting")
+            print(f"    Consider cloud training for reliability")
     
-    print(f"    Human Readable: {human_readable}")
-    
-    # Continue with resource and recommendation messages...
-    print_section("Resource Utilization")
-    print(f"  Estimated Memory Utilization: {estimates['memory_utilization']:.1%}")
-    
-    if estimates.get('memory_warning'):
-        print(f"  ⚠ WARNING: High memory utilization expected!")
-        print(f"    Consider reducing batch size or enabling gradient checkpointing")
-    else:
-        print(f"  Memory utilization within safe limits")
-    
-    print_section("Optimization Recommendations")
-    if estimates['memory_utilization'] > 0.85:
-        print(f"  Memory:")
-        print(f"    - Reduce batch size")
-        print(f"    - Enable gradient checkpointing")
-        print(f"    - Use gradient accumulation")
-    
-    if estimates['estimated_hours'] > 48:
-        print(f"  Training Time:")
-        print(f"    - Consider using multiple GPUs")
-        print(f"    - Enable mixed precision training")
-        print(f"    - Use DeepSpeed ZeRO optimization")
-    
-    print("="*80)
+    except Exception as e:
+        print(f"  Error estimating training time: {e}")
+        import traceback
+        traceback.print_exc()
+        print("  Continuing without time estimates...")
+
+
+def print_section(title: str, width: int = 80):
+    """Print a section header."""
+    print("\n" + "-"*width)
+    print(title)
+    print("-"*width)
 
 
 def setup_signal_handlers(orchestrator):
@@ -1208,9 +1273,9 @@ def main():
         # BASE TRAINING (Pre-training on raw text like The Pile, C4, etc. Works on .txt and .jsonl)
         # ===================================================================
         'base_training_paths': [
-            # 'data/pile/pile_shard_00.txt',
-            # 'data/pile/pile_shard_01.jsonl',
-            # 'data/c4/c4_train.txt',
+            'datasets/base_training_001.txt',
+            'datasets/base_training_002.txt',
+            'datasets/base_training_002.txt',
         ],
 
         'base_eval_paths': [ # Only .jsonl
@@ -1221,13 +1286,13 @@ def main():
         # FINE-TUNING (Instruction tuning on conversations. Only works on .jsonl)
         # ===================================================================
         'finetuning_paths': [
-            'oasst1_data/oasst1_train.jsonl',
-            'oasst1_data/oasst1_train_part2.jsonl',
-            'oasst1_data/oasst1_train_part3.jsonl',
+            'oasst1_data/wikipedia.txt',
+            'oasst1_data/gutenberg.txt',
+            'oasst1_data/stackexchange.txt'
         ],
 
         'finetuning_eval_paths': [
-            'oasst1_data/oasst1_validation.jsonl',
+            'datasets/oasst1_validation.jsonl',
         ],
 
         # ===================================================================

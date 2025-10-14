@@ -1,0 +1,778 @@
+"""
+Download and process LEGAL data sources for base training.
+
+100% LEGAL SOURCES:
+✅ Wikipedia: Official Wikimedia dumps (CC BY-SA)
+✅ Project Gutenberg: Public domain books  
+✅ ArXiv: Open access scientific papers
+✅ Stack Overflow: CC BY-SA licensed Q&A
+
+Creates .txt files compatible with BaseTrainingDataset in dataset.py.
+
+Usage:
+    python multi_source_dataset.py
+    
+    # Edit HARDCODED SETTINGS section below to customize
+    
+Output format: Plain text, one document per line or separated by blank lines
+Compatible with: BaseTrainingDataset (handles .txt files automatically)
+"""
+
+import logging
+import re
+import bz2
+import json
+import gzip
+import tarfile
+from pathlib import Path
+from typing import Iterator, List, Optional
+import urllib.request
+import xml.etree.ElementTree as ET
+import time
+import requests
+from datetime import datetime
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+
+# ============================================
+# HARDCODED SETTINGS - Edit these as needed
+# ============================================
+
+# Output settings
+OUTPUT_DIR = 'datasets'
+MAX_FILES_PER_SOURCE = 2  # Number of files to create per data source
+MB_PER_FILE = 100.0       # Target size in MB for each file
+
+# Data sources to enable (True/False)
+ENABLE_WIKIPEDIA = True
+ENABLE_GUTENBERG = True
+ENABLE_ARXIV = True
+ENABLE_STACKOVERFLOW = True
+
+# Wikipedia settings
+WIKI_LANGUAGE = 'simplewiki'  # 'simplewiki' (smaller) or 'enwiki' (full English)
+
+# ArXiv settings
+ARXIV_CATEGORIES = ['cs.AI', 'cs.LG', 'cs.CL']  # AI, Machine Learning, Computation & Language
+ARXIV_PAPERS_PER_CATEGORY = 500
+
+# Stack Overflow settings
+STACKOVERFLOW_TAGS = ['python', 'javascript', 'machine-learning', 'algorithms']
+STACKOVERFLOW_MIN_SCORE = 10  # Minimum upvotes
+
+# ============================================
+
+
+class WikipediaProcessor:
+    """
+    Process Wikipedia XML dumps (100% LEGAL - Official Wikimedia dumps).
+    License: CC BY-SA 3.0
+    """
+    
+    def __init__(self, wiki_language='simplewiki'):
+        self.wiki_language = wiki_language
+        self.dump_url = f"https://dumps.wikimedia.org/{wiki_language}/latest/{wiki_language}-latest-pages-articles.xml.bz2"
+    
+    def download_dump(self, output_dir: str) -> str:
+        """Download Wikipedia dump file."""
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        dump_file = output_dir / f"{self.wiki_language}_dump.xml.bz2"
+        
+        if dump_file.exists():
+            logging.info(f"Wikipedia dump already exists: {dump_file}")
+            return str(dump_file)
+        
+        logging.info(f"Downloading Wikipedia dump: {self.wiki_language}")
+        logging.info(f"URL: {self.dump_url}")
+        
+        def download_progress(block_num, block_size, total_size):
+            if total_size > 0 and block_num % 100 == 0:
+                percent = (block_num * block_size / total_size) * 100
+                mb_downloaded = (block_num * block_size) / (1024 * 1024)
+                total_mb = total_size / (1024 * 1024)
+                logging.info(f"  Downloaded: {mb_downloaded:.1f}/{total_mb:.1f} MB ({percent:.1f}%)")
+        
+        try:
+            urllib.request.urlretrieve(self.dump_url, dump_file, download_progress)
+            logging.info(f"Download complete!")
+            return str(dump_file)
+        except Exception as e:
+            logging.error(f"Download failed: {e}")
+            raise
+    
+    def clean_wiki_text(self, text: str) -> str:
+        """Clean Wikipedia markup from text - ULTRA AGGRESSIVE."""
+        if not text:
+            return ""
+        
+        # Remove comments
+        text = re.sub(r'<!--.*?-->', '', text, flags=re.DOTALL)
+        
+        # Remove ALL references first (they cause issues)
+        text = re.sub(r'<ref[^>]*>.*?</ref>', '', text, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r'<ref[^/>]*\/>', '', text, flags=re.IGNORECASE)
+        
+        # Remove templates (multiple passes)
+        for _ in range(5):
+            text = re.sub(r'\{\{[^{}]*\}\}', '', text)
+        text = re.sub(r'\{\{.*?\}\}', '', text, flags=re.DOTALL)
+        
+        # Remove tables and infoboxes
+        text = re.sub(r'\{\|.*?\|\}', '', text, flags=re.DOTALL)
+        
+        # Remove ALL file/image references (more patterns)
+        text = re.sub(r'\[\[File:.*?\]\]', '', text, flags=re.IGNORECASE | re.DOTALL)
+        text = re.sub(r'\[\[Image:.*?\]\]', '', text, flags=re.IGNORECASE | re.DOTALL)
+        text = re.sub(r'\[\[Файл:.*?\]\]', '', text, flags=re.IGNORECASE | re.DOTALL)  # Russian
+        
+        # Remove gallery tags
+        text = re.sub(r'<gallery.*?>.*?</gallery>', '', text, flags=re.DOTALL | re.IGNORECASE)
+        
+        # Convert internal links [[Link|Text]] -> Text or [[Link]] -> Link
+        text = re.sub(r'\[\[(?:[^|\]]*\|)?([^\]]+)\]\]', r'\1', text)
+        
+        # Remove external links
+        text = re.sub(r'\[http[^\]]*\]', '', text)
+        text = re.sub(r'http[s]?://\S+', '', text)
+        
+        # Remove ALL HTML/XML tags
+        text = re.sub(r'<[^>]+>', '', text)
+        
+        # Remove categories
+        text = re.sub(r'\[\[Category:.*?\]\]', '', text, flags=re.IGNORECASE)
+        
+        # Remove remaining brackets artifacts
+        text = re.sub(r'\]\]', '', text)
+        text = re.sub(r'\[\[', '', text)
+        
+        # Remove formatting
+        text = re.sub(r"'''", '', text)
+        text = re.sub(r"''", '', text)
+        
+        # Clean headers
+        text = re.sub(r'==+\s*([^=]+?)\s*==+', r'\n\1\n', text)
+        
+        # Remove HTML entities
+        text = re.sub(r'&quot;', '"', text)
+        text = re.sub(r'&amp;', '&', text)
+        text = re.sub(r'&lt;', '<', text)
+        text = re.sub(r'&gt;', '>', text)
+        text = re.sub(r'&nbsp;', ' ', text)
+        text = re.sub(r'&ndash;', '-', text)
+        text = re.sub(r'&mdash;', '-', text)
+        text = re.sub(r'&[a-zA-Z]+;', '', text)  # Remove other entities
+        
+        # Remove remaining artifacts
+        text = re.sub(r'\|+', '', text)  # Remove pipe characters
+        text = re.sub(r'=+', '', text)  # Remove equals signs
+        text = re.sub(r'\{[^}]*\}', '', text)  # Remove any remaining braces
+        
+        # Clean whitespace
+        text = re.sub(r'\n\s*\n+', '\n\n', text)
+        text = re.sub(r' +', ' ', text)
+        text = re.sub(r'\t', ' ', text)
+        
+        # Remove lines that are too short (likely artifacts)
+        lines = text.split('\n')
+        cleaned_lines = [line for line in lines if len(line.strip()) > 10 or len(line.strip()) == 0]
+        text = '\n'.join(cleaned_lines)
+        
+        return text.strip()
+    
+    def extract_articles(self, dump_file: str) -> Iterator[tuple]:
+        """Extract clean articles from Wikipedia dump."""
+        logging.info(f"Extracting articles from Wikipedia dump...")
+        
+        with bz2.open(dump_file, 'rt', encoding='utf-8') as f:
+            article_count = 0
+            current_title = None
+            in_text = False
+            text_buffer = []
+            
+            for line in f:
+                if '<title>' in line:
+                    current_title = re.search(r'<title>(.*?)</title>', line)
+                    if current_title:
+                        current_title = current_title.group(1)
+                
+                if '<text' in line:
+                    in_text = True
+                    text_match = re.search(r'<text[^>]*>(.*)', line, re.DOTALL)
+                    if text_match:
+                        text_buffer.append(text_match.group(1))
+                
+                elif in_text:
+                    if '</text>' in line:
+                        text_match = re.search(r'(.*?)</text>', line, re.DOTALL)
+                        if text_match:
+                            text_buffer.append(text_match.group(1))
+                        
+                        current_text = ''.join(text_buffer)
+                        text_buffer = []
+                        in_text = False
+                        article_count += 1
+                        
+                        if current_title and current_text:
+                            # Skip special pages
+                            if any(prefix in current_title for prefix in 
+                                 ['Wikipedia:', 'Template:', 'Category:', 'File:', 
+                                  'Help:', 'Portal:', 'Talk:', 'User:']):
+                                current_title = None
+                                continue
+                            
+                            # Skip redirects
+                            if current_text.strip().upper().startswith('#REDIRECT'):
+                                current_title = None
+                                continue
+                            
+                            # Clean the text
+                            cleaned_text = self.clean_wiki_text(current_text)
+                            
+                            # Quality filter
+                            if len(cleaned_text) > 300:
+                                yield (current_title, cleaned_text)
+                                
+                                if article_count % 1000 == 0:
+                                    logging.info(f"  Processed {article_count:,} articles")
+                        
+                        current_title = None
+                    else:
+                        text_buffer.append(line)
+        
+        logging.info(f"Wikipedia extraction complete: {article_count:,} articles")
+    
+    def create_dataset_files(self, dump_file: str, output_dir: str, num_files: int, mb_per_file: float):
+        """Create multiple training dataset files from Wikipedia dump."""
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        target_bytes = int(mb_per_file * 1024 * 1024)
+        
+        logging.info(f"\n{'='*60}")
+        logging.info(f"Creating {num_files} Wikipedia dataset file(s)")
+        logging.info(f"Target size per file: {mb_per_file} MB")
+        logging.info(f"{'='*60}")
+        
+        article_generator = self.extract_articles(dump_file)
+        created_files = []
+        
+        for file_idx in range(num_files):
+            output_path = output_dir / f"wikipedia_{file_idx+1}.txt"
+            
+            logging.info(f"\n📝 Creating file {file_idx+1}/{num_files}: {output_path.name}")
+            
+            current_bytes = 0
+            articles_written = 0
+            
+            with open(output_path, 'w', encoding='utf-8') as f:
+                try:
+                    while current_bytes < target_bytes:
+                        title, text = next(article_generator)
+                        
+                        # Write article
+                        article_text = f"{title}\n{text}\n\n"
+                        f.write(article_text)
+                        
+                        article_bytes = len(article_text.encode('utf-8'))
+                        current_bytes += article_bytes
+                        articles_written += 1
+                        
+                        if articles_written % 500 == 0:
+                            progress_pct = (current_bytes / target_bytes) * 100
+                            logging.info(f"  Progress: {current_bytes/(1024*1024):.1f}/{mb_per_file:.1f} MB "
+                                       f"({progress_pct:.1f}%) - {articles_written:,} articles")
+                
+                except StopIteration:
+                    logging.info(f"  Ran out of articles at file {file_idx+1}")
+                    if current_bytes == 0:
+                        output_path.unlink()  # Delete empty file
+                        break
+            
+            final_mb = current_bytes / (1024 * 1024)
+            logging.info(f"  ✅ File {file_idx+1} complete: {final_mb:.1f} MB, {articles_written:,} articles")
+            created_files.append((str(output_path), final_mb))
+        
+        return created_files
+
+
+class GutenbergProcessor:
+    """
+    Process Project Gutenberg books (100% LEGAL - Public Domain).
+    License: Public Domain
+    """
+    
+    def __init__(self):
+        # Popular public domain books
+        self.book_urls = [
+            "https://www.gutenberg.org/files/1342/1342-0.txt",  # Pride and Prejudice
+            "https://www.gutenberg.org/files/11/11-0.txt",      # Alice in Wonderland
+            "https://www.gutenberg.org/files/84/84-0.txt",      # Frankenstein
+            "https://www.gutenberg.org/files/1661/1661-0.txt",  # Sherlock Holmes
+            "https://www.gutenberg.org/files/2701/2701-0.txt",  # Moby Dick
+            "https://www.gutenberg.org/files/1080/1080-0.txt",  # A Modest Proposal
+            "https://www.gutenberg.org/files/74/74-0.txt",      # Tom Sawyer
+            "https://www.gutenberg.org/files/1232/1232-0.txt",  # The Prince
+            "https://www.gutenberg.org/files/98/98-0.txt",      # Tale of Two Cities
+            "https://www.gutenberg.org/files/1260/1260-0.txt",  # Jane Eyre
+            "https://www.gutenberg.org/files/345/345-0.txt",    # Dracula
+            "https://www.gutenberg.org/files/1952/1952-0.txt",  # The Yellow Wallpaper
+            "https://www.gutenberg.org/files/174/174-0.txt",    # Picture of Dorian Gray
+            "https://www.gutenberg.org/files/1400/1400-0.txt",  # Great Expectations
+            "https://www.gutenberg.org/files/2600/2600-0.txt",  # War and Peace
+        ]
+    
+    def download_book(self, url: str) -> str:
+        """Download a single book."""
+        try:
+            book_id = url.split('/')[-2]
+            logging.info(f"  Downloading: Book {book_id}")
+            response = urllib.request.urlopen(url, timeout=30)
+            content = response.read().decode('utf-8', errors='ignore')
+            
+            # Remove Gutenberg header/footer
+            content = self._clean_gutenberg_text(content)
+            return content
+        except Exception as e:
+            logging.warning(f"  Failed to download {url}: {e}")
+            return ""
+    
+    def _clean_gutenberg_text(self, text: str) -> str:
+        """Remove Gutenberg headers and footers."""
+        # Remove header
+        start_match = re.search(r'\*\*\* START OF (THIS|THE) PROJECT GUTENBERG EBOOK.*?\*\*\*', text, re.IGNORECASE)
+        if start_match:
+            text = text[start_match.end():]
+        
+        # Remove footer
+        end_match = re.search(r'\*\*\* END OF (THIS|THE) PROJECT GUTENBERG EBOOK.*?\*\*\*', text, re.IGNORECASE)
+        if end_match:
+            text = text[:end_match.start()]
+        
+        return text.strip()
+    
+    def create_dataset_files(self, output_dir: str, num_files: int, mb_per_file: float):
+        """Create Gutenberg dataset files."""
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        target_bytes = int(mb_per_file * 1024 * 1024)
+        
+        logging.info(f"\n{'='*60}")
+        logging.info(f"Creating {num_files} Gutenberg dataset file(s)")
+        logging.info(f"Target size per file: {mb_per_file} MB")
+        logging.info(f"{'='*60}")
+        
+        created_files = []
+        
+        for file_idx in range(num_files):
+            output_path = output_dir / f"gutenberg_{file_idx+1}.txt"
+            
+            logging.info(f"\n📚 Creating file {file_idx+1}/{num_files}: {output_path.name}")
+            
+            current_bytes = 0
+            books_downloaded = 0
+            
+            with open(output_path, 'w', encoding='utf-8') as f:
+                # Cycle through books until target size reached
+                attempts = 0
+                max_attempts = len(self.book_urls) * 3
+                
+                while current_bytes < target_bytes and attempts < max_attempts:
+                    url = self.book_urls[attempts % len(self.book_urls)]
+                    attempts += 1
+                    
+                    book_text = self.download_book(url)
+                    if book_text:
+                        f.write(book_text)
+                        f.write("\n\n")
+                        
+                        current_bytes += len(book_text.encode('utf-8'))
+                        books_downloaded += 1
+                        
+                        logging.info(f"  Progress: {current_bytes/(1024*1024):.1f}/{mb_per_file:.1f} MB")
+                    
+                    time.sleep(1)  # Be respectful to Gutenberg servers
+            
+            final_mb = current_bytes / (1024 * 1024)
+            logging.info(f"  ✅ File {file_idx+1} complete: {final_mb:.1f} MB, {books_downloaded} books")
+            created_files.append((str(output_path), final_mb))
+        
+        return created_files
+
+
+class ArXivProcessor:
+    """
+    Process ArXiv papers (100% LEGAL - Open Access).
+    License: Various open licenses (mostly CC BY)
+    Note: We extract only abstracts to stay lightweight
+    """
+    
+    def __init__(self, categories: List[str]):
+        self.base_url = "http://export.arxiv.org/api/query"
+        self.categories = categories
+    
+    def search_papers(self, category: str, max_results: int = 100) -> List[dict]:
+        """Search ArXiv for papers in a category."""
+        logging.info(f"  Searching ArXiv category: {category}")
+        
+        query = f"cat:{category}"
+        params = {
+            'search_query': query,
+            'start': 0,
+            'max_results': max_results,
+            'sortBy': 'relevance',
+            'sortOrder': 'descending'
+        }
+        
+        try:
+            response = requests.get(self.base_url, params=params, timeout=30)
+            response.raise_for_status()
+            
+            # Parse XML
+            root = ET.fromstring(response.content)
+            namespace = {'atom': 'http://www.w3.org/2005/Atom'}
+            
+            papers = []
+            for entry in root.findall('atom:entry', namespace):
+                title_elem = entry.find('atom:title', namespace)
+                summary_elem = entry.find('atom:summary', namespace)
+                
+                if title_elem is not None and summary_elem is not None:
+                    papers.append({
+                        'title': title_elem.text.strip(),
+                        'abstract': summary_elem.text.strip()
+                    })
+            
+            logging.info(f"    Found {len(papers)} papers")
+            return papers
+            
+        except Exception as e:
+            logging.warning(f"    ArXiv search failed: {e}")
+            return []
+    
+    def create_dataset_files(self, output_dir: str, num_files: int, mb_per_file: float, papers_per_cat: int = 500):
+        """Create ArXiv dataset files."""
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        target_bytes = int(mb_per_file * 1024 * 1024)
+        
+        logging.info(f"\n{'='*60}")
+        logging.info(f"Creating {num_files} ArXiv dataset file(s)")
+        logging.info(f"Target size per file: {mb_per_file} MB")
+        logging.info(f"{'='*60}")
+        
+        # Collect papers from all categories
+        all_papers = []
+        for category in self.categories:
+            papers = self.search_papers(category, papers_per_cat)
+            all_papers.extend(papers)
+            time.sleep(1)  # Rate limiting
+        
+        if not all_papers:
+            logging.warning("No ArXiv papers found!")
+            return []
+        
+        logging.info(f"Total papers collected: {len(all_papers)}")
+        
+        created_files = []
+        
+        # Distribute papers across files
+        papers_per_file = len(all_papers) // num_files + 1
+        
+        for file_idx in range(num_files):
+            output_path = output_dir / f"arxiv_{file_idx+1}.txt"
+            
+            logging.info(f"\n📄 Creating file {file_idx+1}/{num_files}: {output_path.name}")
+            
+            start_idx = file_idx * papers_per_file
+            end_idx = min(start_idx + papers_per_file, len(all_papers))
+            file_papers = all_papers[start_idx:end_idx]
+            
+            if not file_papers:
+                break
+            
+            current_bytes = 0
+            papers_written = 0
+            
+            with open(output_path, 'w', encoding='utf-8') as f:
+                for paper in file_papers:
+                    if current_bytes >= target_bytes:
+                        break
+                    
+                    paper_text = f"{paper['title']}\n{paper['abstract']}\n\n"
+                    f.write(paper_text)
+                    
+                    current_bytes += len(paper_text.encode('utf-8'))
+                    papers_written += 1
+            
+            final_mb = current_bytes / (1024 * 1024)
+            logging.info(f"  ✅ File {file_idx+1} complete: {final_mb:.1f} MB, {papers_written} papers")
+            created_files.append((str(output_path), final_mb))
+        
+        return created_files
+
+
+class StackOverflowProcessor:
+    """
+    Process Stack Overflow Q&A (100% LEGAL - CC BY-SA).
+    License: CC BY-SA 4.0
+    Note: Uses Stack Exchange API (free, no auth needed for basic use)
+    """
+    
+    def __init__(self, tags: List[str], min_score: int = 10):
+        self.tags = tags
+        self.min_score = min_score
+        self.api_url = "https://api.stackexchange.com/2.3/questions"
+    
+    def fetch_questions(self, tag: str, page_size: int = 100) -> List[dict]:
+        """Fetch top questions for a tag."""
+        logging.info(f"  Fetching Stack Overflow: {tag}")
+        
+        params = {
+            'order': 'desc',
+            'sort': 'votes',
+            'tagged': tag,
+            'site': 'stackoverflow',
+            'filter': 'withbody',  # Include question body
+            'pagesize': page_size,
+            'min': self.min_score
+        }
+        
+        try:
+            response = requests.get(self.api_url, params=params, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            
+            questions = []
+            for item in data.get('items', []):
+                questions.append({
+                    'title': item.get('title', ''),
+                    'body': item.get('body', ''),
+                    'score': item.get('score', 0)
+                })
+            
+            logging.info(f"    Found {len(questions)} questions")
+            return questions
+            
+        except Exception as e:
+            logging.warning(f"    Stack Overflow fetch failed: {e}")
+            return []
+    
+    def clean_html(self, text: str) -> str:
+        """Remove HTML tags from text."""
+        # Simple HTML removal
+        text = re.sub(r'<code>.*?</code>', '[CODE]', text, flags=re.DOTALL)
+        text = re.sub(r'<[^>]+>', '', text)
+        text = re.sub(r'&lt;', '<', text)
+        text = re.sub(r'&gt;', '>', text)
+        text = re.sub(r'&amp;', '&', text)
+        text = re.sub(r'&quot;', '"', text)
+        return text.strip()
+    
+    def create_dataset_files(self, output_dir: str, num_files: int, mb_per_file: float):
+        """Create Stack Overflow dataset files."""
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        target_bytes = int(mb_per_file * 1024 * 1024)
+        
+        logging.info(f"\n{'='*60}")
+        logging.info(f"Creating {num_files} Stack Overflow dataset file(s)")
+        logging.info(f"Target size per file: {mb_per_file} MB")
+        logging.info(f"{'='*60}")
+        
+        # Collect questions from all tags
+        all_questions = []
+        for tag in self.tags:
+            questions = self.fetch_questions(tag, page_size=100)
+            all_questions.extend(questions)
+            time.sleep(1)  # Rate limiting
+        
+        if not all_questions:
+            logging.warning("No Stack Overflow questions found!")
+            return []
+        
+        logging.info(f"Total questions collected: {len(all_questions)}")
+        
+        created_files = []
+        
+        # Distribute questions across files
+        questions_per_file = len(all_questions) // num_files + 1
+        
+        for file_idx in range(num_files):
+            output_path = output_dir / f"stackoverflow_{file_idx+1}.txt"
+            
+            logging.info(f"\n💬 Creating file {file_idx+1}/{num_files}: {output_path.name}")
+            
+            start_idx = file_idx * questions_per_file
+            end_idx = min(start_idx + questions_per_file, len(all_questions))
+            file_questions = all_questions[start_idx:end_idx]
+            
+            if not file_questions:
+                break
+            
+            current_bytes = 0
+            questions_written = 0
+            
+            with open(output_path, 'w', encoding='utf-8') as f:
+                for q in file_questions:
+                    if current_bytes >= target_bytes:
+                        break
+                    
+                    title = self.clean_html(q['title'])
+                    body = self.clean_html(q['body'])
+                    
+                    qa_text = f"Question: {title}\n{body}\n\n"
+                    f.write(qa_text)
+                    
+                    current_bytes += len(qa_text.encode('utf-8'))
+                    questions_written += 1
+            
+            final_mb = current_bytes / (1024 * 1024)
+            logging.info(f"  ✅ File {file_idx+1} complete: {final_mb:.1f} MB, {questions_written} questions")
+            created_files.append((str(output_path), final_mb))
+        
+        return created_files
+
+
+def main():
+    """Main execution function."""
+    
+    print("\n" + "="*60)
+    print("🚀 LEGAL DATA SOURCE DOWNLOADER")
+    print("="*60)
+    print(f"Output Directory: {OUTPUT_DIR}")
+    print(f"Max Files per Source: {MAX_FILES_PER_SOURCE}")
+    print(f"Target MB per File: {MB_PER_FILE}")
+    print("\nEnabled Sources:")
+    if ENABLE_WIKIPEDIA:
+        print(f"  ✅ Wikipedia ({WIKI_LANGUAGE})")
+    if ENABLE_GUTENBERG:
+        print(f"  ✅ Project Gutenberg")
+    if ENABLE_ARXIV:
+        print(f"  ✅ ArXiv Papers")
+    if ENABLE_STACKOVERFLOW:
+        print(f"  ✅ Stack Overflow")
+    print("="*60)
+    
+    output_dir = Path(OUTPUT_DIR)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    all_created_files = []
+    total_mb = 0
+    
+    # Process Wikipedia
+    if ENABLE_WIKIPEDIA:
+        try:
+            wiki_processor = WikipediaProcessor(WIKI_LANGUAGE)
+            dump_file = wiki_processor.download_dump(OUTPUT_DIR)
+            files = wiki_processor.create_dataset_files(
+                dump_file, 
+                OUTPUT_DIR,
+                MAX_FILES_PER_SOURCE,
+                MB_PER_FILE
+            )
+            all_created_files.extend(files)
+            total_mb += sum(mb for _, mb in files)
+        except Exception as e:
+            logging.error(f"Wikipedia processing failed: {e}")
+    
+    # Process Gutenberg
+    if ENABLE_GUTENBERG:
+        try:
+            gutenberg_processor = GutenbergProcessor()
+            files = gutenberg_processor.create_dataset_files(
+                OUTPUT_DIR,
+                MAX_FILES_PER_SOURCE,
+                MB_PER_FILE
+            )
+            all_created_files.extend(files)
+            total_mb += sum(mb for _, mb in files)
+        except Exception as e:
+            logging.error(f"Gutenberg processing failed: {e}")
+    
+    # Process ArXiv
+    if ENABLE_ARXIV:
+        try:
+            arxiv_processor = ArXivProcessor(ARXIV_CATEGORIES)
+            files = arxiv_processor.create_dataset_files(
+                OUTPUT_DIR,
+                MAX_FILES_PER_SOURCE,
+                MB_PER_FILE,
+                ARXIV_PAPERS_PER_CATEGORY
+            )
+            all_created_files.extend(files)
+            total_mb += sum(mb for _, mb in files)
+        except Exception as e:
+            logging.error(f"ArXiv processing failed: {e}")
+    
+    # Process Stack Overflow
+    if ENABLE_STACKOVERFLOW:
+        try:
+            stackoverflow_processor = StackOverflowProcessor(
+                STACKOVERFLOW_TAGS,
+                STACKOVERFLOW_MIN_SCORE
+            )
+            files = stackoverflow_processor.create_dataset_files(
+                OUTPUT_DIR,
+                MAX_FILES_PER_SOURCE,
+                MB_PER_FILE
+            )
+            all_created_files.extend(files)
+            total_mb += sum(mb for _, mb in files)
+        except Exception as e:
+            logging.error(f"Stack Overflow processing failed: {e}")
+    
+    # Print summary
+    print(f"\n{'='*60}")
+    print("✅ ALL DATASETS CREATED SUCCESSFULLY!")
+    print(f"{'='*60}")
+    print(f"\nTotal Files: {len(all_created_files)}")
+    print(f"Total Size: {total_mb:.1f} MB")
+    print(f"\nCreated files:")
+    for filepath, mb in all_created_files:
+        print(f"  • {filepath} ({mb:.1f} MB)")
+    
+    # Print usage instructions
+    print(f"\n{'='*60}")
+    print("📚 USAGE WITH YOUR TRAINING SYSTEM")
+    print(f"{'='*60}")
+    print("\nAdd this to your training config:\n")
+    print("config.base_training_paths = [")
+    for filepath, _ in all_created_files:
+        print(f"    '{filepath}',")
+    print("]")
+    print("\nconfig.training_mode = 'base_only'  # Pure base training")
+    print("# OR")
+    print("# config.training_mode = 'hybrid'  # Base training → fine-tuning")
+    print("\n# Then run your training:")
+    print("# python train.py")
+    print(f"\n{'='*60}")
+    
+    # Verify compatibility with dataset.py
+    print("\n🔍 VERIFYING COMPATIBILITY")
+    print("="*60)
+    try:
+        from core.dataset import BaseTrainingDataset, setup_datasets
+        print("✅ dataset.py imports successful")
+        print("✅ Your training system is ready to use these files!")
+        print("\nYour BaseTrainingDataset will automatically:")
+        print("  • Load .txt files line by line")
+        print("  • Tokenize the text")
+        print("  • Create fixed-length training chunks")
+        print("  • Handle document continuation across chunks")
+    except ImportError as e:
+        print(f"⚠️  Could not import dataset.py: {e}")
+        print("Make sure dataset.py is in the same directory")
+    
+    print("\n" + "="*60)
+    print("🎉 SETUP COMPLETE!")
+    print("="*60)
+
+
+if __name__ == '__main__':
+    main()

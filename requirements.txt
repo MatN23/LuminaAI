@@ -17,8 +17,11 @@ bitsandbytes>=0.41.0  # 8-bit/4-bit quantization
 # optimum>=1.14.0  # Hugging Face optimization tools
 
 # Optional: Monitoring & Logging
-# wandb>=0.16.0  # Weights & Biases logging
+wandb>=0.16.0  # Weights & Biases logging
 # tensorboard>=2.15.0  # TensorBoard logging
+wikipedia-api
+beautifulsoup4
+requests
 
 # Optional: Performance
 # triton>=2.1.0  # Triton kernels (auto-installed with PyTorch 2.1+)
@@ -30,7 +33,7 @@ bitsandbytes>=0.41.0  # 8-bit/4-bit quantization
 
 # Data Processing
 # pandas>=2.0.0  # For data analysis
-# datasets>=2.14.0  # Hugging Face datasets library
+datasets>=2.14.0  # Hugging Face datasets library
 
 # System Requirements:
 # - Python 3.9+
