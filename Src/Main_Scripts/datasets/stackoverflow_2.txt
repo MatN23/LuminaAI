@@ -1,0 +1,2038 @@
+Question: What is the difference between a generative and a discriminative algorithm?
+What is the difference between a generative and a
+discriminative algorithm?
+
+Question: A simple explanation of Naive Bayes Classification
+I am finding it hard to understand the process of Naive Bayes, and I was wondering if someone could explain it with a simple step by step process in English. I understand it takes comparisons by times occurred as a probability, but I have no idea how the training data is related to the actual dataset.
+
+Please give me an explanation of what role the training set plays. I am giving a very simple example for fruits here, like banana for example
+
+[CODE]
+
+Question: Epoch vs Iteration when training neural networks
+What is the difference between epoch and iteration when training a multi-layer perceptron?
+
+Question: What are logits? What is the difference between softmax and softmax_cross_entropy_with_logits?
+In the tensorflow API docs they use a keyword called [CODE]. What is it? A lot of methods are written like:
+[CODE]
+If [CODE] is just a generic [CODE] input, why is it named [CODE]?
+
+Secondly, what is the difference between the following two methods?
+[CODE]
+I know what [CODE] does, but not the other. An example would be really helpful.
+
+Question: How does the Google "Did you mean?" Algorithm work?
+I've been developing an internal website for a portfolio management tool.  There is a lot of text data, company names etc.  I've been really impressed with some search engines ability to very quickly respond to queries with "Did you mean: xxxx".
+
+I need to be able to intelligently take a user query and respond with not only raw search results but also with a "Did you mean?" response when there is a highly likely alternative answer etc
+
+[I'm developing in ASP.NET (VB - don't hold it against me! )]
+
+UPDATE:
+OK, how can I mimic this without the millions of 'unpaid users'?
+
+
+Generate typos for each 'known' or 'correct' term and perform lookups?
+Some other more elegant method?
+
+Question: What is the meaning of the word logits in TensorFlow?
+In the following TensorFlow function, we must feed the activation of artificial neurons in the final layer. That I understand. But I don't understand why it is called logits? Isn't that a mathematical function? 
+
+[CODE]
+
+Question: What are advantages of Artificial Neural Networks over Support Vector Machines?
+Artificial neural networks (ANNs) and support vector machines (SVMs) are two popular strategies for supervised machine learning and classification. It's not often clear which method is better for a particular project, and I'm certain the answer is always "it depends." Often, a combination of both, along with Bayesian classification, is used.
+These questions on Stack Overflow have already been asked regarding ANN vs SVM:
+
+ANN and SVM classification
+
+What&#39;s the difference between ANN, SVM and KNN classifiers?
+
+Support vector machine or artificial neural network for text processing
+
+
+In this question, I'd like to know specifically what aspects of an ANN (specifically, a multilayer perceptron) might make it desirable to use over an SVM? The reason I ask is because it's easy to answer the opposite question: Support Vector Machines are often superior to ANNs because they avoid two major weaknesses of ANNs:
+(1) ANNs often converge on local minima rather than global minima, meaning that they are essentially "missing the big picture" sometimes (or missing the forest for the trees)
+(2) ANNs often overfit if training goes on too long, meaning that for any given pattern, an ANN might start to consider the noise as part of the pattern.
+SVMs don't suffer from either of these two problems. However, it's not readily apparent that SVMs are meant to be a total replacement for ANNs. So what specific advantage(s) does an ANN have over an SVM that might make it applicable for certain situations? I've listed specific advantages of an SVM over an ANN, now I'd like to see a list of ANN advantages (if any).
+
+Question: Convert array of indices to one-hot encoded array in NumPy
+Given a 1D array of indices:
+[CODE]
+I want to one-hot encode this as a 2D array:
+[CODE]
+
+Question: How do I print the model summary in PyTorch?
+How do I print the summary of a model in PyTorch like what [CODE] does in Keras:
+[CODE]
+
+Question: What does `view()` do in PyTorch?
+What does [CODE] do to the tensor [CODE]? What do negative values mean?
+[CODE]
+
+Question: How to implement the Softmax function in Python?
+From the Udacity's deep learning class, the softmax of [CODE] is simply the exponential divided by the sum of exponential of the whole Y vector:
+
+Where [CODE] is the softmax function of [CODE] and [CODE] is the exponential and [CODE] is the no. of columns in the input vector Y.
+I've tried the following:
+[CODE]
+which returns:
+[CODE]
+But the suggested solution was:
+[CODE]
+which produces the same output as the first implementation, even though the first implementation explicitly takes the difference of each column and the max and then divides by the sum.
+Can someone show mathematically why? Is one correct and the other one wrong?
+Are the implementation similar in terms of code and time complexity? Which is more efficient?
+
+Question: What does model.eval() do in pytorch?
+When should I use [CODE]? I understand it is supposed to allow me to "evaluate my model". How do I turn it back off for training?
+Example training code using [CODE].
+
+Question: What is the difference between supervised learning and unsupervised learning?
+In terms of artificial intelligence and machine learning, what is the difference between supervised and unsupervised learning?
+Can you provide a basic, easy explanation with an example?
+
+Question: What is the difference between linear regression and logistic regression?
+When we have to predict the value of a categorical (or discrete) outcome we use logistic regression. I believe we use linear regression to also predict the value of an outcome given the input values.
+
+Then, what is the difference between the two methodologies?
+
+Question: How do I initialize weights in PyTorch?
+How do I initialize weights and biases of a network (via e.g. He or Xavier initialization)?
+
+Question: How to interpret loss and accuracy for a machine learning model
+When I trained my neural network with Theano or Tensorflow, they will report a variable called "loss" per epoch.
+
+How should I interpret this variable? Higher loss is better or worse, or what does it mean for the final performance (accuracy) of my neural network?
+
+Question: Is there a rule-of-thumb for how to divide a dataset into training and validation sets?
+Is there a rule-of-thumb for how to best divide data into training and validation sets? Is an even 50/50 split advisable? Or are there clear advantages of having more training data relative to validation data (or vice versa)? Or is this choice pretty much application dependent?
+
+I have been mostly using an 80% / 20% of training and validation data, respectively, but I chose this division without any principled reason. Can someone who is more experienced in machine learning advise me?
+
+Question: How can I one hot encode in Python?
+I have a machine learning classification problem with 80% categorical variables. Must I use one hot encoding if I want to use some classifier for the classification? Can i pass the data to a classifier without the encoding? 
+
+I am trying to do the following for feature selection:
+
+
+I read the train file:
+
+[CODE]
+I change the type of the categorical features to 'category':
+
+[CODE]
+I use one hot encoding: 
+
+[CODE]
+
+
+The problem is that the 3'rd part often get stuck, although I am using a strong machine.
+
+Thus, without the one hot encoding I can't do any feature selection, for determining the importance of the features.
+
+What do you recommend?
+
+Question: Save classifier to disk in scikit-learn
+How do I save a trained Naive Bayes classifier to disk and use it to predict data?
+
+I have the following sample program from the scikit-learn website:
+
+[CODE]
+
+Question: What does model.train() do in PyTorch?
+Does it call [CODE] in [CODE]? I thought when we call the model, [CODE] method is being used.
+Why do we need to specify train()?
+
+Question: Is it possible to specify your own distance function using scikit-learn K-Means Clustering?
+Is it possible to specify your own distance function using scikit-learn K-Means Clustering?
+
+Question: How can I run Tensorboard on a remote server?
+I'm new to Tensorflow and would greatly benefit from some visualizations of what I'm doing. I understand that Tensorboard is a useful visualization tool, but how do I run it on my remote Ubuntu machine?
+
+Question: Which machine learning classifier to choose, in general?
+Suppose I'm working on some classification problem. (Fraud detection and comment spam are two problems I'm working on right now, but I'm curious about any classification task in general.)
+
+How do I know which classifier I should use? 
+
+
+Decision tree
+SVM
+Bayesian
+Neural network
+K-nearest neighbors
+Q-learning
+Genetic algorithm
+Markov decision processes
+Convolutional neural networks
+Linear regression or logistic regression
+Boosting, bagging, ensambling
+Random hill climbing or simulated annealing
+...
+
+
+In which cases is one of these the "natural" first choice, and what are the principles for choosing that one?
+
+Examples of the type of answers I'm looking for (from Manning et al.'s Introduction to Information Retrieval book):
+
+a. If your data is labeled, but you only have a limited amount, you should use a classifier with high bias (for example, Naive Bayes).
+
+I'm guessing this is because a higher-bias classifier will have lower variance, which is good because of the small amount of data.
+
+b. If you have a ton of data, then the classifier doesn't really matter so much, so you should probably just choose a classifier with good scalability.
+
+
+What are other guidelines? Even answers like "if you'll have to explain your model to some upper management person, then maybe you should use a decision tree, since the decision rules are fairly transparent" are good. I care less about implementation/library issues, though.
+Also, for a somewhat separate question, besides standard Bayesian classifiers, are there 'standard state-of-the-art' methods for comment spam detection (as opposed to email spam)?
+
+Question: Why binary_crossentropy and categorical_crossentropy give different performances for the same problem?
+I'm trying to train a CNN to categorize text by topic. When I use binary cross-entropy I get ~80% accuracy, with categorical cross-entropy I get ~50% accuracy.
+
+I don't understand why this is. It's a multiclass problem, doesn't that mean that I have to use categorical cross-entropy and that the results with binary cross-entropy are meaningless?
+
+
+
+[CODE]
+
+Then I compile it either it like this using [CODE] as the loss function:
+
+[CODE]
+
+or 
+
+[CODE]
+
+Intuitively it makes sense why I'd want to use categorical cross-entropy, I don't understand why I get good results with binary, and poor results with categorical.
+
+Question: How to extract the decision rules from scikit-learn decision-tree?
+Can I extract the underlying decision-rules (or 'decision paths') from a trained tree in a decision tree as a textual list?
+Something like:
+[CODE]
+
+Question: What is the difference between steps and epochs in TensorFlow?
+In most of the models, there is a steps parameter indicating the number of steps to run over data. But yet I see in most practical usage, we also execute the fit function N epochs. 
+
+What is the difference between running 1000 steps with 1 epoch and running 100 steps with 10 epoch? Which one is better in practice? Any logic changes between consecutive epochs? Data shuffling?
+
+Question: pytorch - connection between loss.backward() and optimizer.step()
+Where is an explicit connection between the [CODE] and the [CODE]?
+How does the optimizer know where to get the gradients of the loss without a call liks this [CODE]?
+-More context-
+When I minimize the loss, I didn't have to pass the gradients to the optimizer.
+[CODE]
+
+Question: Does it make sense to use Conda + Poetry?
+Does it make sense to use Conda + Poetry for a Machine Learning project? Allow me to share my (novice) understanding and please correct or enlighten me:
+As far as I understand, Conda and Poetry have different purposes but are largely redundant:
+
+Conda is primarily a environment manager (in fact not necessarily Python), but it can also manage packages and dependencies.
+Poetry is primarily a Python package manager (say, an upgrade of pip), but it can also create and manage Python environments (say, an upgrade of Pyenv).
+
+My idea is to use both and compartmentalize their roles: let Conda be the environment manager and Poetry the package manager. My reasoning is that (it sounds like) Conda is best for managing environments and can be used for compiling and installing non-python packages, especially CUDA drivers (for GPU capability), while Poetry is more powerful than Conda as a Python package manager.
+I've managed to make this work fairly easily by using Poetry within a Conda environment. The trick is to not use Poetry to manage the Python environment: I'm not using commands like [CODE] or [CODE], only [CODE], [CODE] etc (after activating the Conda environment).
+For full disclosure, my environment.yml file (for Conda) looks like this:
+[CODE]
+and my poetry.toml file looks like that:
+[CODE]
+To be honest, one of the reasons I proceeded this way is that I was struggling to install CUDA (for GPU support) without Conda.
+Does this project design look reasonable to you?
+
+Question: Intuitive understanding of 1D, 2D, and 3D convolutions in convolutional neural networks
+Can anyone please clearly explain the difference between 1D, 2D, and 3D convolutions in convolutional neural networks (in deep learning) with the use of examples?
+
+Question: Why must a nonlinear activation function be used in a backpropagation neural network?
+I've been reading some things on neural networks and I understand the general principle of a single layer neural network. I understand the need for aditional layers, but why are nonlinear activation functions used?
+
+This question is followed by this one: What is a derivative of the activation function used for in backpropagation?
+
+Question: Difference between classification and clustering in data mining?
+Can someone explain what the difference is between classification and clustering in data mining?
+
+If you can, please give examples of both to understand the main idea.
+
+Question: RuntimeError: Input type (torch.FloatTensor) and weight type (torch.cuda.FloatTensor) should be the same
+This:
+[CODE]
+Gives the error:
+
+RuntimeError: Input type (torch.FloatTensor) and weight type (torch.cuda.FloatTensor) should be the same
+
+Question: Why do we have to normalize the input for an artificial neural network?
+Why do we have to normalize the input for a neural network?
+I understand that sometimes, when for example the input values are non-numerical a certain transformation must be performed, but when we have a numerical input? Why the numbers must be in a certain interval?
+What will happen if the data is not normalized?
+
+Question: What is the role of "Flatten" in Keras?
+I am trying to understand the role of the [CODE] function in Keras. Below is my code, which is a simple two-layer network. It takes in 2-dimensional data of shape (3, 2), and outputs 1-dimensional data of shape (1, 4):
+
+[CODE]
+
+This prints out that [CODE] has shape (1, 4). However, if I remove the [CODE] line, then it prints out that [CODE] has shape (1, 3, 4).
+
+I don't understand this. From my understanding of neural networks, the [CODE] function is creating a hidden fully-connected layer, with 16 nodes. Each of these nodes is connected to each of the 3x2 input elements. Therefore, the 16 nodes at the output of this first layer are already "flat". So, the output shape of the first layer should be (1, 16). Then, the second layer takes this as an input, and outputs data of shape (1, 4).
+
+So if the output of the first layer is already "flat" and of shape (1, 16), why do I need to further flatten it?
+
+Question: Nearest neighbors in high-dimensional data?
+I have asked a question a few days back on how to find the nearest neighbors for a given vector. My vector is now 21 dimensions and before I proceed further, because I am not from the domain of Machine Learning nor Math, I am beginning to ask myself some fundamental questions:
+
+
+Is Euclidean distance a good metric for finding the nearest neighbors in the first place? If not, what are my options?
+In addition, how does one go about deciding the right threshold for determining the k-neighbors? Is there some analysis that can be done to figure this value out?
+Previously, I was suggested to use kd-Trees but the Wikipedia page clearly says that for high-dimensions, kd-Tree is almost equivalent to a brute-force search. In that case, what is the best way to find nearest-neighbors in a million point dataset efficiently?
+
+
+Can someone please clarify the some (or all) of the above questions?
+
+Question: TensorFlow, why was python the chosen language?
+I recently started studying deep learning and other ML techniques, and I started searching for frameworks that simplify the process of build a net and training it, then I found TensorFlow, having little experience in the field, for me, it seems that speed is a big factor for making a big ML system even more if working with deep learning, so why python was chosen by Google to make TensorFlow? Wouldn't it be better to make it over an language that can be compiled and not interpreted?
+
+What are the advantages of using Python over a language like C++ for machine learning?
+
+Question: Can anyone explain me StandardScaler?
+I am unable to understand the page of the [CODE] in the documentation of [CODE].
+
+Can anyone explain this to me in simple terms?
+
+Question: Many to one and many to many LSTM examples in Keras
+I try to understand LSTMs and how to build them with Keras. I found out, that there are principally the 4 modes to run a RNN (the 4 right ones in the picture)
+
+
+Image source: Andrej Karpathy
+
+Now I wonder how a minimalistic code snippet for each of them would look like in Keras.
+So something like
+
+[CODE]
+
+for each of the 4 tasks, maybe with a little bit of explanation.
+
+Question: How to understand Locality Sensitive Hashing?
+I noticed that LSH seems a good way to find similar items with high-dimension properties.
+
+After reading the paper http://www.slaney.org/malcolm/yahoo/Slaney2008-LSHTutorial.pdf, I'm still confused with those formulas.
+
+Does anyone know a blog or article that explains that the easy way?
+
+Question: Deep-Learning Nan loss reasons
+What would cause a Convolutional Neural Network to diverge?
+Specifics:
+I am using Tensorflow's iris_training model with some of my own data and keep getting
+
+ERROR:tensorflow:Model diverged with loss = NaN.
+Traceback...
+tensorflow.contrib.learn.python.learn.monitors.NanLossDuringTrainingError: NaN loss during training.
+
+Traceback originated with line:
+[CODE]
+I've tried adjusting the optimizer, using a zero for learning rate, and using no optimizer.
+
+Question: Why is the F-Measure a harmonic mean and not an arithmetic mean of the Precision and Recall measures?
+When we calculate the F-Measure considering both Precision and Recall, we take the harmonic mean of the two measures instead of a simple arithmetic mean. 
+
+What is the intuitive reason behind taking the harmonic mean and not a simple average?
+
+Question: What are the pros and cons between get_dummies (Pandas) and OneHotEncoder (Scikit-learn)?
+I'm learning different methods to convert categorical variables to numeric for machine-learning classifiers.  I came across the [CODE] method and [CODE] and I wanted to see how they differed in terms of performance and usage. 
+
+I found a tutorial on how to use [CODE] on https://xgdgsc.wordpress.com/2015/03/20/note-on-using-onehotencoder-in-scikit-learn-to-work-on-categorical-features/ since the [CODE] documentation wasn't too helpful on this feature. I have a feeling I'm not doing it correctly...but
+
+Can some explain the pros and cons of using [CODE] over [CODE] and vice versa? I know that [CODE] gives you a sparse matrix but other than that I'm not sure how it is used and what the benefits are over the [CODE] method.  Am I using it inefficiently? 
+
+[CODE]
+
+Question: What is exactly sklearn.pipeline.Pipeline?
+I can't figure out how the [CODE] works exactly.
+
+There are a few explanation in the doc. For example what do they mean by:
+
+
+  Pipeline of transforms with a final estimator.
+
+
+To make my question clearer, what are [CODE]? How do they work?
+
+Edit
+
+Thanks to the answers I can make my question clearer:
+
+When I call pipeline and pass, as steps, two transformers and one estimator, e.g:
+
+[CODE]
+
+What happens when I call this?
+
+[CODE]
+
+I can't figure out how an estimator can be a transformer and how a transformer can be fitted.
+
+Question: How to compute precision, recall, accuracy and f1-score for the multiclass case with scikit learn?
+I'm working in a sentiment analysis problem the data looks like this:
+[CODE]
+So my data is unbalanced since 1190 [CODE] are labeled with [CODE]. For the classification Im using scikit's SVC. The problem is I do not know how to balance my data in the right way in order to compute accurately the precision, recall, accuracy and f1-score for the multiclass case. So I tried the following approaches:
+First:
+[CODE]
+Second:
+[CODE]
+Third:
+[CODE]
+However, Im getting warnings like this:
+[CODE]
+How can I deal correctly with my unbalanced data in order to compute in the right way classifier's metrics?
+
+Question: How to train an artificial neural network to play Diablo 2 using visual input?
+I'm currently trying to get an ANN to play a video game and  and I was hoping to get some help from the wonderful community here.
+
+I've settled on Diablo 2. Game play is thus in real-time and from an isometric viewpoint, with the player controlling a single avatar whom the camera is centered on. 
+
+To make things concrete, the task is to get your character x experience points without having its health drop to 0, where experience point are gained through killing monsters. Here is an example of the gameplay:
+
+
+
+Now, since I want the net to operate based solely on the information it gets from the pixels on the screen, it must learn a very rich representation in order to play efficiently, since this would presumably require it to know (implicitly at least) how divide the game world up into objects and how to interact with them.
+
+And all of this information must be taught to the net somehow. I can't for the life of me think of how to train this thing. My only idea is have a separate program visually extract something innately good/bad in the game (e.g. health, gold, experience) from the screen, and then use that stat in a reinforcement learning procedure. I think that will be part of the answer, but I don't think it'll be enough; there are just too many levels of abstraction from raw visual input to goal-oriented behavior for such limited feedback to train a net within my lifetime.
+
+So, my question: what other ways can you think of to train a net to do at least some part of this task? preferably without making thousands of labeled examples.
+
+Just for a little more direction: I'm looking for some other sources of reinforcement learning and/or any unsupervised methods for extracting useful information in this setting. Or a supervised algorithm if you can think of a way of getting labeled data out of a game world without having to manually label it.
+
+UPDATE(04/27/12):
+
+Strangely, I'm still working on this and seem to be making progress. The biggest secret to getting a ANN controller to work is to use the most advanced ANN architectures appropriate to the task. Hence I've been using a deep belief net composed of factored conditional restricted Boltzmann machines that I've trained in an unsupervised manner (on video of me playing the game) before fine tuning with temporal difference back-propagation (i.e. reinforcement learning with standard feed-forward ANNs).
+
+Still looking for more valuable input though, especially on the problem of action selection in real-time and how to encode color images for ANN processing :-) 
+
+UPDATE(10/21/15):
+
+Just remembered I asked this question back-in-the-day, and thought I should mention that this is no longer a crazy idea. Since my last update, DeepMind published their nature paper on getting neural networks to play Atari games from visual inputs. Indeed, the  only thing preventing me from using their architecture to play, a limited subset, of Diablo 2 is the lack of access to the underlying game engine. Rendering to the screen and then redirecting it to the network is just far too slow to train in a reasonable amount of time. Thus we probably won't see this sort of bot playing Diablo 2 anytime soon, but only because it'll be playing something either open-source or with API access to the rendering target. (Quake perhaps?)
+
+Question: What is the difference between value iteration and policy iteration?
+In reinforcement learning, what is the difference between policy iteration and value iteration? 
+
+As much as I understand, in value iteration, you use the Bellman equation to solve for the optimal policy, whereas, in policy iteration, you randomly select a policy π, and find the reward of that policy. 
+
+My doubt is that if you are selecting a random policy π in PI, how is it guaranteed to be the optimal policy, even if we are choosing several random policies.
+
+Question: What does "unsqueeze" do in Pytorch?
+The PyTorch documentation says:
+
+Returns a new tensor with a dimension of size one inserted at the specified position. [...]
+[CODE]
+
+Question: When should I use genetic algorithms as opposed to neural networks?
+Is there a rule of thumb (or set of examples) to determine when to use genetic algorithms as opposed to neural networks (and vice-versa) to solve a problem?
+
+I know there are cases in which you can have both methods mixed, but I am looking for a high-level comparison between the two methods.
+
+Question: Understanding min_df and max_df in scikit CountVectorizer
+I have five text files that I input to a CountVectorizer. When specifying [CODE] and [CODE] to the CountVectorizer instance what does the min/max document frequency exactly mean? Is it the frequency of a word in its particular text file or is it the frequency of the word in the entire overall corpus (five text files)?
+What are the differences when [CODE] and [CODE] are provided as integers or as floats?
+The documentation doesn't seem to provide a thorough explanation nor does it supply an example to demonstrate the use of these two parameters. Could someone provide an explanation or example demonstrating [CODE] and [CODE]?
+
+Question: TensorFlow, "&#39;module&#39; object has no attribute &#39;placeholder&#39;"
+I've been trying to use tensorflow for two days now installing and reinstalling it over and over again in python2.7 and 3.4.  No matter what I do, I get this error message when trying to use tensorflow.placeholder()
+
+It's very boilerplate code:
+
+[CODE]
+
+No matter what I do I always get the trace back:
+
+[CODE]
+
+Anyone know how I can fix this?
+
+Question: Common causes of nans during training of neural networks
+I've noticed that a frequent occurrence during training is [CODE]s being introduced.
+
+Often times it seems to be introduced by weights in inner-product/fully-connected or convolution layers blowing up.
+
+Is this occurring because the gradient computation is blowing up? Or is it because of weight initialization (if so, why does weight initialization have this effect)? Or is it likely caused by the nature of the input data?
+
+The overarching question here is simply: What is the most common reason for NANs to occurring during training? And secondly, what are some methods for combatting this (and why do they work)?
+
+Question: Scikit-learn: How to obtain True Positive, True Negative, False Positive and False Negative
+My problem:
+
+I have a dataset which is a large JSON file. I read it and store it in the [CODE] variable.
+
+Next, I pre-process it - in order to be able to work with it.
+
+Once I have done that I start the classification:
+
+
+I use the [CODE] cross validation method in order to obtain the mean
+accuracy and train a classifier.
+I make the predictions and obtain the accuracy & confusion matrix of that fold.
+After this, I would like to obtain the [CODE], [CODE], [CODE] and [CODE] values. I'll  use these parameters to obtain the Sensitivity and Specificity. 
+
+
+Finally, I would use this to put in HTML in order to show a chart with the TPs of each label.
+
+Code:
+
+The variables I have for the moment:
+
+[CODE]
+
+Most part of the method:
+
+[CODE]
+
+Question: How does Apple find dates, times and addresses in emails?
+In the iOS email client, when an email contains a date, time or location, the text becomes a hyperlink and it is possible to create an appointment or look at a map simply by tapping the link. It not only works for emails in English, but in other languages also. I love this feature and would like to understand how they do it. 
+
+The naive way to do this would be to have many regular expressions and run them all. However I  this is not going to scale very well and will work for only a specific language or date format, etc. I think that Apple must be using some concept of machine learning to extract entities (8:00PM, 8PM, 8:00, 0800, 20:00, 20h, 20h00, 2000 etc.).
+
+Any idea how Apple is able to extract entities so quickly in its email client? What machine learning algorithm would you to apply accomplish such task?
+
+Question: Why does one hot encoding improve machine learning performance?
+I have noticed that when One Hot encoding is used on a particular data set (a matrix) and used as training data for learning algorithms, it gives significantly better results with respect to prediction accuracy, compared to using the original matrix itself as training data. How does this performance increase happen?
+
+Question: Google Colaboratory: misleading information about its GPU (only 5% RAM available to some users)
+update: this question is related to Google Colab's "Notebook settings: Hardware accelerator: GPU". This question was written before the "TPU" option was added.
+
+Reading multiple excited announcements about Google Colaboratory providing free Tesla K80 GPU, I tried to run fast.ai lesson on it for it to never complete - quickly running out of memory. I started investigating of why.
+
+The bottom line is that “free Tesla K80” is not "free" for all - for some only a small slice of it is "free". 
+
+I connect to Google Colab from West Coast Canada and I get only 0.5GB of what supposed to be a 24GB GPU RAM. Other users get access to 11GB of GPU RAM.
+
+Clearly 0.5GB GPU RAM is insufficient for most ML/DL work.
+
+If you're not sure what you get, here is little debug function I scraped together (only works with the GPU setting of the notebook):
+
+[CODE]
+
+Executing it in a jupyter notebook before running any other code gives me:
+
+[CODE]
+
+The lucky users who get access to the full card will see:
+
+[CODE]
+
+Do you see any flaw in my calculation of the GPU RAM availability, borrowed from GPUtil?
+
+Can you confirm that you get similar results if you run this code on Google Colab notebook?
+
+If my calculations are correct, is there any way to get more of that GPU RAM on the free box?
+
+update: I'm not sure why some of us get 1/20th of what other users get. e.g. the person who helped me to debug this is from India and he gets the whole thing!
+
+note: please don't send any more suggestions on how to kill the potentially stuck/runaway/parallel notebooks that might be consuming parts of the GPU. No matter how you slice it, if you are in the same boat as I and were to run the debug code you'd see that you still get a total of 5% of GPU RAM (as of this update still).
+
+Question: L1/L2 regularization in PyTorch
+How do I add L1/L2 regularization in PyTorch without manually computing it?
+
+Question: How to load a model from an HDF5 file in Keras?
+How to load a model from an HDF5 file in Keras?
+
+What I tried:
+
+[CODE]
+
+The above code successfully saves the best model to a file named weights.hdf5. What I want to do is then load that model. The below code shows how I tried to do so:
+
+[CODE]
+
+This is the error I get:
+
+[CODE]
+
+Question: ConvergenceWarning: lbfgs failed to converge (status=1): STOP: TOTAL NO. of ITERATIONS REACHED LIMIT
+I have a dataset consisting of both numeric and categorical data and I want to predict adverse outcomes for patients based on their medical characteristics. I defined a prediction pipeline for my dataset like so:
+[CODE]
+However, when running this code, I get the following warning message:
+[CODE]
+Can someone explain to me what this warning means? I am new to machine learning so am a little lost as to what I can do to improve the prediction model. As you can see from the numeric_transformer, I scaled the data through standardisation. I am also confused as to how the model score is quite high and whether this is a good or bad thing.
+
+Question: What is the difference between a feature and a label?
+I'm following a tutorial about machine learning basics and there is mentioned that something can be a feature or a label. 
+
+From what I know, a feature is a property of data that is being used. I can't figure out what the label is, I know the meaning of the word, but I want to know what it means in the context of machine learning.
+
+Question: Why should weights of Neural Networks be initialized to random numbers?
+I am trying to build a neural network from scratch.
+Across all AI literature there is a consensus that weights should be initialized to random numbers in order for the network to converge faster.
+
+But why are neural networks initial weights initialized as random numbers? 
+
+I had read somewhere that this is done to "break the symmetry" and this makes the neural network learn faster. How does breaking the symmetry make it learn faster?
+
+Wouldn't initializing the weights to 0 be a better idea? That way the weights would be able to find their values (whether positive or negative) faster?
+
+Is there some other underlying philosophy behind randomizing the weights apart from hoping that they would be near their optimum values when initialized?
+
+Question: `stack()` vs `cat()` in PyTorch
+OpenAI's REINFORCE and actor-critic example for reinforcement learning has the following code:
+REINFORCE:
+[CODE]
+actor-critic:
+[CODE]
+One is using [CODE], the other uses [CODE], for similar use cases.
+As far as my understanding goes, the doc doesn't give any clear distinction between them.
+I would be happy to know the differences between the functions.
+
+Question: What is the concept of negative-sampling in word2vec?
+I'm reading the 2014 paper word2vec Explained: Deriving Mikolov et al.’s
+Negative-Sampling Word-Embedding Method (note: direct download link) and it references the concept of "negative-sampling":
+
+Mikolov et al. present the negative-sampling approach as a more efficient
+way of deriving word embeddings. While negative-sampling is based on the
+skip-gram model, it is in fact optimizing a different objective.
+
+I have some issue understanding the concept of negative-sampling.
+https://arxiv.org/pdf/1402.3722v1.pdf
+Can anyone explain in layman's terms what negative-sampling is?
+
+Question: keras: how to save the training history attribute of the history object
+In Keras, we can return the output of [CODE] to a history as follows:
+
+[CODE]
+
+Now, how to save the history attribute of the history object to a file for further uses (e.g. draw plots of acc or loss against epochs)?
+
+Question: Can Keras with Tensorflow backend be forced to use CPU or GPU at will?
+I have Keras installed with the Tensorflow backend and CUDA.  I'd like to sometimes on demand force Keras to use CPU.  Can this be done without say installing a separate CPU-only Tensorflow in a virtual environment?  If so how?  If the backend were Theano, the flags could be set, but I have not heard of Tensorflow flags accessible via Keras.
+
+Question: machine learning libraries in C#
+Are there any machine learning libraries in C#? I'm after something like WEKA.
+Thank you.
+
+Question: How to apply gradient clipping in TensorFlow?
+Considering the example code.
+
+I would like to know How to apply gradient clipping on this network on the RNN where there is a possibility of exploding gradients.
+
+[CODE]
+
+This is an example that could be used but where do I introduce this ?
+In the def of RNN 
+
+[CODE]
+
+But this doesn't make sense as the tensor _X is the input and not the grad what is to be clipped? 
+
+Do I have to define my own Optimizer for this or is there a simpler option?
+
+Question: What is cross-entropy?
+I know that there are a lot of explanations of what cross-entropy is, but I'm still confused.
+Is it only a method to describe the loss function? Can we use gradient descent algorithm to find the minimum using the loss function?
+
+Question: How to do gradient clipping in pytorch?
+What is the correct way to perform gradient clipping in pytorch?
+I have an exploding gradients problem.
+
+Question: Error in Python script "Expected 2D array, got 1D array instead:"?
+I'm following this tutorial to make this ML prediction:
+
+[CODE]
+
+I'm using Python 3.6 and I get error "Expected 2D array, got 1D array instead:"
+I think the script is for older versions, but I don't know how to convert it to the 3.6 version.
+
+Already try with the:
+
+[CODE]
+
+Question: What is an intuitive explanation of the Expectation Maximization technique?
+Expectation Maximization (EM) is a kind of probabilistic method to classify data. Please correct me if I am wrong if it is not a classifier. 
+
+What is an intuitive explanation of this EM technique? What is [CODE] here and what is being [CODE]?
+
+Question: How to concatenate two layers in keras?
+I have an example of a neural network with two layers. The first layer takes two arguments and has one output. The second should take one argument as result of the first layer and one additional argument. It should looks like this:
+
+[CODE]
+
+So, I'd created a model with two layers and tried to merge them but it returns an error: [CODE] on the line [CODE].
+
+Model:
+
+[CODE]
+
+Question: What is the role of TimeDistributed layer in Keras?
+I am trying to grasp what TimeDistributed wrapper does in Keras.
+
+I get that TimeDistributed "applies a layer to every temporal slice of an input."
+
+But I did some experiment and got the results that I cannot understand.
+
+In short, in connection to LSTM layer, TimeDistributed and just Dense layer bear same results.
+
+[CODE]
+
+For both models, I got output shape of (None, 10, 1).
+
+Can anyone explain the difference between TimeDistributed and Dense layer after an RNN layer?
+
+Question: Extract upper or lower triangular part of a numpy matrix
+I have a matrix [CODE] and I want 2 matrices [CODE] and [CODE] such that [CODE] contains the upper triangular elements of A (all elements above and not including diagonal) and similarly for [CODE](all elements below and not including diagonal). Is there a [CODE] method to do this?
+e.g
+[CODE]
+
+Question: multi-layer perceptron (MLP) architecture: criteria for choosing number of hidden layers and size of the hidden layer?
+If we have 10 eigenvectors then we can have 10 neural nodes in input layer.If we have 5 output classes then we can have 5 nodes in output layer.But what is the criteria for choosing number of hidden layer in a MLP and how many neural nodes in 1 hidden layer?
+
+Question: How big should batch size and number of epochs be when fitting a model?
+My training set has 970 samples and validation set has 243 samples.
+How big should batch size and number of epochs be when fitting a model to optimize the val_acc? Is there any sort of rule of thumb to use based on data input size?
+
+Question: scikit-learn .predict() default threshold
+I'm working on a classification problem with unbalanced classes (5% 1's). I want to predict the class, not the probability.
+In a binary classification problem, is scikit's [CODE] using [CODE] by default?
+If it doesn't, what's the default method? If it does, how do I change it?
+In scikit some classifiers have the [CODE] option, but not all do. With [CODE], would [CODE] use the actual population proportion as a threshold?
+What would be the way to do this in a classifier like [CODE] that doesn't support [CODE]? Other than using [CODE] and then calculation the classes myself.
+
+Question: Accuracy Score ValueError: Can&#39;t Handle mix of binary and continuous target
+I'm using [CODE] from scikit-learn as a predictive model. It works and it's perfect. I have a problem to evaluate the predicted results using the [CODE] metric.
+This is my true Data :
+[CODE]
+My predicted Data:
+[CODE]
+My code:
+[CODE]
+Error message:
+[CODE]
+
+Question: Python: tf-idf-cosine: to find document similarity
+I was following a tutorial which was available at Part 1 & Part 2. Unfortunately the author didn't have the time for the final section which involved using cosine similarity to actually find the distance between two documents. I followed the examples in the article with the help of the following link from stackoverflow, included is the code mentioned in the above link (just so as to make life easier)
+
+[CODE]
+
+as a result of the above code I have the following matrix
+
+[CODE]
+
+I am not sure how to use this output in order to calculate cosine similarity, I know how to implement cosine similarity with respect to two vectors of similar length but here I am not sure how to identify the two vectors.
+
+Question: How should the learning rate change as the batch size change?
+When I increase/decrease batch size of the mini-batch used in SGD, should I change learning rate? If so, then how?
+
+For reference, I was discussing with someone, and it was said that, when batch size is increased, the learning rate should be decreased by some extent. 
+
+My understanding is when I increase batch size, computed average gradient will be less noisy and so I either keep same learning rate or increase it. 
+
+Also, if I use an adaptive learning rate optimizer, like Adam or RMSProp, then I guess I can leave learning rate untouched.
+
+Please correct me if I am mistaken and give any insight on this.
+
+Question: What is the difference between sparse_categorical_crossentropy and categorical_crossentropy?
+What is the difference between [CODE] and [CODE]? When should one loss be used as opposed to the other? For example, are these losses suitable for linear regression?
+
+Question: What is the mAP metric and how is it calculated?
+In Computer Vision and Object Detection, a common evaluation method is mAP.
+What is it and how is it calculated?
+
+Question: What is the intuition of using tanh in LSTM?
+In an LSTM network (Understanding LSTMs), why does the input gate and output gate use tanh?
+What is the intuition behind this?
+It is just a nonlinear transformation? If it is, can I change both to another activation function (e.g., ReLU)?
+
+Question: Calculate the output size in convolution layer
+How do I calculate the output size in a convolution layer?
+For example, I have a 2D convolution layer that takes a 3x128x128 input and has 40 filters of size 5x5.
+
+Question: What is the difference between np.mean and tf.reduce_mean?
+In the MNIST beginner tutorial, there is the statement 
+
+[CODE]
+
+[CODE] basically changes the type of tensor the object is, but what is the difference between [CODE] and [CODE]? 
+
+Here is the doc on [CODE]:
+
+
+  [CODE]
+  
+  [CODE]: The tensor to reduce. Should have numeric type.
+  
+  [CODE]: The dimensions to reduce. If [CODE] (the defaut), reduces all dimensions.
+
+[CODE]
+
+
+For a 1D vector, it looks like [CODE], but I don't understand what's happening in [CODE]. [CODE] kind of makes sense, since mean of [CODE] and [CODE] is [CODE], but what's going on with [CODE]?
+
+Question: How to get Tensorflow tensor dimensions (shape) as int values?
+Suppose I have a Tensorflow tensor. How do I get the dimensions (shape) of the tensor as integer values? I know there are two methods, [CODE] and [CODE], but I can't get the shape values as integer [CODE] values.
+
+For example, below I've created a 2-D tensor, and I need to get the number of rows and columns as [CODE] so that I can call [CODE] to create a tensor of shape [CODE]. However, the method [CODE] returns values as [CODE] type, not [CODE].
+
+[CODE]
+
+Question: Keras: Difference between Kernel and Activity regularizers
+I have noticed that weight_regularizer is no more available in Keras and that, in its place, there are activity and kernel regularizer. 
+I would like to know:
+
+
+What are the main differences between kernel and activity regularizers?
+Could I use activity_regularizer in place of weight_regularizer?
+
+Question: "AttributeError: &#39;str&#39; object has no attribute &#39;decode&#39; " while Loading a Keras Saved Model
+After Training, I saved Both Keras whole Model and Only Weights using 
+
+[CODE]
+
+Models and Weights were saved successfully and there was no error.
+I can successfully load the weights simply using model.load_weights and they are good to go, but when i try to load the save model via load_model, i am getting an error.
+
+[CODE]
+
+I never received this error and i used to load any models successfully. I am using Keras 2.2.4 with tensorflow backend. Python 3.6.
+My Code for training is :
+
+[CODE]
+
+Question: How to implement the ReLU function in Numpy
+I want to make a simple neural network which uses the ReLU function. Can someone give me a clue of how can I implement the function using numpy.
+
+Question: What&#39;s the difference between a bidirectional LSTM and an LSTM?
+Can someone please explain this? I know bidirectional LSTMs have a forward and backward pass but what is the advantage of this over a unidirectional LSTM?
+
+What is each of them better suited for?
+
+Question: Recovering features names of explained_variance_ratio_ in PCA with sklearn
+I'm trying to recover from a PCA done with scikit-learn, which features are selected as relevant.
+A classic example with IRIS dataset.
+[CODE]
+This returns
+[CODE]
+How can I recover which two features allow these two explained variance among the dataset ?
+Said diferently, how can i get the index of this features in iris.feature_names ?
+[CODE]
+
+Question: What is machine learning?
+What is machine learning ? 
+What does machine learning code do ?
+When we say that the machine learns, does it modify the code of itself or it modifies history (database) which will contain the experience of code for given set of inputs?
+
+Question: How to tell PyTorch to not use the GPU?
+I want to do some timing comparisons between CPU & GPU as well as some profiling and would like to know if there's a way to tell pytorch to not use the GPU and instead use the CPU only? I realize I could install another CPU-only pytorch, but hoping there's an easier way.
+
+Question: Unsupervised clustering with unknown number of clusters
+I have a large set of vectors in 3 dimensions. I need to cluster these based on Euclidean distance such that all the vectors in any particular cluster have a Euclidean distance between each other less than a threshold "T".
+
+I do not know how many clusters exist. At the end, there may be individual vectors existing that are not part of any cluster because its euclidean distance is not less than "T" with any of the vectors in the space.
+
+What existing algorithms / approach should be used here?
+
+Question: What is inductive bias in machine learning?
+What is inductive bias in machine learning? Why is it necessary?
+
+Question: Data Augmentation in PyTorch
+I am a little bit confused about the data augmentation performed in PyTorch. Now, as far as I know, when we are performing data augmentation, we are KEEPING our original dataset, and then adding other versions of it (Flipping, Cropping...etc). But that doesn't seem like happening in PyTorch. As far as I understood from the references, when we use [CODE] in PyTorch, then it applies them one by one. So for example:
+[CODE]
+Here , for the training, we are first randomly cropping the image and resizing it to shape [CODE]. Then we are taking these [CODE] images and horizontally flipping them. Therefore, our dataset is now containing ONLY the horizontally flipped images, so our original images are lost in this case.
+Am I right? Is this understanding correct? If not, then where do we tell PyTorch in this code above (taken from Official Documentation) to keep the original images and resize them to the expected shape [CODE]?
+
+Question: How to create a new gym environment in OpenAI?
+I have an assignment to make an AI Agent that will learn to play a video game using ML. I want to create a new environment using OpenAI Gym because I don't want to use an existing environment. How can I create a new, custom Environment?
+Also, is there any other way I can start to develop making AI Agent to play a specific video game without the help of OpenAI Gym?
+
+Question: Higher validation accuracy, than training accurracy using Tensorflow and Keras
+I'm trying to use deep learning to predict income from 15 self reported attributes from a dating site.
+
+We're getting rather odd results, where our validation data is getting better accuracy and lower loss, than our training data. And this is consistent across different sizes of hidden layers.
+This is our model:
+
+[CODE]
+
+And this is an example of the accuracy and losses:
+ and .
+
+We've tried to remove regularization and dropout, which, as expected, ended in overfitting (training acc: ~85%). We've even tried to decrease the learning rate drastically, with similiar results.
+
+Has anyone seen similar results?
+
+Question: What is the difference between loss function and metric in Keras?
+It is not clear for  me the difference between loss function and metrics in Keras. The documentation was not helpful for me.
+
+Question: Instance Normalisation vs Batch normalisation
+I understand that Batch Normalisation helps in faster training by turning the activation towards unit Gaussian distribution and thus tackling vanishing gradients problem. Batch norm acts is applied differently at training(use mean/var from each batch) and test time (use finalized running mean/var from training phase).
+
+Instance normalisation, on the other hand, acts as contrast normalisation as mentioned in this paper https://arxiv.org/abs/1607.08022 . The authors mention that the output stylised images should be not depend on the contrast of the input content image and hence Instance normalisation helps. 
+
+But then should we not also use instance normalisation for image classification where class label should not depend on the contrast of input image. I have not seen any paper using instance normalisation in-place of batch normalisation for classification. What is the reason for that? Also, can and should batch and instance normalisation be used together. I am eager to get an intuitive as well as theoretical understanding of when to use which normalisation.
+
+Question: What is a plain English explanation of "Big O" notation?
+I'd prefer as little formal definition as possible and simple mathematics.
+
+Question: How do I check if an array includes a value in JavaScript?
+What is the most concise and efficient way to find out if a JavaScript array contains a value?
+This is the only way I know to do it:
+[CODE]
+Is there a better and more concise way to accomplish this?
+This is very closely related to Stack Overflow question Best way to find an item in a JavaScript Array? which addresses finding objects in an array using [CODE].
+
+Question: How can I pair socks from a pile efficiently?
+Yesterday I was pairing the socks from the clean laundry and figured out the way I was doing it is not very efficient. I was doing a naive search — picking one sock and "iterating" the pile in order to find its pair. This requires iterating over n/2 * n/4 = n2/8 socks on average.
+As a computer scientist I was thinking what I could do? Sorting (according to size/color/...) of course came to mind to achieve an O(NlogN) solution.
+Hashing or other not-in-place solutions are not an option, because I am not able to duplicate my socks (though it could be nice if I could).
+So, the question is basically:
+Given a pile of [CODE] pairs of socks, containing [CODE] elements (assume each sock has exactly one matching pair), what is the best way to pair them up efficiently with up to logarithmic extra space? (I believe I can remember that amount of info if needed.)
+I am seeking an answer that addresses the following aspects:
+
+A general theoretical solution for a huge number of socks.
+The actual number of socks is not that large, I don't believe my spouse and I have more than 30 pairs. (And it is fairly easy to distinguish between my socks and hers; can this be used as well?)
+Is it equivalent to the element distinctness problem?
+
+Question: What does O(log n) mean exactly?
+I am learning about Big O Notation running times and amortized times.  I understand the notion of O(n) linear time, meaning that the size of the input affects the growth of the algorithm proportionally...and the same goes for, for example, quadratic time O(n2) etc..even algorithms, such as permutation generators, with O(n!) times, that grow by factorials.
+
+For example, the following function is O(n) because the algorithm grows in proportion to its input n:
+
+[CODE]
+
+Similarly, if there was a nested loop, the time would be O(n2).
+
+But what exactly is O(log n)?  For example, what does it mean to say that the height of a complete binary tree is O(log n)?
+
+I do know (maybe not in great detail) what Logarithm is, in the sense that:  log10 100 = 2, but I cannot understand how to identify a function with a logarithmic time.
+
+Question: What is the optimal algorithm for the game 2048?
+I have recently stumbled upon the game 2048. You merge similar tiles by moving them in any of the four directions to make "bigger" tiles. After each move, a new tile appears at random empty position with a value of either [CODE] or [CODE]. The game terminates when all the boxes are filled and there are no moves that can merge tiles, or you create a tile with a value of [CODE].
+
+One, I need to follow a well-defined strategy to reach the goal. So, I thought of writing a program for it.
+
+My current algorithm:
+
+[CODE]
+
+What I am doing is at any point, I will try to merge the tiles with values [CODE] and [CODE], that is, I try to have [CODE] and [CODE] tiles, as minimum as possible. If I try it this way, all other tiles were automatically getting merged and the strategy seems good.
+
+But, when I actually use this algorithm, I only get around 4000 points before the game terminates. Maximum points AFAIK is slightly more than 20,000 points which is way larger than my current score. Is there a better algorithm than the above?
+
+Question: What is tail recursion?
+Whilst starting to learn lisp, I've come across the term tail-recursive. What does it mean exactly?
+
+Question: Image Processing: Algorithm Improvement for &#39;Coca-Cola Can&#39; Recognition
+One of the most interesting projects I've worked on in the past couple of years was a project about image processing. The goal was to develop a system to be able to recognize Coca-Cola 'cans' (note that I'm stressing the word 'cans', you'll see why in a minute). You can see a sample below, with the can recognized in the green rectangle with scale and rotation.
+
+Some constraints on the project:
+
+The background could be very noisy.
+The can could have any scale or rotation or even orientation (within reasonable limits).
+The image could have some degree of fuzziness (contours might not be entirely straight).
+There could be Coca-Cola bottles in the image, and the algorithm should only detect the can!
+The brightness of the image could vary a lot (so you can't rely "too much" on color detection).
+The can could be partly hidden on the sides or the middle and possibly partly hidden behind a bottle.
+There could be no can at all in the image, in which case you had to find nothing and write a message saying so.
+
+So you could end up with tricky things like this (which in this case had my algorithm totally fail):
+
+I did this project a while ago, and had a lot of fun doing it, and I had a decent implementation. Here are some details about my implementation:
+Language: Done in C++ using OpenCV library.
+Pre-processing: For the image pre-processing, i.e. transforming the image into a more raw form to give to the algorithm, I used 2 methods:
+
+Changing color domain from RGB to HSV and filtering based on "red" hue, saturation above a certain threshold to avoid orange-like colors, and filtering of low value to avoid dark tones. The end result was a binary black and white image, where all white pixels would represent the pixels that match this threshold. Obviously there is still a lot of crap in the image, but this reduces the number of dimensions you have to work with.
+
+Noise filtering using median filtering (taking the median pixel value of all neighbors and replace the pixel by this value) to reduce noise.
+Using Canny Edge Detection Filter to get the contours of all items after 2 precedent steps.
+
+
+Algorithm: The algorithm itself I chose for this task was taken from this awesome book on feature extraction and called Generalized Hough Transform (pretty different from the regular Hough Transform). It basically says a few things:
+
+You can describe an object in space without knowing its analytical equation (which is the case here).
+It is resistant to image deformations such as scaling and rotation, as it will basically test your image for every combination of scale factor and rotation factor.
+It uses a base model (a template) that the algorithm will "learn".
+Each pixel remaining in the contour image will vote for another pixel which will supposedly be the center (in terms of gravity) of your object, based on what it learned from the model.
+
+In the end, you end up with a heat map of the votes, for example here all the pixels of the contour of the can will vote for its gravitational center, so you'll have a lot of votes in the same pixel corresponding to the center, and will see a peak in the heat map as below:
+
+Once you have that, a simple threshold-based heuristic can give you the location of the center pixel, from which you can derive the scale and rotation and then plot your little rectangle around it (final scale and rotation factor will obviously be relative to your original template). In theory at least...
+Results: Now, while this approach worked in the basic cases, it was severely lacking in some areas:
+
+It is extremely slow! I'm not stressing this enough. Almost a full day was needed to process the 30 test images, obviously because I had a very high scaling factor for rotation and translation, since some of the cans were very small.
+It was completely lost when bottles were in the image, and for some reason almost always found the bottle instead of the can (perhaps because bottles were bigger, thus had more pixels, thus more votes)
+Fuzzy images were also no good, since the votes ended up in pixel at random locations around the center, thus ending with a very noisy heat map.
+In-variance in translation and rotation was achieved, but not in orientation, meaning that a can that was not directly facing the camera objective wasn't recognized.
+
+How do I improve my specific algorithm, using exclusively OpenCV features, to resolve the four specific issues mentioned?
+
+Question: What is the best algorithm for overriding GetHashCode?
+In .NET, the [CODE] method is used in a lot of places throughout the .NET base class libraries. Implementing it properly is especially important to find items quickly in a collection or when determining equality.
+
+Is there a standard algorithm or best practice on how to implement [CODE] for my custom classes so I don't degrade performance?
+
+Question: Removing duplicates in lists
+How can I check if a list has any duplicates and return a new list without duplicates?
+
+Question: Easy interview question got harder: given numbers 1..100, find the missing number(s) given exactly k are missing
+I had an interesting job interview experience a while back. The question started really easy:
+
+Q1: We have a bag containing numbers [CODE], [CODE], [CODE], …, [CODE]. Each number appears exactly once, so there are 100 numbers. Now one number is randomly picked out of the bag. Find the missing number.
+
+I've heard this interview question before, of course, so I very quickly answered along the lines of:
+
+A1: Well, the sum of the numbers [CODE] is [CODE] (see Wikipedia: sum of arithmetic series). For [CODE], the sum is [CODE].
+Thus, if all numbers are present in the bag, the sum will be exactly [CODE]. Since one number is missing, the sum will be less than this, and the difference is that number. So we can find that missing number in [CODE] time and [CODE] space.
+
+At this point I thought I had done well, but all of a sudden the question took an unexpected turn:
+
+Q2: That is correct, but now how would you do this if TWO numbers are missing?
+
+I had never seen/heard/considered this variation before, so I panicked and couldn't answer the question. The interviewer insisted on knowing my thought process, so I mentioned that perhaps we can get more information by comparing against the expected product, or perhaps doing a second pass after having gathered some information from the first pass, etc, but I really was just shooting in the dark rather than actually having a clear path to the solution.
+The interviewer did try to encourage me by saying that having a second equation is indeed one way to solve the problem. At this point I was kind of upset (for not knowing the answer before hand), and asked if this is a general (read: "useful") programming technique, or if it's just a trick/gotcha answer.
+The interviewer's answer surprised me: you can generalize the technique to find 3 missing numbers. In fact, you can generalize it to find k missing numbers.
+
+Qk: If exactly k numbers are missing from the bag, how would you find it efficiently?
+
+This was a few months ago, and I still couldn't figure out what this technique is.  Obviously there's a [CODE] time lower bound since we must scan all the numbers at least once, but the interviewer insisted that the TIME and SPACE complexity of the solving technique (minus the [CODE] time input scan) is defined in k not N.
+So the question here is simple:
+
+How would you solve Q2?
+How would you solve Q3?
+How would you solve Qk?
+
+
+Clarifications
+
+Generally there are N numbers from 1..N, not just 1..100.
+I'm not looking for the obvious set-based solution, e.g. using a bit set, encoding the presence/absence each number by the value of a designated bit, therefore using [CODE] bits in additional space. We can't afford any additional space proportional to N.
+I'm also not looking for the obvious sort-first approach. This and the set-based approach are worth mentioning in an interview (they are easy to implement, and depending on N, can be very practical). I'm looking for the Holy Grail solution (which may or may not be practical to implement, but has the desired asymptotic characteristics nevertheless).
+
+So again, of course you must scan the input in [CODE], but you can only capture small amount of information (defined in terms of k not N), and must then find the k missing numbers somehow.
+
+Question: Ukkonen&#39;s suffix tree algorithm in plain English
+I feel a bit thick at this point. I've spent days trying to fully wrap my head around suffix tree construction, but because I don't have a mathematical background, many of the explanations elude me as they start to make excessive use of mathematical symbology. The closest to a good explanation that I've found is Fast String Searching With Suffix Trees, but he glosses over various points and some aspects of the algorithm remain unclear.
+A step-by-step explanation of this algorithm here on Stack Overflow would be invaluable for many others besides me, I'm sure.
+For reference, here's Ukkonen's paper on the algorithm: http://www.cs.helsinki.fi/u/ukkonen/SuffixT1withFigs.pdf
+My basic understanding, so far:
+
+I need to iterate through each prefix P of a given string T
+I need to iterate through each suffix S in prefix P and add that to tree
+To add suffix S to the tree, I need to iterate through each character in S, with the iterations consisting of either walking down an existing branch that starts with the same set of characters C in S and potentially splitting an edge into descendent nodes when I reach a differing character in the suffix, OR if there was no matching edge to walk down. When no matching edge is found to walk down for C, a new leaf edge is created for C.
+
+The basic algorithm appears to be O(n2), as is pointed out in most explanations, as we need to step through all of the prefixes, then we need to step through each of the suffixes for each prefix. Ukkonen's algorithm is apparently unique because of the suffix pointer technique he uses, though I think that is what I'm having trouble understanding.
+I'm also having trouble understanding:
+
+exactly when and how the "active point" is assigned, used and changed
+what is going on with the canonization aspect of the algorithm
+Why the implementations I've seen need to "fix" bounding variables that they are using
+
+
+Here is the completed C# source code. It not only works correctly, but supports automatic canonization and renders a nicer looking text graph of the output. Source code and sample output is at:
+
+https://gist.github.com/2373868
+
+
+Update 2017-11-04
+After many years I've found a new use for suffix trees, and have implemented the algorithm in JavaScript. Gist is below. It should be bug-free. Dump it into a js file, [CODE] from the same location, and then run with node.js to see some colourful output. There's a stripped down version in the same Gist, without any of the debugging code.
+
+https://gist.github.com/axefrog/c347bf0f5e0723cbd09b1aaed6ec6fc6
+
+Question: Calculate distance between two latitude-longitude points? (Haversine formula)
+How do I calculate the distance between two points specified by latitude and longitude?
+
+For clarification, I'd like the distance in kilometers; the points use the WGS84 system and I'd like to understand the relative accuracies of the approaches available.
+
+Question: What is tail call optimization?
+Very simply, what is tail-call optimization?
+
+More specifically, what are some small code snippets where it could be applied, and where not, with an explanation of why?
+
+Question: How can I find the time complexity of an algorithm?
+I have gone through Google and Stack Overflow search, but nowhere I was able to find a clear and straightforward explanation for how to calculate time complexity.
+What do I know already?
+Say for code as simple as the one below:
+[CODE]
+Say for a loop like the one below:
+[CODE]
+
+[CODE] This will be executed only once.
+
+The time is actually calculated to [CODE] and not the declaration.
+
+[CODE] This will be executed N+1 times
+[CODE] This will be executed N times
+
+So the number of operations required by this loop are {1+(N+1)+N} = 2N+2. (But this still may be wrong, as I am not confident about my understanding.)
+OK, so these small basic calculations I think I know, but in most cases I have seen the time complexity as O(N), O(n^2), O(log n), O(n!), and many others.
+
+Question: Count the number of set bits in a 32-bit integer
+8 bits representing the number 7 look like this:
+[CODE]
+Three bits are set.
+What are the algorithms to determine the number of set bits in a 32-bit integer?
+
+Question: Big O, how do you calculate/approximate it?
+Most people with a degree in CS will certainly know what Big O stands for.
+It helps us to measure how well an algorithm scales. 
+
+But I'm curious, how do you calculate or approximate the complexity of your algorithms?
+
+Question: How can building a heap be O(n) time complexity?
+Can someone help explain how can building a heap be O(n) complexity?
+Inserting an item into a heap is O(log n), and the insert is repeated n/2 times (the remainder are leaves, and can't violate the heap property). So, this means the complexity should be O(n log n), I would think.
+In other words, for each item we "heapify", it has the potential to have to filter down (i.e., sift down) once for each level for the heap so far (which is log n levels).
+What am I missing?
+
+Question: How do I generate all permutations of a list?
+How do I generate all the permutations of a list? For example:
+[CODE]
+
+Question: How do I determine whether my calculation of pi is accurate?
+I was trying various methods to implement a program that gives the digits of pi sequentially. I tried the Taylor series method, but it proved to converge extremely slowly (when I compared my result with the online values after some time). Anyway, I am trying better algorithms.
+
+So, while writing the program I got stuck on a problem, as with all algorithms: How do I know that the [CODE] digits that I've calculated are accurate?
+
+Question: Sorting 1 million 8-decimal-digit numbers with 1 MB of RAM
+I have a computer with 1 MB of RAM and no other local storage. I must use it to accept 1 million 8-digit decimal numbers over a TCP connection, sort them, and then send the sorted list out over another TCP connection. 
+
+The list of numbers may contain duplicates, which I must not discard. The code will be placed in ROM, so I need not subtract the size of my code from the 1&nbsp;MB. I already have code to drive the Ethernet port and handle TCP/IP connections, and it requires 2&nbsp;KB for its state data, including a 1&nbsp;KB buffer via which the code will read and write data. Is there a solution to this problem?
+
+Sources Of Question And Answer:
+
+slashdot.org
+
+cleaton.net
+
+Question: How to check if a number is a power of 2
+Today I needed a simple algorithm for checking if a number is a power of 2.
+The algorithm needs to be:
+
+Simple
+Correct for any [CODE] value.
+
+I came up with this simple algorithm:
+[CODE]
+But then I thought: How about checking if log2 x is an exactly a round number? When I checked for 2^63+1, [CODE] returned exactly 63 because of rounding. So I checked if 2 to the power 63 is equal to the original number and it is, because the calculation is done in [CODE]s and not in exact numbers.
+[CODE]
+This returned [CODE] for the given wrong value: [CODE].
+Is there a better algorithm?
+
+Question: Generate an integer that is not among four billion given ones
+I have been given this interview question:
+
+
+  Given an input file with four billion integers, provide an algorithm to generate an integer which is not contained in the file. Assume you have 1&nbsp;GB memory. Follow up with what you would do if you have only 10&nbsp;MB of memory.
+
+
+My analysis:
+
+The size of the file is 4×109×4 bytes = 16&nbsp;GB.
+
+We can do external sorting, thus letting us know the range of the integers.
+
+My question is what is the best way to detect the missing integer in the sorted big integer sets?
+
+My understanding (after reading all the answers):
+
+Assuming we are talking about 32-bit integers, there are 232 = 4*109 distinct integers.
+
+Case 1: we have 1&nbsp;GB = 1 * 109 * 8 bits = 8 billion bits memory.
+
+Solution:
+
+If we use one bit representing one distinct integer, it is enough. we don't need sort.
+
+Implementation:
+
+[CODE]
+
+Case 2: 10&nbsp;MB memory = 10 * 106 * 8 bits = 80 million bits
+
+
+  Solution:
+  
+  For all possible 16-bit prefixes, there are 216 number of
+  integers = 65536, we need 216 * 4 * 8 = 2 million bits. We need build 65536 buckets. For each bucket, we need 4 bytes holding all possibilities because the worst case is all the 4 billion integers belong to the same bucket.
+  
+  
+  Build the counter of each bucket through the first pass through the file.
+  Scan the buckets, find the first one who has less than 65536 hit.
+  Build new buckets whose high 16-bit prefixes are we found in step2
+  through second pass of the file
+  Scan the buckets built in step3, find the first bucket which doesnt
+  have a hit.
+  
+  
+  The code is very similar to above one.
+
+
+Conclusion:
+    We decrease memory through increasing file pass.
+
+
+
+
+A clarification for those arriving late: The question, as asked, does not say that there is exactly one integer that is not contained in the file&mdash;at least that's not how most people interpret it. Many comments in the comment thread are about that variation of the task, though. Unfortunately the comment that introduced it to the comment thread was later deleted by its author, so now it looks like the orphaned replies to it just misunderstood everything. It's very confusing, sorry.
+
+Question: Expand a random range from 1–5 to 1–7
+Given a function which produces a random integer in the range 1 to 5, write a function which produces a random integer in the range 1 to 7.
+
+Question: How do I create a URL shortener?
+I want to create a URL shortener service where you can write a long URL into an input field and the service shortens the URL to "[CODE]".
+
+Instead of "[CODE]" there can be any other string with six characters containing [CODE]. That makes 56~57 billion possible strings.
+
+My approach:
+
+I have a database table with three columns:
+
+
+id, integer, auto-increment
+long, string, the long URL the user entered
+short, string, the shortened URL (or just the six characters)
+
+
+I would then insert the long URL into the table. Then I would select the auto-increment value for "[CODE]" and build a hash of it. This hash should then be inserted as "[CODE]". But what sort of hash should I build? Hash algorithms like MD5 create too long strings. I don't use these algorithms, I think. A self-built algorithm will work, too.
+
+My idea:
+
+For "[CODE]" I get the auto-increment id [CODE]. Then I do the following steps:
+
+[CODE]
+
+That could be repeated until the number isn't divisible any more. Do you think this is a good approach? Do you have a better idea?
+
+
+  Due to the ongoing interest in this topic, I've published an efficient solution to GitHub, with implementations for JavaScript, PHP, Python and Java. Add your solutions if you like :)
+
+Question: How do you compare float and double while accounting for precision loss?
+What would be the most efficient way to compare two [CODE] or two [CODE] values?
+Simply doing this is not correct:
+[CODE]
+But something like:
+[CODE]
+Seems to waste processing.
+Does anyone know a smarter float comparer?
+
+Question: What is the difference between a generative and a discriminative algorithm?
+What is the difference between a generative and a
+discriminative algorithm?
+
+Question: Algorithm to return all combinations of k elements from n
+I want to write a function that takes an array of letters as an argument and a number of those letters to select. 
+
+Say you provide an array of 8 letters and want to select 3 letters from that. Then you should get:
+
+[CODE]
+
+Arrays (or words) in return consisting of 3 letters each.
+
+Question: How to replace all occurrences of a character in string?
+What is the effective way to replace all occurrences of a character with another character in [CODE]?
+
+Question: How do you detect Credit card type based on number?
+I'm trying to figure out how to detect the type of credit card based purely on its number. Does anyone know of a definitive, reliable way to find this?
+
+Question: Why does Java&#39;s hashCode() in String use 31 as a multiplier?
+Per the Java documentation, the hash code for a [CODE] object is computed as:
+
+
+[CODE]
+  
+  using [CODE] arithmetic, where [CODE] is the
+   ith character of the string, [CODE] is the length of
+   the string, and [CODE] indicates exponentiation.
+
+
+Why is 31 used as a multiplier?
+
+I understand that the multiplier should be a relatively large prime number. So why not 29, or 37, or even 97?
+
+Question: Algorithm to detect overlapping periods
+I've to detect if two time periods are overlapping.
+Every period has a start date and an end date.
+I need to detect if my first time period (A) is overlapping with another one(B/C). 
+In my case, if the start of B is equal to the end of A, they are not overlapping(the inverse too) 
+I found the following cases:
+
+
+
+So actually I'm doing this like this:
+
+[CODE]
+
+(The case 4 is taken in the account either in case 1 or in case 2)
+
+It works, but it seems not very efficient.
+
+So, first is there an existing class in c# that can modelize this(a time period), something like a timespan, but with a fixed start date.
+
+Secondly: Is there already a c# code(like in the [CODE] class) which can handle this?
+
+Third: if no, what would be your approach to make this comparison the most fast?
+
+Question: Best way to reverse a string
+I've just had to write a string reverse function in C# 2.0 (i.e. LINQ not available) and came up with this:
+
+[CODE]
+
+Personally I'm not crazy about the function and am convinced that there's a better way to do it. Is there?
+
+Question: Check if all elements in a list are equal
+I need a function which takes in a [CODE] and outputs [CODE] if all elements in the input list evaluate as equal to each other using the standard equality operator and [CODE] otherwise.
+I feel it would be best to iterate through the list comparing adjacent elements and then [CODE] all the resulting Boolean values. But I'm not sure what's the most Pythonic way to do that.
+
+Question: What is the most efficient way to parse a flat table into a tree?
+Assume you have a flat table that stores an ordered tree hierarchy:
+[CODE]
+Here's a diagram, where we have [CODE].  Root node 0 is fictional.
+
+                       [0] ROOT
+                          /    \ 
+              [1] Node 1          [3] Node 2
+              /       \                   \
+    [2] Node 1.1     [6] Node 1.2      [5] Node 2.1
+          /          
+ [4] Node 1.1.1
+
+What is the most efficient approach to output that to HTML (or text, for that matter) as a correctly ordered and indented tree?
+Assume that you only have basic data structures (arrays and hashmaps), no fancy objects with parent/children references, no ORM, no framework, just your two hands. The table is represented as a result set, which can be accessed randomly.
+Pseudo code or plain English is okay, this is purely a conceptional question.
+A root node is not necessary, because it is never going to be displayed anyway. ParentId = 0 is the convention to express "these are top level". The Order column defines how nodes with the same parent are going to be sorted.
+The "result set" I spoke of can be pictured as an array of hashmaps (to stay in that terminology). For my example was meant to be already there. Some answers go the extra mile and construct it first, but thats okay.
+The tree can be arbitrarily deep. Each node can have N children. I did not exactly have a "millions of entries" tree in mind, though.
+Don't mistake my choice of node naming ('Node 1.1.1') for something to rely on. The nodes could equally well be called 'Frank' or 'Bob', no naming structure is implied, this was merely to make it readable.
+
+Question: A simple explanation of Naive Bayes Classification
+I am finding it hard to understand the process of Naive Bayes, and I was wondering if someone could explain it with a simple step by step process in English. I understand it takes comparisons by times occurred as a probability, but I have no idea how the training data is related to the actual dataset.
+
+Please give me an explanation of what role the training set plays. I am giving a very simple example for fruits here, like banana for example
+
+[CODE]
+
+Question: Why do we check up to the square root of a number to determine if the number is prime?
+To test whether a number is prime or not, why do we have to test whether it is divisible only up to the square root of that number?
+
+Question: What algorithms compute directions from point A to point B on a map?
+How do map providers (such as Google or Yahoo! Maps) suggest directions?
+
+I mean, they probably have real-world data in some form, certainly including distances but also perhaps things like driving speeds, presence of sidewalks, train schedules, etc.  But suppose the data were in a simpler format, say a very large directed graph with edge weights reflecting distances.  I want to be able to quickly compute directions from one arbitrary point to another.  Sometimes these points will be close together (within one city) while sometimes they will be far apart (cross-country).
+
+Graph algorithms like Dijkstra's algorithm will not work because the graph is enormous.  Luckily, heuristic algorithms like A* will probably work.  However, our data is very structured, and perhaps some kind of tiered approach might work?  (For example, store precomputed directions between certain "key" points far apart, as well as some local directions.  Then directions for two far-away points will involve local directions to a key points, global directions to another key point, and then local directions again.)
+
+What algorithms are actually used in practice?
+
+PS.  This question was motivated by finding quirks in online mapping directions.  Contrary to the triangle inequality, sometimes Google Maps thinks that X-Z takes longer and is farther than using an intermediate point as in X-Y-Z.  But maybe their walking directions optimize for another parameter, too?
+
+PPS.  Here's another violation of the triangle inequality that suggests (to me) that they use some kind of tiered approach: X-Z versus X-Y-Z.  The former seems to use prominent Boulevard de Sebastopol even though it's slightly out of the way.
+
+Edit: Neither of these examples seem to work anymore, but both did at the time of the original post.
+
+Question: What is Constant Amortized Time?
+What is meant by "Constant Amortized Time" when talking about time complexity of an algorithm?
+
+Question: What is an NP-complete in computer science?
+What is an NP-complete problem? Why is it such an important topic in computer science?
+
+Question: What&#39;s the Hi/Lo algorithm?
+What's the Hi/Lo algorithm?
+
+I've found this in the NHibernate documentation (it's one method to generate unique keys, section 5.1.4.2), but I haven't found a good explanation of how it works.
+
+I know that Nhibernate handles it, and I don't need to know the inside, but I'm just curious.
+
+Question: What are the practical factors to consider when choosing between Depth-First Search (DFS) and Breadth-First Search (BFS)?
+I understand the differences between DFS and BFS, but I'm interested to know what factors to consider when choosing DFS vs BFS.
+Things like avoiding DFS for very deep trees, etc.
+
+Question: How to detect a loop in a linked list?
+Say you have a linked list structure in Java.  It's made up of Nodes:
+
+[CODE]
+
+and each Node points to the next node, except for the last Node, which has null for next.  Say there is a possibility that the list can contain a loop - i.e. the final Node, instead of having a null, has a reference to one of the nodes in the list which came before it.
+
+What's the best way of writing
+
+[CODE]
+
+which would return [CODE] if the given Node is the first of a list with a loop, and [CODE] otherwise?  How could you write so that it takes a constant amount of space and a reasonable amount of time?
+
+Here's a picture of what a list with a loop looks like:
+
+Question: How does the Google "Did you mean?" Algorithm work?
+I've been developing an internal website for a portfolio management tool.  There is a lot of text data, company names etc.  I've been really impressed with some search engines ability to very quickly respond to queries with "Did you mean: xxxx".
+
+I need to be able to intelligently take a user query and respond with not only raw search results but also with a "Did you mean?" response when there is a highly likely alternative answer etc
+
+[I'm developing in ASP.NET (VB - don't hold it against me! )]
+
+UPDATE:
+OK, how can I mimic this without the millions of 'unpaid users'?
+
+
+Generate typos for each 'known' or 'correct' term and perform lookups?
+Some other more elegant method?
+
+Question: How can I implement a queue using two stacks?
+Suppose we have two stacks and no other temporary variable.
+
+Is to possible to "construct" a queue data structure using only the two stacks?
+
+Question: Generating all permutations of a given string
+What is an elegant way to find all the permutations of a string. E.g. permutation for [CODE], would be [CODE] and [CODE], but what about longer string such as [CODE]? Is there any Java implementation example?
+
+Question: Efficient algorithm for detecting cycles in a directed graph
+Is there an efficient algorithm for detecting cycles within a directed graph?
+I have a directed graph representing a schedule of jobs that need to be executed, a job being a node and a dependency being an edge. I need to detect the error case of a cycle within this graph leading to cyclic dependencies.
+It would be better to detect all cycles so they could be fixed in one go.
+
+Question: Why do we use Base64?
+Wikipedia says
+
+
+  Base64 encoding schemes are commonly used when there is a need to encode binary data that needs be stored and transferred over media that are designed to deal with textual data. This is to ensure that the data remains intact without modification during transport.
+
+
+But is it not that data is always stored/transmitted in binary because the memory that our machines have store binary and it just depends how you interpret it? So, whether you encode the bit pattern [CODE] as [CODE] in ASCII or as [CODE] in Base64, you are eventually going to store the same bit pattern.
+
+If the ultimate encoding is in terms of zeros and ones and every machine and media can deal with them, how does it matter if the data is represented as ASCII or Base64?
+
+What does it mean "media that are designed to deal with textual data"? They can deal with binary => they can deal with anything.
+
+
+
+Thanks everyone, I think I understand now.
+
+When we send over data, we cannot be sure that the data would be interpreted in the same format as we intended it to be. So, we send over data coded in some format (like Base64) that both parties understand. That way even if sender and receiver interpret same things differently, but because they agree on the coded format, the data will not get interpreted wrongly.
+
+From Mark Byers example
+
+If I want to send 
+
+[CODE]
+
+One way is to send it in ASCII like 
+
+[CODE]
+
+But byte 10 might not be interpreted correctly as a newline at the other end. So, we use a subset of ASCII to encode it like this
+
+[CODE]
+
+which at the cost of more data transferred for the same amount of information ensures that the receiver can decode the data in the intended way, even if the receiver happens to have different interpretations for the rest of the character set.
+
+Question: Difference between Big-O and Little-O Notation
+What is the difference between Big-O notation [CODE] and Little-O notation [CODE]?
+
+Question: What is stability in sorting algorithms and why is it important?
+I'm very curious, why stability is or is not important in sorting algorithms?
+
+Question: Image comparison - fast algorithm
+I'm looking to create a base table of images and then compare any new images against that to determine if the new image is an exact (or close) duplicate of the base.
+
+For example: if you want to reduce storage of the same image 100's of times, you could store one copy of it and provide reference links to it.  When a new image is entered you want to compare to an existing image to make sure it's not a duplicate ... ideas?
+
+One idea of mine was to reduce to a small thumbnail and then randomly pick 100 pixel locations and compare.
+
+Question: Getting the closest string match
+I need a way to compare multiple strings to a test string and return the string that closely resembles it:
+
+[CODE]
+
+(If I did this correctly) The closest string to the "TEST STRING" should be "CHOICE C".  What is the easiest way to do this?
+
+I plan on implementing this into multiple languages including VB.net, Lua, and JavaScript.  At this point, pseudo code is acceptable.  If you can provide an example for a specific language, this is appreciated too!
+
+Question: Peak signal detection in realtime timeseries data
+I am analyzing the following data:
+
+Raw data (seperated with spaces):
+[CODE]
+You can clearly see that there are three large "global" peaks and some smaller "local" peaks. This data can be described as follows:
+
+There is basic noise with a general mean
+The distribution of the noise is in the class of exponential families of distributions
+There are data points that significantly deviate from the noise (peaks)
+The data is observed in real-time (a new data point is observed every period)
+
+How can I identify the peaks in real-time while ignoring the general noise?
+
+Question: What is the difference between depth and height in a tree?
+This is a simple question from algorithms theory.
+The difference between them is that in one case you count number of nodes and in other number of edges on the shortest path between root and concrete node.
+Which is which?
+
+Question: Why is quicksort better than mergesort?
+I was asked this question during an interview. They're both O(nlogn) and yet most people use Quicksort instead of Mergesort. Why is that?
+
+Question: Fastest sort of fixed length 6 int array
+Answering to another Stack Overflow question (this one) I stumbled upon an interesting sub-problem. What is the fastest way to sort an array of 6 integers?
+
+As the question is very low level:
+
+
+we can't assume libraries are available (and the call itself has its cost), only plain C
+to avoid emptying instruction pipeline (that has a very high cost) we should probably minimize branches, jumps, and every other kind of control flow breaking (like those hidden behind sequence points in [CODE] or [CODE]).
+room is constrained and minimizing registers and memory use is an issue, ideally in place sort is probably best.
+
+
+Really this question is a kind of Golf where the goal is not to minimize source length but execution time. I call it 'Zening' code as used in the title of the book Zen of Code optimization by Michael Abrash and its sequels.
+
+As for why it is interesting, there is several layers:
+
+
+the example is simple and easy to understand and measure, not much C skill involved
+it shows effects of choice of a good algorithm for the problem, but also effects of the compiler and underlying hardware.
+
+
+Here is my reference (naive, not optimized) implementation and my test set.
+
+[CODE]
+
+Raw results
+
+As number of variants is becoming large, I gathered them all in a test suite that can be found here. The actual tests used are a bit less naive than those showed above, thanks to Kevin Stock. You can compile and execute it in your own environment. I'm quite interested by behavior on different target architecture/compilers. (OK guys, put it in answers, I will +1 every contributor of a new resultset). 
+
+I gave the answer to Daniel Stutzbach (for golfing) one year ago as he was at the source of the fastest solution at that time (sorting networks).
+
+Linux 64 bits, gcc 4.6.1 64 bits, Intel Core 2 Duo E8400, -O2
+
+
+Direct call to qsort library function      : 689.38
+Naive implementation (insertion sort)      : 285.70
+Insertion Sort (Daniel Stutzbach)          : 142.12
+Insertion Sort Unrolled                    : 125.47
+Rank Order                                 : 102.26
+Rank Order with registers                  : 58.03
+Sorting Networks (Daniel Stutzbach)        : 111.68
+Sorting Networks (Paul R)                  : 66.36
+Sorting Networks 12 with Fast Swap         : 58.86
+Sorting Networks 12 reordered Swap         : 53.74
+Sorting Networks 12 reordered Simple Swap  : 31.54
+Reordered Sorting Network w/ fast swap     : 31.54
+Reordered Sorting Network w/ fast swap V2  : 33.63
+Inlined Bubble Sort (Paolo Bonzini)        : 48.85
+Unrolled Insertion Sort (Paolo Bonzini)    : 75.30
+
+
+Linux 64 bits, gcc 4.6.1 64 bits, Intel Core 2 Duo E8400, -O1
+
+
+Direct call to qsort library function      : 705.93
+Naive implementation (insertion sort)      : 135.60
+Insertion Sort (Daniel Stutzbach)          : 142.11
+Insertion Sort Unrolled                    : 126.75
+Rank Order                                 : 46.42
+Rank Order with registers                  : 43.58
+Sorting Networks (Daniel Stutzbach)        : 115.57
+Sorting Networks (Paul R)                  : 64.44
+Sorting Networks 12 with Fast Swap         : 61.98
+Sorting Networks 12 reordered Swap         : 54.67
+Sorting Networks 12 reordered Simple Swap  : 31.54
+Reordered Sorting Network w/ fast swap     : 31.24
+Reordered Sorting Network w/ fast swap V2  : 33.07
+Inlined Bubble Sort (Paolo Bonzini)        : 45.79
+Unrolled Insertion Sort (Paolo Bonzini)    : 80.15
+
+
+I included both -O1 and -O2 results because surprisingly for several programs O2 is less efficient than O1. I wonder what specific optimization has this effect ?
+
+Comments on proposed solutions
+
+Insertion Sort (Daniel Stutzbach)
+
+As expected minimizing branches is indeed a good idea.
+
+Sorting Networks (Daniel Stutzbach)
+
+Better than insertion sort. I wondered if the main effect was not get from avoiding the external loop. I gave it a try by unrolled insertion sort to check and indeed we get roughly the same figures (code is here).
+
+Sorting Networks (Paul R)
+
+The best so far. The actual code I used to test is here. Don't know yet why it is nearly two times as fast as the other sorting network implementation. Parameter passing ? Fast max ?
+
+Sorting Networks 12 SWAP with Fast Swap
+
+As suggested by Daniel Stutzbach, I combined his 12 swap sorting network with branchless fast swap (code is here). It is indeed faster, the best so far with a small margin (roughly 5%) as could be expected using 1 less swap. 
+
+It is also interesting to notice that the branchless swap seems to be much (4 times) less efficient than the simple one using if on PPC architecture.
+
+Calling Library qsort
+
+To give another reference point I also tried as suggested to just call library qsort (code is here). As expected it is much slower : 10 to 30 times slower...  as it became obvious with the new test suite, the main problem seems to be the initial load of the library after the first call, and it compares not so poorly with other version. It is just between 3 and 20 times slower on my Linux. On some architecture used for tests by others it seems even to be faster (I'm really surprised by that one, as library qsort use a more complex API).
+
+Rank order
+
+Rex Kerr proposed another completely different method : for each item of the array compute directly its final position. This is efficient because computing rank order do not need branch. The drawback of this method is that it takes three times the amount of memory of the array (one copy of array and variables to store rank orders). The performance results are very surprising (and interesting). On my reference architecture with 32 bits OS and Intel Core2 Quad E8300, cycle count was slightly below 1000 (like sorting networks with branching swap). But when compiled and executed on my 64 bits box (Intel Core2 Duo) it performed much better : it became the fastest so far. I finally found out the true reason. My 32bits box use gcc 4.4.1 and my 64bits box gcc 4.4.3 and the last one seems much better at optimizing this particular code (there was very little difference for other proposals).
+
+update:
+
+As published figures above shows this effect was still enhanced by later versions of gcc and Rank Order became consistently twice as fast as any other alternative.
+
+Sorting Networks 12 with reordered Swap
+
+The amazing efficiency of the Rex Kerr proposal with gcc 4.4.3 made me wonder : how could a program with 3 times as much memory usage be faster than branchless sorting networks? My hypothesis was that it had less dependencies of the kind read after write, allowing for better use of the superscalar instruction scheduler of the x86. That gave me an idea: reorder swaps to minimize read after write dependencies. More simply put: when you do [CODE] you have to wait for the first swap to be finished before performing the second one because both access to a common memory cell. When you do [CODE]the processor can execute both in parallel. I tried it and it works as expected, the sorting networks is running about 10% faster. 
+
+Sorting Networks 12 with Simple Swap
+
+One year after the original post Steinar H. Gunderson suggested, that we should not try to outsmart the compiler and keep the swap code simple. It's indeed a good idea as the resulting code is about 40% faster! He also proposed a swap optimized by hand using x86 inline assembly code that can still spare some more cycles. The most surprising (it says volumes on programmer's psychology) is that one year ago none of used tried that version of swap. Code I used to test is here. Others suggested other ways to write a C fast swap, but it yields the same performances as the simple one with a decent compiler.
+
+The "best" code is now as follow:
+
+[CODE]
+
+If we believe our test set (and, yes it is quite poor, it's mere benefit is being short, simple and easy to understand what we are measuring), the average number of cycles of the resulting code for one sort is below 40 cycles (6 tests are executed). That put each swap at an average of 4 cycles. I call that amazingly fast. Any other improvements possible ?
+
+Question: Determine if two rectangles overlap each other?
+I am trying to write a C++ program that takes the following inputs from the user to construct rectangles (between 2 and 5): height, width, x-pos, y-pos. All of these rectangles will exist parallel to the x and the y axis, that is all of their edges will have slopes of 0 or infinity.
+
+I've tried to implement what is mentioned in this question but I am not having very much luck.
+
+My current implementation does the following:
+
+[CODE]
+
+However I'm not quite sure if (a) I've implemented the algorithm I linked to correctly, or if I did exactly how to interpret this?
+
+Any suggestions?
+
+Question: Efficiency of purely functional programming
+Does anyone know what is the worst possible asymptotic slowdown that can happen when programming purely functionally as opposed to imperatively (i.e. allowing side-effects)?
+
+Clarification from comment by itowlson: is there any problem for which the best known non-destructive algorithm is asymptotically worse than the best known destructive algorithm, and if so by how much?
+
+Question: Equation for testing if a point is inside a circle
+If you have  a circle with center [CODE] and radius [CODE], how do you test if a given point with coordinates [CODE] is inside the circle?
+
+Question: List of Big-O for PHP functions
+After using PHP for a while now, I've noticed that not all built-in PHP functions are as fast as expected. Consider these two possible implementations of a function that finds if a number is prime using a cached array of primes.
+
+[CODE]
+
+This is because [CODE] is implemented with a linear search O(n) which will linearly slow down as [CODE] grows. Where the [CODE] function is implemented with a hash lookup O(1) which will not slow down unless the hash table gets extremely populated (in which case it's only O(n)).
+
+So far I've had to discover the big-O's via trial and error, and occasionally looking at the source code. Now for the question...
+
+Is there a list of the theoretical (or practical) big O times for all* the built-in PHP functions?
+
+*or at least the interesting ones
+
+For example, I find it very hard to predict the big O of functions listed because the possible implementation depends on unknown core data structures of PHP: [CODE], [CODE], [CODE], [CODE], [CODE], [CODE] (with array inputs), etc.
+
+Question: How to find list of possible words from a letter matrix [Boggle Solver]
+Lately I have been playing a game on my iPhone called Scramble. Some of you may know this game as Boggle. Essentially, when the game starts you get a matrix of letters like so:
+[CODE]
+The goal of the game is to find as many words as you can that can be formed by chaining letters together. You can start with any letter, and all the letters that surround it are fair game, and then once you move on to the next letter, all the letters that surround that letter are fair game, except for any previously used letters. So in the grid above, for example, I could come up with the words [CODE], [CODE], [CODE], [CODE], etc. Words must be at least 3 characters, and no more than NxN characters, which would be 16 in this game but can vary in some implementations.  While this game is fun and addictive, I am apparently not very good at it and I wanted to cheat a little bit by making a program that would give me the best possible words (the longer the word the more points you get).
+
+(source: boggled.org)
+I am, unfortunately, not very good with algorithms or their efficiencies and so forth. My first attempt uses a dictionary such as this one (~2.3MB) and does a linear search trying to match combinations with dictionary entries. This takes a very long time to find the possible words, and since you only get 2 minutes per round, it is simply not adequate.
+I am interested to see if any Stackoverflowers can come up with more efficient solutions. I am mostly looking for solutions using the Big 3 Ps: Python, PHP, and Perl, although anything with Java or C++ is cool too, since speed is essential.
+CURRENT SOLUTIONS:
+
+Adam Rosenfield, Python, ~20s
+John Fouhy, Python, ~3s
+Kent Fredric, Perl, ~1s
+Darius Bacon, Python, ~1s
+rvarcher, VB.NET, ~1s
+Paolo Bergantino, PHP (live link), ~5s (~2s locally)
+
+Question: What&#39;s the best way to build a string of delimited items in Java?
+While working in a Java app, I recently needed to assemble a comma-delimited list of values to pass to another web service without knowing how many elements there would be in advance. The best I could come up with off the top of my head was something like this:
+
+[CODE]
+
+I realize this isn't particularly efficient, since there are strings being created all over the place, but I was going for clarity more than optimization.
+
+In Ruby, I can do something like this instead, which feels much more elegant:
+
+[CODE]
+
+But since Java lacks a join command, I couldn't figure out anything equivalent.
+
+So, what's the best way to do this in Java?
+
+Question: How do you rotate a two dimensional array?
+Inspired by Raymond Chen's post, say you have a 4x4 two dimensional array, write a function that rotates it 90 degrees. Raymond links to a solution in pseudo code, but I'd like to see some real world stuff.
+[CODE]
+Becomes:
+[CODE]
+
+Question: Fast ceiling of an integer division in C / C++
+Given integer values [CODE] and [CODE], C and C++ both return as the quotient [CODE] the floor of the floating point equivalent.  I'm interested in a method of returning the ceiling instead.  For example, [CODE] and [CODE].
+
+The obvious approach involves something like:
+
+[CODE]
+
+This requires an extra comparison and multiplication; and other methods I've seen (used in fact) involve casting as a [CODE] or [CODE].  Is there a more direct method that avoids the additional multiplication (or a second division) and branch, and that also avoids casting as a floating point number?
+
+Question: How to determine if a point is in a 2D triangle?
+What is the simplest algorithm to determine if a point is inside a 2d triangle?
+
+Question: What is the fastest way to get the value of π?
+I'm looking for the fastest way to obtain the value of π, as a personal challenge. More specifically, I'm using ways that don't involve using [CODE] constants like [CODE], or hard-coding the number in.
+
+The program below tests the various ways I know of. The inline assembly version is, in theory, the fastest option, though clearly not portable. I've included it as a baseline to compare against the other versions. In my tests, with built-ins, the [CODE] version is fastest on GCC 4.2, because it auto-folds the [CODE] into a constant. With [CODE] specified, the [CODE] version is fastest.
+
+Here's the main testing program ([CODE]):
+
+[CODE]
+
+And the inline assembly stuff ([CODE]) that will only work for x86 and x64 systems:
+
+[CODE]
+
+And a build script that builds all the configurations I'm testing ([CODE]):
+
+[CODE]
+
+Apart from testing between various compiler flags (I've compared 32-bit against 64-bit too because the optimizations are different), I've also tried switching the order of the tests around. But still, the [CODE] version still comes out on top every time.
+
+Question: What are the underlying data structures used for Redis?
+I'm trying to answer two questions in a definitive list:
+
+
+What are the underlying data structures used for Redis?
+And what are the main advantages/disadvantages/use cases for each type?
+
+
+So, I've read the Redis lists are actually implemented with linked lists. But for other types, I'm not able to dig up any information. Also, if someone were to stumble upon this question and not have a high level summary of the pros and cons of modifying or accessing different data structures, they'd have a complete list of when to best use specific types to reference as well.
+
+Specifically, I'm looking to outline all types: string, list, set, zset and hash.
+
+Oh, I've looked at these article, among others, so far:
+
+
+http://redis.io/topics/data-types
+http://redis.io/topics/data-types-intro
+http://redis.io/topics/faq
+
+Question: How to implement classic sorting algorithms in modern C++?
+The [CODE] algorithm (and its cousins [CODE] and [CODE]) from the C++ Standard Library is in most implementations a complicated and hybrid amalgamation of more elementary sorting algorithms, such as selection sort, insertion sort, quick sort, merge sort, or heap sort.
+
+There are many questions here and on sister sites such as https://codereview.stackexchange.com/ related to bugs, complexity and other aspects of implementations of these classic sorting algorithms. Most of the offered implementations consist of raw loops, use index manipulation and concrete types, and are generally non-trivial to analyse in terms of correctness and efficiency.
+
+Question: how can the above mentioned classic sorting algorithms be implemented using modern C++?
+
+
+no raw loops, but combining the Standard Library's algorithmic building blocks from [CODE]
+iterator interface and use of templates instead of index manipulation and concrete types
+C++14 style, including the full Standard Library, as well as syntactic noise reducers such as [CODE], template aliases, transparent comparators and polymorphic lambdas.
+
+
+Notes: 
+
+
+for further references on implementations of sorting algorithms see Wikipedia, Rosetta Code or http://www.sorting-algorithms.com/ 
+according to Sean Parent's conventions (slide 39), a raw loop is a [CODE]-loop longer than composition of two functions with an operator. So [CODE] or [CODE] or [CODE] are not raw loops, and neither are the loops in [CODE] and [CODE] below.
+I follow Scott Meyers's terminology to denote the current C++1y already as C++14, and to denote C++98 and C++03 both as C++98, so don't flame me for that.
+As suggested in the comments by @Mehrdad, I provide four implementations as a Live Example at the end of the answer: C++14, C++11, C++98 and Boost and C++98. 
+The answer itself is presented in terms of C++14 only. Where relevant, I denote the syntactic and library differences where the various language versions differ.
+
+Question: Algorithm to randomly generate an aesthetically-pleasing color palette
+I'm looking for a simple algorithm to generate a large number of random, aesthetically pleasing colors. So no crazy neon colors, colors reminiscent of feces, etc. 
+
+I've found solutions to this problem but they rely on alternative color palettes than RGB.
+I would rather just use straight RGB than mapping back and forth. These other solutions also can at most generate only 32 or so pleasing random colors. 
+
+Any ideas would be great.
+
+Question: Extremely small or NaN values appear in training neural network
+I'm trying to implement a neural network architecture in Haskell, and use it on MNIST.
+I'm using the [CODE] package for linear algebra.
+My training framework is built using the [CODE] package.
+My code compiles and doesn't crash. But the problem is, certain combinations of layer size (say, 1000), minibatch size, and learning rate give rise to [CODE] values in the computations. After some inspection, I see that extremely small values (order of [CODE]) eventually appear in the activations. But, even when that doesn't happen, the training still doesn't work. There's no improvement over its loss or accuracy.
+I checked and rechecked my code, and I'm at a loss as to what the root of the problem could be.
+Here's the backpropagation training, which computes the deltas for each layer:
+[CODE]
+[CODE] is the loss function, [CODE] is the network ([CODE] matrix and [CODE] vector for each layer), [CODE] and [CODE] are the actual output of the network and the [CODE] (desired) output, and [CODE] are the activation derivatives of each layer.
+In batch mode, [CODE], [CODE] are matrices (rows are output vectors), and [CODE] is a list of the matrices.
+Here's the actual gradient computation:
+[CODE]
+Here, [CODE] and [CODE] are the same as above, [CODE] is the input, and [CODE] is the target output (both in batch form, as matrices).
+[CODE] transforms a matrix into a vector by summing over each row. That is, [CODE] is a list of matrices of deltas, where each column corresponds to the deltas for a row of the minibatch. So, the gradients for the biases are the average of the deltas over all the minibatch. The same thing for [CODE], which corresponds to the gradients for the weights.
+Here's the actual update code:
+[CODE]
+[CODE] is the learning rate. [CODE] is the layer constructor, and [CODE] is the activation function for that layer.
+The gradient descent algorithm makes sure to pass in a negative value for the learning rate. The actual code for the gradient descent is simply a loop around a composition of [CODE] and [CODE], with a parameterized stop condition.
+Finally, here's the code for a mean square error loss function:
+[CODE]
+[CODE] just bundles a loss function and its derivative (for calculating the delta of the output layer).
+The rest of the code is up on GitHub: NeuralNetwork.
+Anyone has an insight into the problem, or even just a sanity check that I'm correctly implementing the algorithm?
+
+Question: Javascript Array.sort implementation?
+Which algorithm does the JavaScript [CODE] function use?  I understand that it can take all manner of arguments and functions to perform different kinds of sorts, I'm simply interested in which algorithm the vanilla sort uses.
+
+Question: What is a loop invariant?
+I'm reading "Introduction to Algorithm" by CLRS. In chapter 2, the authors mention "loop invariants". What is a loop invariant?
+
+Question: Big-O for Eight Year Olds?
+I'm asking more about what this means to my code.  I understand the concepts mathematically, I just have a hard time wrapping my head around what they mean conceptually.  For example, if one were to perform an O(1) operation on a data structure, I understand that the number of operations it has to perform won't grow because there are more items.  And an O(n) operation would mean that you would perform a set of operations on each element.  Could somebody fill in the blanks here?
+
+
+Like what exactly would an O(n^2) operation do?
+And what the heck does it mean if an operation is O(n log(n))?
+And does somebody have to smoke crack to write an O(x!)?
+
+Question: The most efficient way to implement an integer based power function pow(int, int)
+What is the most efficient way given to raise an integer to the power of another integer in C?
+
+[CODE]
+
+Question: Write a program to find 100 largest numbers out of an array of 1 billion numbers
+I recently attended an interview where I was asked "write a program to find 100 largest numbers out of an array of 1 billion numbers."
+
+I was only able to give a brute force solution which was to sort the array in O(nlogn) time complexity and take the last 100 numbers. 
+
+[CODE]
+
+The interviewer was looking for a better time complexity, I tried a couple of other solutions but failed to answer him. Is there a better time complexity solution?
+
+Question: Finding all possible combinations of numbers to reach a given sum
+How would you go about testing all possible combinations of additions from a given set [CODE] of numbers so they add up to a given final number?
+
+A brief example:
+
+
+Set of numbers to add: [CODE]
+Desired result: [CODE]
+
+Question: Determine font color based on background color
+Given a system (a website for instance) that lets a user customize the background color for some section but not the font color (to keep number of options to a minimum), is there a way to programmatically determine if a "light" or "dark" font color is necessary?
+
+I'm sure there is some algorithm, but I don't know enough about colors, luminosity, etc to figure it out on my own.
+
+Question: Mapping two integers to one, in a unique and deterministic way
+Imagine two positive integers A and B. I want to combine these two into a single integer C. 
+
+There can be no other integers D and E which combine to C.
+So combining them with the addition operator doesn't work. Eg 30 + 10 = 40 = 40 + 0 = 39 + 1
+Neither does concatination work. Eg "31" + "2" = 312 = "3" + "12"
+
+This combination operation should also be deterministic (always yield the same result with the same inputs) and should always yield an integer on either the positive or the negative side of integers.
+
+Question: How to sort in-place using the merge sort algorithm?
+How to convert a normal merge sort into an in-place merge sort (or a merge sort with constant extra space overhead)?
+All I can find (on the net) is pages saying "it is too complex" or "out of scope of this text".
+
+The only known ways to merge in-place (without any extra space) are too complex to be reduced to practical program.  (taken from here)
+
+Question: What algorithm can be used for packing rectangles of different sizes into the smallest rectangle possible in a fairly optimal way?
+Ive got a bunch of rectangular objects which I need to pack into the smallest space possible (the dimensions of this space should be powers of two).
+
+I'm aware of various packing algorithms that will pack the items as well as possible into a given space, however in this case I need the algorithm to work out how large that space should be as well.
+
+Eg say Ive got the following rectangles
+
+
+128*32
+128*64
+64*32
+64*32
+
+
+They can be packed into a 128*128 space
+
+
+ _________________
+|128*32          |
+|________________|
+|128*64          |
+|                |
+|                |
+|________________|
+|64*32  |64*32   |
+|_______|________|
+
+
+However if there was also a 160*32 and a 64*64 one it would need a 256*128 space
+
+
+ ________________________________
+|128*32          |64*64  |64*32  |
+|________________|       |_______|
+|128*64          |       |64*32  |
+|                |_______|_______|
+|                |               |
+|________________|___            |
+|160*32              |           |
+|____________________|___________|
+
+
+What algorithms are there that are able to pack a bunch of rectangles and determine the required size for the container (to a power of 2, and within a given maximum size for each dimension)?
+
+Question: How does the algorithm to color the song list in iTunes 11 work?
+The new iTunes 11 has a very nice view for the song list of an album, picking the colors for the fonts and background in function of album cover. How does the algorithm work?
+
+Question: How can I match up permutations of a long list with a shorter list (according to the length of the shorter list)?
+I’m having trouble wrapping my head around a algorithm I’m try to implement. I have two lists and want to take particular combinations from the two lists.
+Here’s an example.
+[CODE]
+the output in this case would be:
+[CODE]
+I might have more names than numbers, i.e. [CODE]. Here's an example with 3 names and 2 numbers:
+[CODE]
+output:
+[CODE]
+
+Question: How can I compare software version number using JavaScript? (only numbers)
+Here is the software version number:
+[CODE]
+How can I compare this?
+Assume the correct order is:
+[CODE]
+The idea is simple...:
+Read the first digit, than, the second, after that the third...
+But I can't convert the version number to float number...
+You also can see the version number like this:
+[CODE]
+And this is clearer to see what is the idea behind...
+But, how can I convert it into a computer program?
+
+Question: What is dynamic programming?
+What is dynamic programming? 
+
+How is it different from recursion, memoization, etc? 
+
+I have read the wikipedia article on it, but I still don't really understand it.
+
+Question: Representing and solving a maze given an image
+What is the best way to represent and solve a maze given an image?
+
+
+
+Given an JPEG image (as seen above), what's the best way to read it in, parse it into some data structure and solve the maze? My first instinct is to read the image in pixel by pixel and store it in a list (array) of boolean values: [CODE] for a white pixel, and [CODE] for a non-white pixel (the colours can be discarded). The issue with this method, is that the image may not be "pixel perfect". By that I simply mean that if there is a white pixel somewhere on a wall it may create an unintended path.
+
+Another method (which came to me after a bit of thought) is to convert the image to an SVG file - which is a list of paths drawn on a canvas. This way, the paths could be read into the same sort of list (boolean values) where [CODE] indicates a path or wall, [CODE] indicating a travel-able space. An issue with this method arises if the conversion is not 100% accurate, and does not fully connect all of the walls, creating gaps.
+
+Also an issue with converting to SVG is that the lines are not "perfectly" straight. This results in the paths being cubic bezier curves. With a list (array) of boolean values indexed by integers, the curves would not transfer easily, and all the points that line on the curve would have to be calculated, but won't exactly match to list indices.
+
+I assume that while one of these methods may work (though probably not) that they are woefully inefficient given such a large image, and that there exists a better way. How is this best (most efficiently and/or with the least complexity) done? Is there even a best way?
+
+Then comes the solving of the maze. If I use either of the first two methods, I will essentially end up with a matrix. According to this answer, a good way to represent a maze is using a tree, and a good way to solve it is using the A* algorithm. How would one create a tree from the image? Any ideas?
+
+TL;DR
+Best way to parse? Into what data structure? How would said structure help/hinder solving?
+
+UPDATE
+I've tried my hand at implementing what @Mikhail has written in Python, using [CODE], as @Thomas recommended. I feel that the algorithm is correct, but it's not working as hoped. (Code below.) The PNG library is PyPNG.
+
+[CODE]
+
+Question: How to make rounded percentages add up to 100%
+Consider the four percentages below, represented as [CODE] numbers:
+
+[CODE]
+
+I need to represent these percentages as whole numbers. If I simply use [CODE], I end up with a total of 101%. 
+
+[CODE]
+
+If I use [CODE], I end up with a total of 97%. 
+
+[CODE]
+
+What's a good algorithm to represent any number of  percentages as whole numbers while still maintaining a total of 100%?
+
+
+
+Edit: After reading some of the comments and answers, there are clearly many ways to go about solving this.
+
+In my mind, to remain true to the numbers, the "right" result is the one that minimizes the overall error, defined by how much error rounding would introduce relative to the actual value:
+
+[CODE]
+
+In case of a tie (3.33, 3.33, 3.33) an arbitrary decision can be made (e.g. 3, 4, 3).
+
+Question: Is log(n!) = Θ(n&#183;log(n))?
+I am to show that log(n!) = Θ(n·log(n)).
+
+A hint was given that I should show the upper bound with nn and show the lower bound with (n/2)(n/2).  This does not seem all that intuitive to me.  Why would that be the case?  I can definitely see how to convert nn to n·log(n) (i.e. log both sides of an equation), but that's kind of working backwards.  
+
+What would be the correct approach to tackle this problem?  Should I draw the recursion tree?  There is nothing recursive about this, so that doesn't seem like a likely approach..
+
+Question: What is the difference between LL and LR parsing?
+Can anyone give me a simple example of LL parsing versus LR parsing?
+
+Question: Recursion or Iteration?
+Is there a performance hit if we use a loop instead of recursion or vice versa in algorithms where both can serve the same purpose? Eg: Check if the given string is a palindrome.
+I have seen many programmers using recursion as a means to show off when a simple iteration algorithm can fit the bill.
+Does the compiler play a vital role in deciding what to use?
+
+Question: Skip List vs. Binary Search Tree
+I recently came across the data structure known as a skip list. It seems to have very similar behavior to a binary search tree. 
+
+Why would you ever want to use a skip list over a binary search tree?
+
+Question: Efficient Algorithm for Bit Reversal (from MSB->LSB to LSB->MSB) in C
+What is the most efficient algorithm to achieve the following:
+
+[CODE]
+
+The conversion is from MSB->LSB to LSB->MSB.  All bits must be reversed; that is, this is not endianness-swapping.
+
+Question: HSL to RGB color conversion
+I am looking for an algorithm to convert between HSL color to RGB.
+It seems to me that HSL is not very widely used so I am not having much luck searching for a converter.
+
+Question: JavaScript - get the first day of the week from current date
+I need the fastest way to get the first day of the week. For example: today is the 11th of November, and a Thursday; and I want the first day of this week, which is the 8th of November, and a Monday. I need the fastest method for MongoDB map function, any ideas?
+
+Question: Finding the max/min value in an array of primitives using Java
+It's trivial to write a function to determine the min/max value in an array, such as:
+
+[CODE]
+
+but isn't this already done somewhere?
+
+Question: Find running median from a stream of integers
+Given that integers are read from a data stream. Find median of elements read so far in efficient way.
+
+Solution I have read: We can use a max heap on left side to represent elements that are less than the effective median, and a min heap on right side to represent elements that are greater than the effective median.
+After processing an incoming element, the number of elements in heaps differ at most by 1 element. When both heaps contain the same number of elements, we find the average of heap's root data as effective median. When the heaps are not balanced, we select the effective median from the root of heap containing more elements.
+But how would we construct a max heap and min heap i.e. how would we know the effective median here? I think that we would insert 1 element in max-heap and then the next 1 element in min-heap, and so on for all the elements. Correct me If I am wrong here.
+
+Question: Efficient way to apply multiple filters to pandas DataFrame or Series
+I have a scenario where a user wants to apply several filters to a Pandas DataFrame or Series object.  Essentially, I want to efficiently chain a bunch of filtering (comparison operations) together that are specified at run-time by the user.
+
+The filters should be additive (aka each one applied should narrow results).
+I'm currently using [CODE] (as below) but this creates a new object each time and copies the underlying data (if I understand the documentation correctly). I want to avoid this unnecessary copying as it will be really inefficient when filtering a big Series or DataFrame.
+I'm thinking that using [CODE], [CODE], or something similar might be better.  I'm pretty new to Pandas though so still trying to wrap my head around everything.
+Also, I would like to expand this so that the dictionary passed in can include the columns to operate on and filter an entire DataFrame based on the input dictionary.  However, I'm assuming whatever works for a Series can be easily expanded to a DataFrame.
+
+TL;DR
+I want to take a dictionary of the following form and apply each operation to a given Series object and return a 'filtered' Series object.
+[CODE]
+Long Example
+I'll start with an example of what I have currently and just filtering a single Series object.  Below is the function I'm currently using:
+[CODE]
+The user provides a dictionary with the operations they want to perform:
+[CODE]
+Again, the 'problem' with my above approach is that I think there is a lot of possibly unnecessary copying of the data for the in-between steps.
+
+Question: What&#39;s the best way to model recurring events in a calendar application?
+I'm building a group calendar application that needs to support recurring events, but all the solutions I've come up with to handle these events seem like a hack. I can limit how far ahead one can look, and then generate all the events at once. Or I can store the events as repeating and dynamically display them when one looks ahead on the calendar, but I'll have to convert them to a normal event if someone wants to change the details on a particular instance of the event.
+
+I'm sure there's a better way to do this, but I haven't found it yet. What's the best way to model recurring events, where you can change details of or delete particular event instances?
+
+(I'm using Ruby, but please don't let that constrain your answer. If there's a Ruby-specific library or something, though, that's good to know.)
+
+Question: How do I calculate a point on a circle’s circumference?
+How can the following function be implemented in various languages?
+
+Calculate the [CODE] point on the circumference of a circle, given input values of:
+
+
+Radius
+Angle
+Origin (optional parameter, if supported by the language)
+
+Question: When should I use Kruskal as opposed to Prim (and vice versa)?
+I was wondering when one should use Prim's algorithm and when Kruskal's to find the minimum spanning tree? They both have easy logics, same worst cases, and only difference is implementation which might involve a bit different data structures. So what is the deciding factor?
+
+Question: What are the differences between segment trees, interval trees, binary indexed trees and range trees?
+What are differences between segment trees, interval trees, binary indexed trees and range trees in terms of:
+
+
+Key idea/definition  
+Applications  
+Performance/order in higher dimensions/space consumption
+
+
+Please do not just give definitions.
+
+Question: Are there any cases where you would prefer a higher big-O time complexity algorithm over the lower one?
+Are there are any cases where you would prefer [CODE] time complexity to [CODE] time complexity? Or [CODE] to [CODE]?
+
+Do you have any examples?
+

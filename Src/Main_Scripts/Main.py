@@ -1273,9 +1273,11 @@ def main():
         # BASE TRAINING (Pre-training on raw text like The Pile, C4, etc. Works on .txt and .jsonl)
         # ===================================================================
         'base_training_paths': [
-            'datasets/base_training_001.txt',
-            'datasets/base_training_002.txt',
-            'datasets/base_training_002.txt',
+            'datasets/wikipedia_1.txt',
+            'datasets/wikipedia_2.txt',
+            'datasets/stackoverflow_1.txt',
+            'datasets/stackoverflow_2.txt',
+            'datasets/gutenberg_1.txt',
         ],
 
         'base_eval_paths': [ # Only .jsonl

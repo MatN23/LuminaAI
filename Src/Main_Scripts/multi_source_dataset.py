@@ -42,12 +42,12 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # Output settings
 OUTPUT_DIR = 'datasets'
 MAX_FILES_PER_SOURCE = 2  # Number of files to create per data source
-MB_PER_FILE = 100.0       # Target size in MB for each file
+MB_PER_FILE = 90.0       # Target size in MB for each file
 
 # Data sources to enable (True/False)
 ENABLE_WIKIPEDIA = True
 ENABLE_GUTENBERG = True
-ENABLE_ARXIV = True
+ENABLE_ARXIV = False
 ENABLE_STACKOVERFLOW = True
 
 # Wikipedia settings

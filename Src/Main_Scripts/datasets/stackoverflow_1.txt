@@ -1,0 +1,1353 @@
+Question: What does the "yield" keyword do in Python?
+What functionality does the [CODE] keyword in Python provide?
+For example, I'm trying to understand this code1:
+[CODE]
+And this is the caller:
+[CODE]
+What happens when the method [CODE] is called?
+Is a list returned? A single element? Is it called again? When will subsequent calls stop?
+
+
+
+1. This piece of code was written by Jochen Schulz (jrschulz), who made a great Python library for metric spaces. This is the link to the complete source: Module mspace.
+
+Question: What does if __name__ == "__main__": do?
+What does this do, and why should one include the [CODE] statement?
+[CODE]
+
+If you are trying to close a question where someone should be using this idiom and isn't, consider closing as a duplicate of Why is Python running my module when I import it, and how do I stop it? instead. For questions where someone simply hasn't called any functions, or incorrectly expects a function named [CODE] to be used as an entry point automatically, use Why doesn&#39;t the main() function run when I start a Python script? Where does the script start running?.
+
+Question: Does Python have a ternary conditional operator?
+Is there a ternary conditional operator in Python?
+
+Question: What are metaclasses in Python?
+What are metaclasses? What are they used for?
+
+Question: How do I check whether a file exists without exceptions?
+How do I check whether a file exists or not, without using the [CODE] statement?
+
+Question: How do I merge two dictionaries in a single expression in Python?
+I want to merge two dictionaries into a new dictionary.
+[CODE]
+Whenever a key [CODE] is present in both dictionaries, only the value [CODE] should be kept.
+
+Question: How do I execute a program or call a system command?
+How do I call an external command within Python as if I had typed it in a shell or command prompt?
+
+Question: How do I create a directory, and any missing parent directories?
+How do I create a directory at a given path, and also create any missing parent directories along that path? For example, the Bash command [CODE] does this.
+
+Question: How can I access the index value in a &#39;for&#39; loop?
+How do I access the index while iterating over a sequence with a [CODE] loop?
+[CODE]
+Desired output:
+[CODE]
+
+Question: How do I make a flat list out of a list of lists?
+I have a list of lists like
+[CODE]
+How can I flatten it to get [CODE]?
+
+If your list of lists comes from a nested list comprehension, the problem can be solved more simply/directly by fixing the comprehension; please see How can I get a flat result from a list comprehension instead of a nested list?.
+The most popular solutions here generally only flatten one "level" of the nested list. See Flatten an irregular (arbitrarily nested) list of lists for solutions that completely flatten a deeply nested structure (recursively, in general).
+
+Question: What is the difference between @staticmethod and @classmethod in Python?
+What is the difference between a method decorated with [CODE] and one decorated with [CODE]?
+
+Question: How slicing in Python works
+How does Python's slice notation work? That is: when I write code like [CODE], [CODE], [CODE] etc., how can I understand which elements end up in the slice?
+
+See Why are slice and range upper-bound exclusive? to learn why [CODE], not [CODE].
+See Make a new list containing every Nth item in the original list for [CODE].
+See How does assignment work with list slices? to learn what [CODE] does.
+
+Question: How can I find the index for a given item in a list?
+Given a list [CODE] and an item in the list [CODE], how do I get its index [CODE]?
+
+Question: Iterating over dictionaries using &#39;for&#39; loops
+[CODE]
+How does Python recognize that it needs only to read the [CODE] from the dictionary? Is [CODE] a special keyword, or is it simply a variable?
+
+Question: How can I iterate over rows in a Pandas DataFrame?
+I have a pandas dataframe, [CODE]:
+[CODE]
+How do I iterate over the rows of this dataframe? For every row, I want to access its elements (values in cells) by the name of the columns. For example:
+[CODE]
+
+I found a similar question, which suggests using either of these:
+
+
+[CODE]
+
+
+[CODE]
+
+
+But I do not understand what the [CODE] object is and how I can work with it.
+
+Question: How can I use a global variable in a function?
+How do I create or use a global variable inside a function?
+How do I use a global variable that was defined in one function inside other functions?
+
+Failing to use the [CODE] keyword where appropriate often causes [CODE]. The precise rules for this are explained at UnboundLocalError on local variable when reassigned after first use. Generally, please close other questions as a duplicate of that question when an explanation is sought, and this question when someone simply needs to know the [CODE] keyword.
+
+Question: How do I get the current time in Python?
+How do I get the current time in Python?
+
+Question: How can I catch multiple exceptions in one line? (in the "except" block)
+I know that I can do:
+[CODE]
+I can also do this:
+[CODE]
+But if I want to do the same thing inside two different exceptions, the best I can think of right now is to do this:
+[CODE]
+Is there a way that I can do something like this (since the action to take in both exceptions is to [CODE]):
+[CODE]
+Now this really won't work, as it matches the syntax for:
+[CODE]
+So, my effort to catch the two distinct exceptions doesn't exactly come through.
+Is there a way to do this?
+
+Question: How do I copy a file?
+How do I copy a file in Python?
+
+Question: What is __init__.py for?
+What is [CODE] for in a Python source directory?
+
+Question: Convert bytes to a string in Python 3
+I captured the standard output of an external program into a [CODE] object:
+[CODE]
+I want to convert that to a normal Python string, so that I can print it like this:
+[CODE]
+How do I convert the [CODE] object to a [CODE] with Python 3?
+
+See Best way to convert string to bytes in Python 3? for the other way around.
+
+Question: What is the difference between __str__ and __repr__?
+What is the difference between [CODE] and [CODE] in Python?
+
+Question: How do I select rows from a DataFrame based on column values?
+How can I select rows from a DataFrame based on values in some column in Pandas?
+In SQL, I would use:
+[CODE]
+
+Question: How can I add new keys to a dictionary?
+How do I add a new key to an existing dictionary? It doesn't have an [CODE] method.
+
+Question: Does Python have a string &#39;contains&#39; substring method?
+I'm looking for a [CODE] or [CODE] method in Python.
+
+I want to do:
+
+[CODE]
+
+Question: How can I delete a file or folder in Python?
+How can I delete a file or folder in Python?
+
+Question: "Least Astonishment" and the Mutable Default Argument
+[CODE]
+Python novices expect this function called with no parameter to always return a list with only one element: [CODE]. The result is  different and astonishing:
+[CODE]
+The behavior has an underlying explanation, but it is unexpected if you don't understand internals. What is the reason for binding the default argument at function definition, and not at function execution? I doubt the experienced behavior has a practical use (who really used static variables in C, without breeding bugs?)
+Edit:
+Baczek made an interesting example. Together with your comments and Utaal's in particular, I elaborated:
+[CODE]
+It seems that the design decision was relative to where to put the scope of parameters: inside the function, or "together" with it?
+Doing the binding inside the function would mean that [CODE] is effectively bound to the specified default when the function is called, not defined, something that would present a deep flaw: the [CODE] line would be "hybrid" in the sense that part of the binding (of the function object) would happen at definition, and part (assignment of default parameters) at function invocation time.
+The actual behavior is more consistent: everything of that line gets evaluated when that line is executed, meaning at function definition.
+
+Question: What does ** (double star/asterisk) and * (star/asterisk) do for parameters?
+What do [CODE] and [CODE] mean in these function definitions?
+[CODE]
+
+See What do ** (double star/asterisk) and * (star/asterisk) mean in a function call? for the complementary question about arguments.
+
+Question: How do I list all files of a directory?
+How can I list all files of a directory in Python and add them to a [CODE]?
+
+Question: How can I access environment variables in Python?
+How can I get the value of an environment variable in Python?
+
+Question: How do I sort a dictionary by value?
+I have a dictionary of values read from two fields in a database: a string field and a numeric field. The string field is unique, so that is the key of the dictionary.
+
+I can sort on the keys, but how can I sort based on the values?
+
+Note: I have read Stack Overflow question here How do I sort a list of dictionaries by a value of the dictionary? and probably could change my code to have a list of dictionaries, but since I do not really need a list of dictionaries I wanted to know if there is a simpler solution to sort either in ascending or descending order.
+
+Question: How do I clone a list so that it doesn&#39;t change unexpectedly after assignment?
+While using [CODE], any modifications to [CODE] changes [CODE] every time. Why is this, and how can I clone or copy the list to prevent it? For example:
+[CODE]
+
+Question: How do I pass a variable by reference?
+I wrote this class for testing:
+[CODE]
+When I tried creating an instance, the output was [CODE]. So it seems like parameters in Python are passed by value. Is that correct? How can I modify the code to get the effect of pass-by-reference, so that the output is [CODE]?
+
+Sometimes people are surprised that code like [CODE], where [CODE] is a parameter name, doesn't impact on the caller's argument, but code like [CODE] does. This happens because item assignment and slice assignment are ways to mutate an existing object, rather than reassign a variable, despite the [CODE] syntax. See Why can a function modify some arguments as perceived by the caller, but not others? for details.
+See also What&#39;s the difference between passing by reference vs. passing by value? for important, language-agnostic terminology discussion.
+
+Question: How do I print colored text to the terminal?
+How do I output colored text to the terminal in Python?
+
+Question: Manually raising (throwing) an exception in Python
+How do I raise an exception in Python so that it can later be caught via an [CODE] block?
+
+Question: Understanding Python super() with __init__() methods
+Why is [CODE] used?
+Is there a difference between using [CODE] and [CODE]?
+[CODE]
+
+Question: How do I make a time delay?
+How do I put a time delay in a Python script?
+
+Question: How do I change the size of figures drawn with Matplotlib?
+How do I change the size of figure drawn with Matplotlib?
+
+Question: How do I concatenate two lists in Python?
+How do I concatenate two lists in Python?
+
+Example:
+
+[CODE]
+
+Expected outcome:
+
+[CODE]
+
+Question: How do I check if a list is empty?
+For example, if passed the following:
+
+[CODE]
+
+How do I check to see if [CODE] is empty?
+
+Question: How do I make function decorators and chain them together?
+How do I make two decorators in Python that would do the following?
+[CODE]
+Calling [CODE] should return:
+[CODE]
+
+Question: How do I split a list into equally-sized chunks?
+How do I split a list of arbitrary length into equal sized chunks?
+
+See also: How to iterate over a list in chunks.
+To chunk strings, see Split string every nth character?.
+
+Question: Find the current directory and file&#39;s directory
+How do I determine:
+
+the current directory (where I was in the shell when I ran the Python script), and
+where the Python file I am executing is?
+
+Question: What is the difference between Python&#39;s list methods append and extend?
+What's the difference between the list methods [CODE] and [CODE]?
+
+Question: Why is "1000000000000000 in range(1000000000000001)" so fast in Python 3?
+It is my understanding that the [CODE] function, which is actually an object type in Python 3, generates its contents on the fly, similar to a generator.
+This being the case, I would have expected the following line to take an inordinate amount of time because, in order to determine whether 1 quadrillion is in the range, a quadrillion values would have to be generated:
+[CODE]
+Furthermore: it seems that no matter how many zeroes I add on, the calculation more or less takes the same amount of time (basically instantaneous).
+I have also tried things like this, but the calculation is still almost instant:
+[CODE]
+If I try to implement my own range function, the result is not so nice!
+[CODE]
+What is the [CODE] object doing under the hood that makes it so fast?
+
+Martijn Pieters's answer was chosen for its completeness, but also see abarnert's first answer for a good discussion of what it means for [CODE] to be a full-fledged sequence in Python 3, and some information/warning regarding potential inconsistency for [CODE] function optimization across Python implementations. abarnert's other answer goes into some more detail and provides links for those interested in the history behind the optimization in Python 3 (and lack of optimization of [CODE] in Python 2). Answers by poke and by wim provide the relevant C source code and explanations for those who are interested.
+
+Question: Renaming column names in Pandas
+I want to change the column labels of a Pandas DataFrame from
+[CODE]
+to
+[CODE]
+
+Question: How can I remove a key from a Python dictionary?
+I want to remove a key from a dictionary if it is present. I currently use this code:
+[CODE]
+Without the [CODE] statement, the code will raise [CODE] if the key is not present. How can I handle this more simply?
+
+See Delete an element from a dictionary for more general approaches to the problem of removing a key from a dict (including ones which produce a modified copy).
+
+Question: Convert string "Jun 1 2005 1:33PM" into datetime
+I have a huge list of datetime strings like the following
+[CODE]
+How do I convert them into [CODE] objects?
+
+Question: How to upgrade all Python packages with pip
+Is it possible to upgrade all Python packages at one time with [CODE]?
+Note: that there is a feature request for this on the official issue tracker.
+
+Question: How can I sort a list of dictionaries by a value of the dictionary in Python?
+How do I sort a list of dictionaries by a specific key's value? Given:
+[CODE]
+When sorted by [CODE], it should become:
+[CODE]
+
+Question: How to leave/exit/deactivate a Python virtualenv
+I'm using virtualenv and the virtualenvwrapper. I can switch between virtualenv's just fine using the [CODE] command.
+[CODE]
+How do I exit all virtual environments and work on my system environment again? Right now, the only way I have of getting back to [CODE] is to exit the shell and start a new one. That's kind of annoying. Is there a command to work on "nothing", and if so, what is it? If such a command does not exist, how would I go about creating it?
+
+Question: How do I get the last element of a list?
+How do I get the last element of a list? Which way is preferred?
+[CODE]
+
+Question: How do I parse a string to a float or int?
+How can I convert an [CODE] to a [CODE]?
+[CODE]
+Or an [CODE] to a [CODE]?
+[CODE]
+
+For the reverse, see Convert integer to string in Python and Converting a float to a string without rounding it.
+Please instead use How can I read inputs as numbers? to close duplicate questions where OP received a string from user input and immediately wants to convert it, or was hoping for [CODE] (in 3.x) to convert the type automatically.
+
+Question: How do I install pip on Windows?
+[CODE] is a replacement for [CODE]. But should I install [CODE] using [CODE] on Windows? Is there a better way?
+
+Question: How do I get a substring of a string in Python?
+I want to get a new string from the third character to the end of the string, e.g. [CODE]. If omitting the second part means 'to the end', and if you omit the first part, does it start from the start?
+
+Question: How do I escape curly-brace ({}) characters characters in a string while using .format?
+Non-working example:
+[CODE]
+Desired output:
+[CODE]
+
+Question: Check if a given key already exists in a dictionary
+I wanted to test if a key exists in a dictionary before updating the value for the key.
+I wrote the following code:
+
+[CODE]
+
+I think this is not the best way to accomplish this task. Is there a better way to test for a key in the dictionary?
+
+Question: Importing files from different folder
+I have this folder structure:
+[CODE]
+How can I import a function from [CODE], from within [CODE]? I tried:
+[CODE]
+but it doesn't work.
+
+Question: Class (static) variables and methods
+How do I create class (i.e. static) variables or methods in Python?
+
+Question: How do I lowercase a string in Python?
+Is there a way to convert a string to lowercase?
+[CODE]
+
+See How to change a string into uppercase? for the opposite.
+
+Question: How can I check if an object has an attribute?
+How do I check if an object has some attribute? For example:
+[CODE]
+How do I tell if [CODE] has the attribute [CODE] before using it?
+
+Question: How to print without a newline or space
+Consider these examples using [CODE] in Python:
+[CODE]
+Either a newline or a space is added between each value. How can I avoid that, so that the output is [CODE] instead? In other words, how can I "append" strings to the standard output stream?
+
+Question: Calling a function of a module by using its name (a string)
+How do I call a function, using a string with the function's name? For example:
+[CODE]
+
+Question: Limiting floats to two decimal points
+I want [CODE] to be rounded to 13.95. I tried using [CODE], but I get:
+[CODE]
+
+For the analogous issue with the standard library Decimal class, see How can I format a decimal to always show 2 decimal places?.
+
+Question: How can I randomly select (choose) an item from a list (get a random element)?
+How do I retrieve an item at random from the following list?
+[CODE]
+
+Question: How to remove an element from a list by index
+How do I remove an element from a list by index?
+I found [CODE], but this slowly scans the list for an item by value.
+
+Question: Delete a column from a Pandas DataFrame
+To delete a column in a DataFrame, I can successfully use:
+[CODE]
+But why can't I use the following?
+[CODE]
+Since it is possible to access the Series via [CODE], I expected this to work.
+
+Question: How do I get the number of elements in a list (length of a list) in Python?
+How do I get the number of elements in the list [CODE]?
+[CODE]
+
+Question: What is the difference between venv, pyvenv, pyenv, virtualenv, virtualenvwrapper, pipenv, etc?
+Python 3.3 includes in its standard library the new package [CODE]. What does it do, and how does it differ from all the other packages that match the regex [CODE]?
+
+Question: How do I pad a string with zeros?
+How do I pad a numeric string with zeroes to the left, so that the string has a specific length?
+
+Question: How can I determine a Python variable&#39;s type?
+How do I see the type of a variable? (e.g., unsigned 32 bit)
+
+Question: Delete an element from a dictionary
+How do I delete an item from a dictionary in Python?
+Without modifying the original dictionary, how do I obtain another dictionary with the item removed?
+
+
+See also How can I remove a key from a Python dictionary? for the specific issue of removing an item (by key) that may not already be present.
+
+Question: Determine the type of an object?
+Is there a simple way to determine if a variable is a list, dictionary, or something else?
+
+Question: How do I count the occurrences of a list item?
+Given a single item, how do I count occurrences of it in a list, in Python?
+
+A related but different problem is counting occurrences of each different element in a collection, getting a dictionary or list as a histogram result instead of a single integer. For that problem, see Using a dictionary to count the items in a list.
+
+Question: How to check if the string is empty in Python?
+Does Python have something like an empty string variable where you can do:
+[CODE]
+Regardless, what's the most elegant way to check for empty string values? I find hard coding [CODE] every time for checking an empty string not as good.
+
+Question: Why is reading lines from stdin much slower in C++ than Python?
+I wanted to compare reading lines of string input from stdin using Python and C++ and was shocked to see my C++ code run an order of magnitude slower than the equivalent Python code. Since my C++ is rusty and I'm not yet an expert Pythonista, please tell me if I'm doing something wrong or if I'm misunderstanding something.
+
+(TLDR answer: include the statement: [CODE] or just use [CODE] instead.
+TLDR results: scroll all the way down to the bottom of my question and look at the table.)
+
+C++ code:
+[CODE]
+Python Equivalent:
+[CODE]
+Here are my results:
+[CODE]
+I should note that I tried this both under Mac OS X v10.6.8 (Snow Leopard) and Linux 2.6.32 (Red Hat Linux 6.2). The former is a MacBook Pro, and the latter is a very beefy server, not that this is too pertinent.
+[CODE]
+[CODE]
+
+Tiny benchmark addendum and recap
+For completeness, I thought I'd update the read speed for the same file on the same box with the original (synced) C++ code. Again, this is for a 100M line file on a fast disk. Here's the comparison, with several solutions/approaches:
+
+
+
+
+Implementation
+Lines per second
+
+
+
+
+python (default)
+3,571,428
+
+
+cin (default/naive)
+819,672
+
+
+cin (no sync)
+12,500,000
+
+
+fgets
+14,285,714
+
+
+wc (not fair comparison)
+54,644,808
+
+Question: How do I measure elapsed time in Python?
+I want to measure the time it took to execute a function. I couldn't get [CODE] to work:
+[CODE]
+
+Question: Why is it string.join(list) instead of list.join(string)?
+This has always confused me. It seems like this would be nicer:
+[CODE]
+Than this:
+[CODE]
+Is there a specific reason it is like this?
+
+Question: How do I append to a file?
+How do I append to a file instead of overwriting it?
+
+Question: Is there a way to run Python on Android?
+We are working on an S60 version and this platform has a nice Python API..
+
+However, there is nothing official about Python on Android, but since Jython exists, is there a way to let the snake and the robot work together??
+
+Question: How can I remove a trailing newline?
+How can I remove the last character of a string if it is a newline?
+[CODE]
+
+Question: Static methods in Python?
+Can I define a static method which I can call directly on the class instance? e.g.,
+[CODE]
+
+Question: Installing specific package version with pip
+I am trying to install version 1.2.2 of [CODE], using a fresh virtualenv created with the [CODE] option. The current version shown in PyPi is 1.2.3. Is there a way to install the older version? I have tried:
+[CODE]
+However, when installed, it still shows [CODE] in the site packages. Is this a problem specific to this package, or am I doing something wrong?
+
+Question: How do I split the definition of a long string over multiple lines?
+I have a very long query. I would like to split it in several lines in Python. A way to do it in JavaScript would be using several sentences and joining them with a [CODE] operator (I know, maybe it's not the most efficient way to do it, but I'm not really concerned about performance in this stage, just code readability). Example:
+[CODE]
+I tried doing something similar in Python, but it didn't work, so I used [CODE] to split the long string. However, I'm not sure if this is the only/best/pythonicest way of doing it. It looks awkward.
+Actual code:
+[CODE]
+
+See also: How can I do a line break (line continuation) in Python (split up a long line of source code)? when the overall line of code is long but doesn't contain a long string literal.
+
+Question: How to prettyprint a JSON file?
+How do I pretty-print a JSON file in Python?
+
+Question: Getting the class name of an instance
+How do I find out the name of the class used to create an instance of an object in Python?
+I'm not sure if I should use the [CODE] module or parse the [CODE] attribute.
+
+Question: How to read a file line-by-line into a list?
+How do I read every line of a file in Python and store each line as an element in a list? 
+
+I want to read the file line by line and append each line to the end of the list.
+
+Question: How do I get the row count of a Pandas DataFrame?
+How do I get the number of rows of a pandas dataframe [CODE]?
+
+Question: How do I check if a string represents a number (float or int)?
+How do I check if a string represents a numeric value in Python?
+[CODE]
+The above works, but it seems clunky.
+
+If what you are testing comes from user input, it is still a string even if it represents an [CODE] or a [CODE]. See How can I read inputs as numbers? for converting the input, and Asking the user for input until they give a valid response for ensuring that the input represents an [CODE] or [CODE] (or other requirements) before proceeding.
+
+Question: What&#39;s the canonical way to check for type in Python?
+How do I check if an object is of a given type, or if it inherits from a given type?
+How do I check if the object [CODE] is of type [CODE]?
+
+Editor's note: Beginners often wrongly expect a string to already be "a number" – either expecting Python 3.x [CODE] to convert type, or expecting that a string like [CODE] is also simultaneously an integer. This question does not address those types of questions. Instead, see How do I check if a string represents a number (float or int)?, How can I read inputs as numbers? and/or Asking the user for input until they give a valid response as appropriate.
+
+Question: Meaning of @classmethod and @staticmethod for beginner
+What do [CODE] and [CODE] mean in Python, and how are they different? When should I use them, why should I use them, and how should I use them?
+As far as I understand, [CODE] tells a class that it's a method which should be inherited into subclasses, or... something. However, what's the point of that? Why not just define the class method without adding [CODE] or [CODE] or any [CODE] definitions?
+
+Question: How can I install packages using pip according to the requirements.txt file from a local directory?
+Here is the problem:
+I have a requirements.txt file that looks like:
+[CODE]
+I have a local archive directory containing all the packages + others.
+I have created a new virtualenv with
+[CODE]
+Upon activating it, I tried to install the packages according to requirements.txt from the local archive directory.
+[CODE]
+I got some output that seems to indicate that the installation is fine:
+[CODE]
+But a later check revealed that none of the packages are installed properly. I cannot import the packages, and none are found in the site-packages directory of my virtualenv. So what went wrong?
+
+Question: How do I declare custom exceptions in modern Python?
+How do I declare custom exception classes in modern Python? My primary goal is to follow whatever standard other exception classes have, so that (for instance) any extra string I include in the exception is printed out by whatever tool caught the exception.
+By "modern Python" I mean something that will run in Python 2.5 but be 'correct' for the Python 2.6 and Python 3.* way of doing things. And by "custom" I mean an [CODE] object that can include extra data about the cause of the error: a string, maybe also some other arbitrary object relevant to the exception.
+I was tripped up by the following deprecation warning in Python 2.6.2:
+[CODE]
+It seems crazy that [CODE] has a special meaning for attributes named [CODE]. I gather from PEP-352 that attribute did have a special meaning in 2.5 they're trying to deprecate away, so I guess that name (and that one alone) is now forbidden? Ugh.
+I'm also fuzzily aware that [CODE] has some magic parameter [CODE], but I've never known how to use it. Nor am I sure it's the right way to do things going forward; a lot of the discussion I found online suggested they were trying to do away with args in Python 3.
+
+Question: fatal error: Python.h: No such file or directory
+I am trying to build a shared library using a C extension file but first I have to generate the output file using the command below:
+[CODE]
+After executing the command, I get this error message:
+[CODE]
+I have tried all the suggested solutions over the internet but the problem still exists. I have no problem with [CODE]. I managed to locate the file on my machine.
+
+Question: Generate random integers between 0 and 9
+How can I generate random integers between [CODE] and [CODE] (inclusive) in Python?
+For example, [CODE], [CODE], [CODE], [CODE], [CODE], [CODE], [CODE], [CODE], [CODE], [CODE]
+
+Question: What is the meaning of single and double underscore before an object name?
+What do single and double leading underscores before an object's name represent in Python?
+
+Question: Relative imports for the billionth time
+I've been here:
+
+PEP 328 – Imports: Multi-Line and Absolute/Relative
+Modules, Packages
+Python packages: relative imports
+Python relative import example code does not work
+Relative imports in Python 2.5
+Relative imports in Python
+Python: Disabling relative import
+
+and plenty of URLs that I did not copy, some on SO, some on other sites, back when I thought I'd have the solution quickly.
+The forever-recurring question is this: how do I solve this "Attempted relative import in non-package" message?
+
+ImportError: attempted relative import with no known parent package
+
+I built an exact replica of the package on pep-0328:
+[CODE]
+The imports were done from the console.
+I did make functions named spam and eggs in their appropriate modules.  Naturally, it didn't work.  The answer is apparently in the 4th URL I listed, but it's all alumni to me. There was this response on one of the URLs I visited:
+
+Relative imports use a module's name attribute to determine that module's position in the package hierarchy. If the module's name does not contain any package information (e.g. it is set to 'main') then relative imports are resolved as if the module were a top level module, regardless of where the module is actually located on the file system.
+
+The above response looks promising, but it's all hieroglyphs to me. How do I make Python not return to me "Attempted relative import in non-package"? It has an answer that involves [CODE], supposedly.
+Why does Python give that error message? What does by "non-package" mean? Why and how do you define a 'package'?
+
+Question: How do I write JSON data to a file?
+How do I write JSON data stored in the dictionary [CODE] to a file?
+[CODE]
+This gives the error:
+
+TypeError: must be string or buffer, not dict
+
+Question: Use different Python version with virtualenv
+How do I create a virtual environment for a specified version of Python?
+
+Question: Relative imports in Python 3
+I want to import a function from another file in the same directory.
+Usually, one of the following works:
+[CODE]
+[CODE]
+...but the other one gives me one of these errors:
+[CODE]
+[CODE]
+[CODE]
+Why is this?
+
+Question: How can I remove a specific item from an array in JavaScript?
+How do I remove a specific value from an array? Something like:
+[CODE]
+Constraints: I have to use core JavaScript. Frameworks are not allowed.
+
+Question: How do I check if an element is hidden in jQuery?
+How do I toggle the visibility of an element using  [CODE], [CODE], or [CODE]?
+How do I test if an element is [CODE] or [CODE]?
+
+Question: What does "use strict" do in JavaScript, and what is the reasoning behind it?
+Recently, I ran some of my JavaScript code through Crockford's JSLint, and it gave the following error:
+
+Problem at line 1 character 1: Missing "use strict" statement.
+
+Doing some searching, I realized that some people add [CODE] into their JavaScript code. Once I added the statement, the error stopped appearing. Unfortunately, Google did not reveal much of the history behind this string statement. Certainly it must have something to do with how the JavaScript is interpreted by the browser, but I have no idea what the effect would be.
+So what is [CODE] all about, what does it imply, and is it still relevant?
+Do any of the current browsers respond to the [CODE] string or is it for future use?
+
+Question: How do I redirect to another webpage?
+How can I redirect the user from one page to another using jQuery or pure JavaScript?
+
+Question: var functionName = function() {} vs function functionName() {}
+I've recently started maintaining someone else's JavaScript code. I'm fixing bugs, adding features and also trying to tidy up the code and make it more consistent.
+The previous developer used two ways of declaring functions and I can't work out if there is a reason behind it or not.
+The two ways are:
+[CODE]
+And,
+[CODE]
+What are the reasons for using these two different methods and what are the pros and cons of each? Is there anything that can be done with one method that can't be done with the other?
+
+Question: How do JavaScript closures work?
+How would you explain JavaScript closures to someone with a knowledge of the concepts they consist of (for example functions, variables and the like), but does not understand closures themselves?
+
+I have seen the Scheme example given on Wikipedia, but unfortunately it did not help.
+
+Question: How do I remove a property from a JavaScript object?
+Given an object:
+[CODE]
+How do I remove the property [CODE] to end up with the following [CODE]?
+[CODE]
+
+Question: How to check whether a string contains a substring in JavaScript?
+Usually I would expect a [CODE] method, but there doesn't seem to be one. 
+
+What is a reasonable way to check for this?
+
+Question: How do I return the response from an asynchronous call?
+How do I return the response/result from a function [CODE] that makes an asynchronous request?
+I am trying to return the value from the callback, as well as assigning the result to a local variable inside the function and returning that one, but none of those ways actually return the response — they all return [CODE] or whatever the initial value of the variable [CODE] is.
+Example of an asynchronous function that accepts a callback (using jQuery's [CODE] function):
+[CODE]
+Example using Node.js:
+[CODE]
+Example using the [CODE] block of a promise:
+[CODE]
+
+Question: What is the difference between "let" and "var"?
+ECMAScript 6 introduced the [CODE] declaration keyword.
+I've heard that it's described as a local variable, but I'm still not quite sure how it behaves differently than the [CODE] keyword.
+What are the differences? When should [CODE] be used instead of [CODE]?
+
+Question: How do I include a JavaScript file in another JavaScript file?
+How do I include a JavaScript file inside another JavaScript file, similar to [CODE] in CSS?
+
+Question: Loop (for each) over an array in JavaScript
+How can I loop through all the entries in an array using JavaScript?
+
+Question: Which equals operator (== vs ===) should be used in JavaScript comparisons?
+I'm using JSLint to go through JavaScript, and it's returning many suggestions to replace [CODE] (two equals signs) with [CODE] (three equals signs) when doing things like comparing [CODE] inside of an [CODE] statement.
+
+Is there a performance benefit to replacing [CODE] with [CODE]? 
+
+Any performance improvement would be welcomed as many comparison operators exist.
+
+If no type conversion takes place, would there be a performance gain over [CODE]?
+
+Question: How do I replace all occurrences of a string?
+Given a string:
+[CODE]
+This seems to only remove the first occurrence of [CODE] in the string above:
+[CODE]
+How do I replace all occurrences of it?
+
+Question: How do I create a GUID / UUID?
+How do I create GUIDs (globally-unique identifiers) in JavaScript? The GUID / UUID should be at least 32 characters and should stay in the ASCII range to avoid trouble when passing them around.
+I'm not sure what routines are available on all browsers, how "random" and seeded the built-in random number generator is, etc.
+
+Question: How can I validate an email address in JavaScript?
+I'd like to check if the user input is an email address in JavaScript, before sending it to a server or attempting to send an email to it, to prevent the most basic mistyping. How could I achieve this?
+
+Question: How do I make the first letter of a string uppercase in JavaScript?
+How do I make the first character of a string uppercase if it's a letter, but not change the case of any of the other letters?
+For example:
+
+[CODE] → [CODE]
+[CODE] → [CODE]
+[CODE] → [CODE]
+
+Question: How do I check whether a checkbox is checked in jQuery?
+I need to check the [CODE] property of a checkbox and perform an action based on the checked property using jQuery.
+For example, if the [CODE] checkbox is checked, then I need to show a textbox to enter [CODE], else hide the textbox.
+But the following code returns [CODE] by default:
+
+
+[CODE]
+[CODE]
+
+
+
+How do I successfully query the [CODE] property?
+
+Question: What is the most efficient way to deep clone an object in JavaScript?
+What is the most efficient way to clone a JavaScript object? I've seen [CODE] being used, but that's non-standard and only supported by Firefox. I've done things like [CODE] but question the efficiency.  I've also seen recursive copying functions with various flaws.
+
+I'm surprised no canonical solution exists.
+
+Question: How do I check if an array includes a value in JavaScript?
+What is the most concise and efficient way to find out if a JavaScript array contains a value?
+This is the only way I know to do it:
+[CODE]
+Is there a better and more concise way to accomplish this?
+This is very closely related to Stack Overflow question Best way to find an item in a JavaScript Array? which addresses finding objects in an array using [CODE].
+
+Question: How do I get a timestamp in JavaScript?
+I want a single number that represents the current date and time, like a Unix timestamp.
+
+Question: Setting "checked" for a checkbox with jQuery
+I'd like to do something like this to tick a [CODE] using jQuery:
+
+[CODE]
+
+or
+
+[CODE]
+
+Does such a thing exist?
+
+Question: Why does Google prepend while(1); to their JSON responses?
+Why does Google prepend [CODE] to their (private) JSON responses?
+
+For example, here's a response while turning a calendar on and off in Google Calendar:
+
+[CODE]
+
+I would assume this is to prevent people from doing an [CODE] on it, but all you'd really have to do is replace the [CODE] and then you'd be set. I would assume the eval prevention is to make sure people write safe JSON parsing code.
+
+I've seen this used in a couple of other places, too, but a lot more so with Google (Mail, Calendar, Contacts, etc.) Strangely enough, Google Docs starts with [CODE] instead, and Google Contacts seems to start with [CODE].
+
+What's going on here?
+
+Question: "Thinking in AngularJS" if I have a jQuery background?
+Suppose I'm familiar with developing client-side applications in jQuery, but now I'd like to start using AngularJS. Can you describe the paradigm shift that is necessary? Here are a few questions that might help you frame an answer:
+
+
+How do I architect and design client-side web applications differently? What is the biggest difference?
+What should I stop doing/using; What should I start doing/using instead?
+Are there any server-side considerations/restrictions?
+
+
+I'm not looking for a detailed comparison between [CODE] and [CODE].
+
+Question: Which "href" value should I use for JavaScript links, "#" or "javascript:void(0)"?
+The following are two methods of building a link that has the sole purpose of running JavaScript code. Which is better, in terms of functionality, page load speed, validation purposes, etc.?
+
+
+
+[CODE]
+[CODE]
+
+
+
+
+or
+
+
+
+[CODE]
+[CODE]
+
+Question: How to insert an item into an array at a specific index?
+I am looking for a JavaScript array insert method, in the style of:
+[CODE]
+Preferably in jQuery, but any JavaScript implementation will do at this point.
+
+Question: How do I copy to the clipboard in JavaScript?
+How do I copy text to the clipboard (multi-browser)?
+Related: How does Trello access the user&#39;s clipboard?
+
+Question: How to round to at most 2 decimal places, if necessary
+I'd like to round at most two decimal places, but only if necessary.
+Input:
+[CODE]
+Output:
+[CODE]
+How can I do this in JavaScript?
+
+Question: Sort array of objects by string property value
+I have an array of JavaScript objects:
+[CODE]
+How can I sort them by the value of [CODE] in JavaScript?
+I know about [CODE], but that only seems to work on strings and numbers. Do I need to add a [CODE] method to my objects?
+
+Question: What does the !! (double exclamation mark) operator do in JavaScript?
+I saw this code:
+[CODE]
+It seems to be using [CODE] as an operator, which I don't recognize. What does it do?
+
+Question: How do I check for an empty/undefined/null string in JavaScript?
+Is there a [CODE] in JavaScript, or is it just a case of checking for [CODE]?
+
+Question: Checking if a key exists in a JavaScript object?
+How do I check if a particular key exists in a JavaScript object or array?
+
+If a key doesn't exist, and I try to access it, will it return false? Or throw an error?
+
+Question: Loop through an array in JavaScript
+In Java, you can use a [CODE] loop to traverse objects in an array as follows:
+[CODE]
+Can I do the same in JavaScript?
+
+Question: What is the JavaScript version of sleep()?
+Is there a better way to engineer a [CODE] in JavaScript than the following [CODE] function (taken from here)?
+
+[CODE]
+
+This is not a duplicate of Sleep in JavaScript - delay between actions; I want a real sleep in the middle of a function, and not a delay before a piece of code executes.
+
+Question: How do I test for an empty JavaScript object?
+After an AJAX request, sometimes my application may return an empty object, like:
+
+[CODE]
+
+How can I check whether that's the case?
+
+Question: Get the current URL with JavaScript?
+All I want is to get the website URL. Not the URL as taken from a link. On the page loading I need to be able to grab the full, current URL of the website and set it as a variable to do with as I please.
+
+Question: How do I correctly clone a JavaScript object?
+I have an object [CODE]. I'd like to copy it as object [CODE], such that changes to [CODE] do not modify [CODE]. I realized that copying objects derived from built-in JavaScript objects will result in extra, unwanted properties. This isn't a problem, since I'm copying one of my own literal-constructed objects.
+
+How do I correctly clone a JavaScript object?
+
+Question: How do I loop through or enumerate a JavaScript object?
+I have a JavaScript object like the following:
+[CODE]
+How do I loop through all of [CODE]'s elements ([CODE], [CODE], [CODE]...) and get their keys and values?
+
+Question: How can I convert a string to boolean in JavaScript?
+Can I convert a string representing a boolean value (e.g., 'true', 'false') into an intrinsic type in JavaScript?
+I have a hidden form in HTML that is updated based on a user's selection within a list. This form contains some fields which represent boolean values and are dynamically populated with an intrinsic boolean value. However, once this value is placed into the hidden input field it becomes a string.
+The only way I could find to determine the field's boolean value, once it was converted into a string, was to depend upon the literal value of its string representation.
+[CODE]
+Is there a better way to accomplish this?
+
+Question: How do I format a date in JavaScript?
+How do I format a Javascript [CODE] object as a string? (Preferable format: [CODE])
+
+Question: pretty-print JSON using JavaScript
+How can I display JSON in an easy-to-read (for human readers) format? I'm looking primarily for indentation and whitespace, with perhaps even colors / font-styles / etc.
+
+Question: How can I assign a multiline string literal to a variable?
+How do I convert this Ruby code with a multiline string into JavaScript?
+[CODE]
+
+Question: What is the difference between call and apply?
+What is the difference between using [CODE] and [CODE] to invoke a function?
+[CODE]
+[CODE] vs. [CODE]
+Are there performance differences between the two aforementioned methods? When is it best to use [CODE] over [CODE] and vice versa?
+
+Question: How can I change an element&#39;s class with JavaScript?
+How can I change the class of an HTML element in response to an [CODE] or any other events using JavaScript?
+
+Question: How can I merge properties of two JavaScript objects?
+I need to be able to merge two (very simple) JavaScript objects at runtime. For example I'd like to:
+[CODE]
+Is there a built in way to do this? I do not need recursion, and I do not need to merge functions, just methods on flat objects.
+
+Question: Why does my JavaScript code receive a "No &#39;Access-Control-Allow-Origin&#39; header is present on the requested resource" error, while Postman does not?
+Mod note: This question is about why [CODE]/[CODE]/etc. on the browser are subject to the Same Access Policy restrictions (you get errors mentioning CORB or CORS) while Postman is not. This question is not about how to fix a "No 'Access-Control-Allow-Origin'..." error. It's about why they happen.
+
+
+Please stop posting:
+
+CORS configurations for every language/framework under the sun. Instead find your relevant language/framework's question.
+3rd party services that allow a request to circumvent CORS
+Command line options for turning off CORS for various browsers
+
+
+
+I am trying to do authorization using JavaScript by connecting to the RESTful API built-in Flask. However, when I make the request, I get the following error:
+[CODE]
+I know that the API or remote resource must set the header, but why did it work when I made the request via the Chrome extension Postman?
+This is the request code:
+[CODE]
+
+Question: How can I check if an object is an array?
+I'm trying to write a function that either accepts a list of strings, or a single string. If it's a string, then I want to convert it to an array with just the one item so I can loop over it without fear of an error.
+So how do I check if the variable is an array?
+
+Question: Using async/await with a forEach loop
+Are there any issues with using [CODE]/[CODE] in a [CODE] loop? I'm trying to loop through an array of files and [CODE] on the contents of each file.
+[CODE]
+This code does work, but could something go wrong with this? I had someone tell me that you're not supposed to use [CODE]/[CODE] in a higher-order function like this, so I just wanted to ask if there was any issue with this.
+
+Question: event.preventDefault() vs. return false
+When I want to prevent other event handlers from executing after a certain event is fired, I can use one of two techniques. I'll use jQuery in the examples, but this applies to plain-JS as well:
+
+1. [CODE]
+
+[CODE]
+
+2. [CODE]
+
+[CODE]
+
+Is there any significant difference between those two methods of stopping event propagation?
+
+For me, [CODE] is simpler, shorter and probably less error prone than executing a method. With the method, you have to remember about correct casing, parenthesis, etc. 
+
+Also, I have to define the first parameter in callback to be able to call the method. Perhaps, there are some reasons why I should avoid doing it like this and use [CODE] instead? What's the better way?
+
+Question: JavaScript closure inside loops – simple practical example
+[CODE]
+
+
+
+It outputs this:
+
+My value: 3
+My value: 3
+My value: 3
+
+Whereas I'd like it to output:
+
+My value: 0
+My value: 1
+My value: 2
+
+
+The same problem occurs when the delay in running the function is caused by using event listeners:
+
+
+[CODE]
+[CODE]
+
+
+
+… or asynchronous code, e.g. using Promises:
+
+
+[CODE]
+
+
+
+It is also apparent in [CODE] and [CODE] loops:
+
+
+[CODE]
+
+
+
+What’s the solution to this basic problem?
+
+Question: Detecting an undefined object property
+How do I check if an object property in JavaScript is undefined?
+
+Question: Is it possible to apply CSS to half of a character?
+What I am looking for:
+A way to style one HALF of a character. (In this case, half the letter being transparent)
+What I have currently searched for and tried (With no luck):
+
+Methods for styling half of a character/letter
+Styling part of a character with CSS or JavaScript
+Apply CSS to 50% of a character
+
+Below is an example of what I am trying to obtain.
+
+Does a CSS or JavaScript solution exist for this, or am I going to have to resort to images? I would prefer not to go the image route as this text will end up being generated dynamically.
+
+Question: Is there an "exists" function for jQuery?
+How can I check the existence of an element in jQuery?
+
+The current code that I have is this:
+
+[CODE]
+
+Is there a more elegant way to approach this? Perhaps a plugin or a function?
+
+Question: How can I upload files asynchronously with jQuery?
+I would like to upload a file asynchronously with jQuery. 
+
+
+
+[CODE]
+[CODE]
+
+
+
+
+Instead of the file being uploaded, I am only getting the filename. What can I do to fix this problem?
+
+Question: Is there a standard function to check for null, undefined, or blank variables in JavaScript?
+Is there a universal JavaScript function that checks that a variable has a value and ensures that it's not [CODE] or [CODE]? I've got this code, but I'm not sure if it covers all cases:
+[CODE]
+
+Question: How do I pass command line arguments to a Node.js program and receive them?
+I have a web server written in Node.js and I would like to launch with a specific folder. I'm not sure how to access arguments in JavaScript. I'm running node like this:
+
+[CODE]
+
+here [CODE] is my server code. Node.js help says this is possible:
+
+[CODE]
+
+How would I access those arguments in JavaScript? Somehow I was not able to find this information on the web.
+
+Question: How to store objects in HTML5 localStorage/sessionStorage
+I'd like to store a JavaScript object in HTML5 [CODE], but my object is apparently being converted to a string.
+I can store and retrieve primitive JavaScript types and arrays using [CODE], but objects don't seem to work.  Should they?
+Here's my code:
+[CODE]
+The console output is
+[CODE]
+It looks to me like the [CODE] method is converting the input to a string before storing it.
+I see this behavior in Safari, Chrome, and Firefox, so I assume it's my misunderstanding of the HTML5 Web Storage specification, not a browser-specific bug or limitation.
+I've tried to make sense of the structured clone algorithm described in 2 Common infrastructure.  I don't fully understand what it's saying, but maybe my problem has to do with my object's properties not being enumerable (???).
+Is there an easy workaround?
+
+Update: The W3C eventually changed their minds about the structured-clone specification, and decided to change the spec to match the implementations.  See 12111 – spec for Storage object getItem(key) method does not match implementation behavior. So this question is no longer 100% valid, but the answers still may be of interest.
+
+Question: How can I check for "undefined" in JavaScript?
+What is the most appropriate way to test if a variable is undefined in JavaScript?
+I've seen several possible ways:
+[CODE]
+Or
+[CODE]
+Or
+[CODE]
+
+Question: How can I know which radio button is selected via jQuery?
+I have two radio buttons and want to post the value of the selected one.
+How can I get the value with jQuery?
+
+I can get all of them like this:
+
+[CODE]
+
+How do I know which one is selected?
+
+Question: How do I modify the URL without reloading the page?
+Is there a way I can modify the URL of the current page without reloading the page?
+I would like to access the portion before the # hash if possible.
+I only need to change the portion after the domain, so it's not like I'm violating cross-domain policies.
+[CODE]
+
+Question: Length of a JavaScript object
+I have a JavaScript object. Is there a built-in or accepted best practice way to get the length of this object?
+[CODE]
+
+Question: How do I get the current date in JavaScript?
+How do I get the current date in JavaScript?
+
+Question: How do I detect a click outside an element?
+I have some HTML menus, which I show completely when a user clicks on the head of these menus. I would like to hide these elements when the user clicks outside the menus' area.
+
+Is something like this possible with jQuery?
+
+[CODE]
+
+Question: Open a URL in a new tab (and not a new window)
+I'm trying to open a URL in a new tab, as opposed to a popup window.
+
+I've seen related questions where the responses would look something like:
+
+[CODE]
+
+But none of them worked for me, the browser still tried to open a popup window.
+
+Question: Encode URL in JavaScript
+How do you safely encode a URL using JavaScript such that it can be put into a GET string?
+
+[CODE]
+
+I assume that you need to encode the [CODE] variable on that second line?
+
+Question: Get all unique values in a JavaScript array (remove duplicates)
+I have an array of numbers that I need to make sure are unique. I found the code snippet below on the Internet, and it works great until the array has a zero in it. I found this other script here on Stack Overflow that looks almost exactly like it, but it doesn't fail.
+How can I determine where the prototype script is going wrong?
+[CODE]
+
+Question: Generate a string of random characters
+I want a string of fixed length, composed of characters picked randomly from a set of characters e.g. [CODE].
+How can I do this with JavaScript?
+
+Question: How to append something to an array?
+How do I append an object (such as a string or number) to an array in JavaScript?
+
+Question: Check if a variable is a string in JavaScript
+How can I determine whether a variable is a string or something else in JavaScript?
+
+Question: Compare two dates with JavaScript
+Can someone suggest a way to compare the values of two dates greater than, less than, and not in the past using JavaScript? The values will be coming from text boxes.
+
+Question: How to format a number with commas as thousands separators?
+I am trying to print an integer in JavaScript with commas as thousands separators. For example, I want to show the number 1234567 as "1,234,567". How would I go about doing this?
+Here is how I am doing it:
+
+
+[CODE]
+
+
+
+Is there a simpler or more elegant way to do it? It would be nice if it works with floats also, but that is not necessary. It does not need to be locale-specific to decide between periods and commas.
+
+Question: How do I refresh a page using JavaScript?
+How do I refresh a page using JavaScript?
+
+Question: Scroll to an element with jQuery
+I have this [CODE] element:
+[CODE]
+Then I have some other elements, like other  tag's & [CODE] tag's, etc...
+When the user clicks on the [CODE], the page should scroll to the page's last element, and it should do so with a nice animation (It should be a scroll to bottom and not to top).
+The last item of the page is a [CODE] button with [CODE]:
+[CODE]
+The animation should not be too fast and should be fluid.
+I am running the latest jQuery version. I prefer to not install any plugin but to use the default jQuery features to achieve this.
+
+Question: How can I determine if a variable is &#39;undefined&#39; or &#39;null&#39;?
+How do I determine if a variable is [CODE] or [CODE]?
+My code is as follows:
+[CODE]
+[CODE]
+
+But when I do this, the JavaScript interpreter halts execution.
+
+Question: Can (a== 1 && a ==2 && a==3) ever evaluate to true?
+Moderator note: Please resist the urge to edit the code or remove this notice. The pattern of whitespace may be part of the question and therefore should not be tampered with unnecessarily. If you are in the "whitespace is insignificant" camp, you should be able to accept the code as is.
+
+
+Is it ever possible that [CODE] could evaluate to [CODE] in JavaScript?
+
+This is an interview question asked by a major tech company. It happened two weeks back, but I'm still trying to find the answer. I know we never write such code in our day-to-day job, but I'm curious.
+
+Question: How can I get query string values in JavaScript?
+Is there a plugin-less way of retrieving query string values via jQuery (or without)? 
+
+If so, how? If not, is there a plugin which can do so?
+
+Question: Set a default parameter value for a JavaScript function
+I would like a JavaScript function to have optional arguments which I set a default on, which get used if the value isn't defined (and ignored if the value is passed). In Ruby you can do it like this:
+
+[CODE]
+
+Does this work in JavaScript?
+
+[CODE]
+
+Question: Adding a table row in jQuery
+I'm using jQuery to add an additional row to a table as the last row.
+I have done it this way:
+[CODE]
+Are there limitations to what you can add to a table like this (such as inputs, selects, number of rows)? Is there a different way to do it?
+
+Question: How do I chop/slice/trim off last character in string using Javascript?
+I have a string, [CODE], and I would like it to return [CODE].
+
+I have looked at [CODE], but it looks like it is only trimming whitespace and [CODE] which I don't see how this would work. Any suggestions?
+
+Question: Generate random number between two numbers in JavaScript
+Is there a way to generate a random number in a specified range with JavaScript ?
+For example: a specified range from 1 to 6 were the random number could be either 1, 2, 3, 4, 5, or 6.
+
+Question: Disable/enable an input with jQuery?
+[CODE]
+
+or 
+
+[CODE]
+
+Which is the standard way? And, conversely, how do you enable a disabled input?
+
+Question: How can I convert a string to an integer in JavaScript?
+How do I convert a string to an integer in JavaScript?
+
+Question: Validate decimal numbers in JavaScript - IsNumeric()
+What's the cleanest, most effective way to validate decimal numbers in JavaScript?
+
+Bonus points for:
+
+
+Clarity. Solution should be clean and simple.
+Cross-platform.
+
+
+Test cases:
+
+[CODE]
+
+Question: Generating random whole numbers in JavaScript in a specific range
+How can I generate random whole numbers between two specified variables in JavaScript, e.g. [CODE] and [CODE] would output any of [CODE]?
+
+Question: Get selected text from a drop-down list (select box) using jQuery
+How can I get the selected text (not the selected value) from a drop-down list in jQuery?
+
+Question: Remove duplicate values from a JavaScript array
+I have a very simple JavaScript array that may or may not contain duplicates.
+[CODE]
+I need to remove the duplicates and put the unique values in a new array.
+I could point to all the code that I've tried but I think it's useless because they don't work. I accept jQuery solutions too.
+Similar question:
+
+Get all non-unique values (i.e.: duplicate/more than one occurrence) in an array
+
+Question: How to format numbers as currency strings?
+I would like to format a price in JavaScript. I'd like a function which takes a [CODE] as an argument and returns a [CODE] formatted like this:
+[CODE]
+How can I do this?
+
+Question: .prop() vs .attr()
+So jQuery 1.6 has the new function [CODE].
+
+[CODE]
+
+or in this case do they do the same thing?
+
+And if I do have to switch to using [CODE], all the old [CODE] calls will break if i switch to 1.6?
+
+UPDATE
+
+
+
+[CODE]
+[CODE]
+
+
+
+
+(see also this fiddle: http://jsfiddle.net/maniator/JpUF2/)
+
+The console logs the [CODE] as a string, and the [CODE] as a string, but the [CODE] as a [CODE], Why? And how does that affect my coding in the future?
+
+Question: What is JSONP, and why was it created?
+I understand JSON, but not JSONP. Wikipedia's document on JSON is (was) the top search result for JSONP. It says this:
+
+
+  JSONP or "JSON with padding" is a JSON extension wherein a prefix is specified as an input argument of the call itself.
+
+
+Huh? What call? That doesn't make any sense to me. JSON is a data format. There's no call.
+
+The 2nd search result is from some guy named Remy, who writes this about JSONP:
+
+
+  JSONP is script tag injection, passing the response from the server in to a user specified function.
+
+
+I can sort of understand that, but it's still not making any sense.
+
+
+
+So what is JSONP? Why was it created (what problem does it solve)? And why would I use it? 
+
+
+
+Addendum: I've just created a new page for JSONP on Wikipedia; it now has a clear and thorough description of JSONP, based on jvenema's answer.
+
+Question: JavaScript check if variable exists (is defined/initialized)
+Which method of checking if a variable has been initialized is better/correct?
+(Assuming the variable could hold anything (string, int, object, function, etc.))
+[CODE]
+or
+[CODE]
+or
+[CODE]
+
+Question: How to create an array containing 1...N
+I'm looking for any alternatives to the below for creating a JavaScript array containing 1 through to N where N is only known at runtime.
+[CODE]
+To me it feels like there should be a way of doing this without the loop.
+
+Question: JavaScript equivalent to printf/String.Format
+I'm looking for a good JavaScript equivalent of the C/PHP [CODE] or for C#/Java programmers, [CODE] ([CODE] for .NET).
+
+My basic requirement is a thousand separator format for numbers for now, but something that handles lots of combinations (including dates) would be good.
+
+I realize Microsoft's Ajax library provides a version of [CODE], but we don't want the entire overhead of that framework.
+
+Question: Get the size of the screen, current web page and browser window
+How can I get [CODE], [CODE], [CODE], [CODE], [CODE], [CODE], [CODE], [CODE], [CODE], [CODE] which will work in all major browsers?
+
+Question: $(document).ready equivalent without jQuery
+I have a script that uses [CODE], but it doesn't use anything else from jQuery. I'd like to lighten it up by removing the jQuery dependency.
+
+How can I implement my own [CODE] functionality without using jQuery? I know that  using [CODE] will not be the same, as [CODE] fires after all images, frames, etc. have been loaded.
+
+Question: Get selected value in dropdown list using JavaScript
+How do I get the selected value from a dropdown list using JavaScript?
+
+
+[CODE]
+
+Question: How can I add new array elements at the beginning of an array in JavaScript?
+I have a need to add or prepend elements at the beginning of an array.
+For example, if my array looks like below:
+[CODE]
+And the response from my AJAX call is [CODE], I want the updated array to be like the following:
+[CODE]
+Currently I am planning to do it like this:
+[CODE]
+Is there a better way to do this? Does JavaScript have any built-in functionality that does this?
+The complexity of my method is [CODE] and it would be really interesting to see better implementations.
+
+Question: How to get the children of the $(this) selector?
+I have a layout similar to this, and would like to use a [CODE] selector to select the child [CODE] inside the [CODE] on click.
+[CODE]
+To get the [CODE], I've got this selector:
+[CODE]
+How can I get the child [CODE] using a selector?
+
+Question: How can I guarantee that my enums definition doesn&#39;t change in JavaScript?
+Would the following make the objects fulfil all characteristics that enums have in JavaScript? Something like:
+[CODE]
+Or is there some other way I can do this?
+
+Question: Iterate through object properties
+[CODE]
+
+
+
+
+How does the variable [CODE] represent the properties of the object? It's not a built-in method or property. Why does it come up with every property in the object?
+
+Question: How can I programmatically navigate using React Router?
+With React Router, I can use the [CODE] element to create links which are natively handled by React Router.
+I see internally it calls [CODE].
+I want to do navigation. Not from a link, but from a dropdown selection (as an example). How can I do this in code? What is [CODE]?
+I saw the [CODE] mixin, but can I do this without mixins?
+
+Question: What is the role of the bias in neural networks?
+I'm aware of the gradient descent and the back-propagation algorithm. What I don't get is: when is using a bias important and how do you use it?
+For example, when mapping the [CODE] function, when I use two inputs and one output, it does not give the correct weights. However, when I use three inputs (one of which is a bias), it gives the correct weights.
+
