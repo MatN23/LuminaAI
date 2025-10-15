@@ -1283,7 +1283,9 @@ def main():
             'datasets/pubmed_1.txt',
             'datasets/pubmed_2.txt',
             'datasets/pubmed_3.txt',
-            'datasets/pubmed_4.txt',    
+            'datasets/pubmed_4.txt',  
+            'datasets/openwebtext_1.txt',    
+            'datasets/ccnews_1.txt',    
         ],
 
         'base_eval_paths': [ # Only .jsonl

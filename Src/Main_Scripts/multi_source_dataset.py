@@ -45,11 +45,11 @@ MAX_FILES_PER_SOURCE = 3  # Number of files to create per data source
 MB_PER_FILE = 100.0       # Target size in MB for each file
 
 # Data sources to enable (True/False)
-ENABLE_WIKIPEDIA = True
-ENABLE_GUTENBERG = True
-ENABLE_ARXIV = True
-ENABLE_STACKOVERFLOW = True
-ENABLE_PUBMED = True
+ENABLE_WIKIPEDIA = False
+ENABLE_GUTENBERG = False
+ENABLE_ARXIV = False
+ENABLE_STACKOVERFLOW = False
+ENABLE_PUBMED = False
 ENABLE_OPENWEBTEXT = True
 ENABLE_PHIL_PAPERS = True
 ENABLE_COMMON_CRAWL_NEWS = True
@@ -64,6 +64,18 @@ ARXIV_PAPERS_PER_CATEGORY = 500
 # Stack Overflow settings
 STACKOVERFLOW_TAGS = ['python', 'javascript', 'machine-learning', 'algorithms']
 STACKOVERFLOW_MIN_SCORE = 10  # Minimum upvotes
+
+# OpenWebText settings (Reddit links)
+OPENWEBTEXT_SUBREDDITS = ['science', 'AskScience', 'technology', 'programming', 
+                          'MachineLearning', 'artificial', 'datascience', 'compsci']
+OPENWEBTEXT_POSTS_PER_SUB = 100
+
+# PhilPapers settings
+PHILPAPERS_CATEGORIES = ['philosophy-of-mind', 'philosophy-of-science', 
+                         'logic-and-philosophy-of-logic', 'epistemology', 'ethics']
+
+# Common Crawl News settings
+CC_NEWS_DOMAINS = ['bbc.com', 'reuters.com', 'apnews.com', 'npr.org', 'nature.com']
 
 # PubMed settings
 PUBMED_SEARCH_TERMS = [
@@ -997,6 +1009,344 @@ class PubMedProcessor:
         return created_files
 
 
+class OpenWebTextProcessor:
+    """
+    Process OpenWebText-style data (Reddit links that are legal/public).
+    License: Various (only public content)
+    """
+    
+    def __init__(self, subreddits: List[str]):
+        self.subreddits = subreddits
+        self.base_url = "https://www.reddit.com"
+    
+    def fetch_subreddit_posts(self, subreddit: str, limit: int = 100) -> List[dict]:
+        """Fetch top posts from a subreddit."""
+        logging.info(f"  Fetching Reddit: r/{subreddit}")
+        
+        url = f"{self.base_url}/r/{subreddit}/top.json"
+        params = {'limit': limit, 't': 'year'}  # Top posts from the past year
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        
+        try:
+            response = requests.get(url, params=params, headers=headers, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            
+            posts = []
+            for item in data.get('data', {}).get('children', []):
+                post = item.get('data', {})
+                title = post.get('title', '')
+                selftext = post.get('selftext', '')
+                
+                # Get both title and text content
+                if title:
+                    # Some posts have external links, others have self text
+                    if selftext and len(selftext) > 100:
+                        posts.append({
+                            'title': title,
+                            'text': selftext
+                        })
+                    elif len(title) > 50:  # At least get the title if substantial
+                        posts.append({
+                            'title': title,
+                            'text': title  # Use title as content if no selftext
+                        })
+            
+            logging.info(f"    Found {len(posts)} posts with content")
+            return posts
+            
+        except Exception as e:
+            logging.warning(f"    Reddit fetch failed: {e}")
+            return []
+    
+    def create_dataset_files(self, output_dir: str, num_files: int, mb_per_file: float, posts_per_sub: int = 100):
+        """Create OpenWebText dataset files."""
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        target_bytes = int(mb_per_file * 1024 * 1024)
+        
+        logging.info(f"\n{'='*60}")
+        logging.info(f"Creating {num_files} OpenWebText dataset file(s)")
+        logging.info(f"Target size per file: {mb_per_file} MB")
+        logging.info(f"{'='*60}")
+        
+        # Collect posts from all subreddits
+        all_posts = []
+        for subreddit in self.subreddits:
+            posts = self.fetch_subreddit_posts(subreddit, posts_per_sub)
+            all_posts.extend(posts)
+            time.sleep(2)  # Rate limiting for Reddit
+        
+        if not all_posts:
+            logging.warning("No Reddit posts found!")
+            return []
+        
+        logging.info(f"Total posts collected: {len(all_posts)}")
+        
+        created_files = []
+        
+        # Distribute posts across files
+        posts_per_file = max(len(all_posts) // num_files, 1)
+        
+        for file_idx in range(num_files):
+            output_path = output_dir / f"openwebtext_{file_idx+1}.txt"
+            
+            logging.info(f"\n🌐 Creating file {file_idx+1}/{num_files}: {output_path.name}")
+            
+            start_idx = file_idx * posts_per_file
+            end_idx = min(start_idx + posts_per_file, len(all_posts))
+            file_posts = all_posts[start_idx:end_idx]
+            
+            if not file_posts:
+                break
+            
+            current_bytes = 0
+            posts_written = 0
+            
+            with open(output_path, 'w', encoding='utf-8') as f:
+                for post in file_posts:
+                    post_text = f"{post['title']}\n{post['text']}\n\n"
+                    f.write(post_text)
+                    
+                    current_bytes += len(post_text.encode('utf-8'))
+                    posts_written += 1
+            
+            final_mb = current_bytes / (1024 * 1024)
+            logging.info(f"  ✅ File {file_idx+1} complete: {final_mb:.1f} MB, {posts_written} posts")
+            created_files.append((str(output_path), final_mb))
+            
+            if final_mb < mb_per_file * 0.1:  # If file is too small, stop making more
+                break
+        
+        return created_files
+
+
+class PhilPapersProcessor:
+    """
+    Process PhilPapers philosophical papers (Open Access).
+    Uses OpenAlex API which indexes PhilPapers content.
+    License: Various open access
+    """
+    
+    def __init__(self, categories: List[str]):
+        self.categories = categories
+        self.base_url = "https://api.openalex.org/works"
+    
+    def fetch_papers(self, query: str, limit: int = 100) -> List[dict]:
+        """Fetch philosophy papers using OpenAlex API."""
+        logging.info(f"  Fetching philosophy papers: {query}")
+        
+        params = {
+            'filter': f'concepts.id:C138885662,default.search:{query}',  # Philosophy concept
+            'per-page': limit,
+            'mailto': 'research@example.com'  # Polite API usage
+        }
+        
+        try:
+            response = requests.get(self.base_url, params=params, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            
+            papers = []
+            for work in data.get('results', []):
+                title = work.get('title', '')
+                abstract = work.get('abstract', '')
+                
+                if title and abstract:
+                    papers.append({
+                        'title': title,
+                        'abstract': abstract
+                    })
+            
+            logging.info(f"    Found {len(papers)} papers")
+            return papers
+            
+        except Exception as e:
+            logging.warning(f"    Philosophy papers fetch failed: {e}")
+            return []
+    
+    def create_dataset_files(self, output_dir: str, num_files: int, mb_per_file: float):
+        """Create PhilPapers dataset files."""
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        target_bytes = int(mb_per_file * 1024 * 1024)
+        
+        logging.info(f"\n{'='*60}")
+        logging.info(f"Creating {num_files} PhilPapers dataset file(s)")
+        logging.info(f"Target size per file: {mb_per_file} MB")
+        logging.info(f"{'='*60}")
+        
+        all_papers = []
+        for category in self.categories:
+            papers = self.fetch_papers(category, 100)
+            all_papers.extend(papers)
+            time.sleep(1)
+        
+        if not all_papers:
+            logging.warning("No philosophy papers found!")
+            return []
+        
+        logging.info(f"Total papers collected: {len(all_papers)}")
+        
+        created_files = []
+        papers_per_file = max(len(all_papers) // num_files, 1)
+        
+        for file_idx in range(num_files):
+            output_path = output_dir / f"philpapers_{file_idx+1}.txt"
+            
+            logging.info(f"\n🧠 Creating file {file_idx+1}/{num_files}: {output_path.name}")
+            
+            start_idx = file_idx * papers_per_file
+            end_idx = min(start_idx + papers_per_file, len(all_papers))
+            file_papers = all_papers[start_idx:end_idx]
+            
+            if not file_papers:
+                break
+            
+            current_bytes = 0
+            papers_written = 0
+            
+            with open(output_path, 'w', encoding='utf-8') as f:
+                for paper in file_papers:
+                    paper_text = f"{paper['title']}\n{paper['abstract']}\n\n"
+                    f.write(paper_text)
+                    
+                    current_bytes += len(paper_text.encode('utf-8'))
+                    papers_written += 1
+            
+            final_mb = current_bytes / (1024 * 1024)
+            logging.info(f"  ✅ File {file_idx+1} complete: {final_mb:.1f} MB, {papers_written} papers")
+            created_files.append((str(output_path), final_mb))
+            
+            if final_mb < mb_per_file * 0.1:
+                break
+        
+        return created_files
+
+
+class CommonCrawlNewsProcessor:
+    """
+    Process news articles using NewsAPI (free tier available).
+    License: Public news content
+    """
+    
+    def __init__(self, domains: List[str]):
+        self.domains = domains
+        self.base_url = "https://newsapi.org/v2/everything"
+        # Note: Users should get their own free API key from newsapi.org
+        self.api_key = None  # Set to None for now
+    
+    def fetch_news_articles(self, domain: str, limit: int = 100) -> List[dict]:
+        """Fetch news articles from a domain."""
+        logging.info(f"  Fetching news from: {domain}")
+        
+        # Try without API key first (limited access)
+        try:
+            # Alternative: Use RSS feeds which don't require API keys
+            rss_urls = {
+                'bbc.com': 'http://feeds.bbci.co.uk/news/rss.xml',
+                'reuters.com': 'https://www.reutersagency.com/feed/',
+                'npr.org': 'https://feeds.npr.org/1001/rss.xml',
+                'nature.com': 'https://www.nature.com/nature.rss'
+            }
+            
+            if domain in rss_urls:
+                rss_url = rss_urls[domain]
+                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+                response = requests.get(rss_url, headers=headers, timeout=30)
+                response.raise_for_status()
+                
+                # Parse RSS XML
+                root = ET.fromstring(response.content)
+                articles = []
+                
+                for item in root.findall('.//item')[:limit]:
+                    title_elem = item.find('title')
+                    desc_elem = item.find('description')
+                    
+                    if title_elem is not None and desc_elem is not None:
+                        title = title_elem.text or ''
+                        desc = desc_elem.text or ''
+                        
+                        # Clean HTML from description
+                        desc = re.sub(r'<[^>]+>', '', desc)
+                        
+                        if title and desc:
+                            articles.append({
+                                'title': title,
+                                'text': desc
+                            })
+                
+                logging.info(f"    Found {len(articles)} articles from RSS")
+                return articles
+                
+        except Exception as e:
+            logging.warning(f"    News fetch failed for {domain}: {e}")
+        
+        return []
+    
+    def create_dataset_files(self, output_dir: str, num_files: int, mb_per_file: float):
+        """Create news dataset files."""
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        target_bytes = int(mb_per_file * 1024 * 1024)
+        
+        logging.info(f"\n{'='*60}")
+        logging.info(f"Creating {num_files} News dataset file(s)")
+        logging.info(f"Target size per file: {mb_per_file} MB")
+        logging.info(f"{'='*60}")
+        
+        all_articles = []
+        for domain in self.domains:
+            articles = self.fetch_news_articles(domain, 100)
+            all_articles.extend(articles)
+            time.sleep(2)  # Respectful rate limiting
+        
+        if not all_articles:
+            logging.warning("No news articles found!")
+            return []
+        
+        logging.info(f"Total articles collected: {len(all_articles)}")
+        
+        created_files = []
+        articles_per_file = max(len(all_articles) // num_files, 1)
+        
+        for file_idx in range(num_files):
+            output_path = output_dir / f"ccnews_{file_idx+1}.txt"
+            
+            logging.info(f"\n📰 Creating file {file_idx+1}/{num_files}: {output_path.name}")
+            
+            start_idx = file_idx * articles_per_file
+            end_idx = min(start_idx + articles_per_file, len(all_articles))
+            file_articles = all_articles[start_idx:end_idx]
+            
+            if not file_articles:
+                break
+            
+            current_bytes = 0
+            articles_written = 0
+            
+            with open(output_path, 'w', encoding='utf-8') as f:
+                for article in file_articles:
+                    article_text = f"{article['title']}\n{article['text']}\n\n"
+                    f.write(article_text)
+                    
+                    current_bytes += len(article_text.encode('utf-8'))
+                    articles_written += 1
+            
+            final_mb = current_bytes / (1024 * 1024)
+            logging.info(f"  ✅ File {file_idx+1} complete: {final_mb:.1f} MB, {articles_written} articles")
+            created_files.append((str(output_path), final_mb))
+            
+            if final_mb < mb_per_file * 0.1:
+                break
+        
+        return created_files
+
+
 def main():
     """Main execution function."""
     
@@ -1017,6 +1367,12 @@ def main():
         print(f"  ✅ Stack Overflow")
     if ENABLE_PUBMED:
         print(f"  ✅ PubMed")
+    if ENABLE_OPENWEBTEXT:
+        print(f"  ✅ OpenWebText (Reddit)")
+    if ENABLE_PHIL_PAPERS:
+        print(f"  ✅ PhilPapers")
+    if ENABLE_COMMON_CRAWL_NEWS:
+        print(f"  ✅ Common Crawl News")
     print("="*60)
     
     output_dir = Path(OUTPUT_DIR)
@@ -1101,6 +1457,49 @@ def main():
             total_mb += sum(mb for _, mb in files)
         except Exception as e:
             logging.error(f"PubMed processing failed: {e}")
+    
+    # Process OpenWebText
+    if ENABLE_OPENWEBTEXT:
+        try:
+            openwebtext_processor = OpenWebTextProcessor(OPENWEBTEXT_SUBREDDITS)
+            files = openwebtext_processor.create_dataset_files(
+                OUTPUT_DIR,
+                MAX_FILES_PER_SOURCE,
+                MB_PER_FILE,
+                OPENWEBTEXT_POSTS_PER_SUB
+            )
+            all_created_files.extend(files)
+            total_mb += sum(mb for _, mb in files)
+        except Exception as e:
+            logging.error(f"OpenWebText processing failed: {e}")
+    
+    # Process PhilPapers
+    if ENABLE_PHIL_PAPERS:
+        try:
+            philpapers_processor = PhilPapersProcessor(PHILPAPERS_CATEGORIES)
+            files = philpapers_processor.create_dataset_files(
+                OUTPUT_DIR,
+                MAX_FILES_PER_SOURCE,
+                MB_PER_FILE
+            )
+            all_created_files.extend(files)
+            total_mb += sum(mb for _, mb in files)
+        except Exception as e:
+            logging.error(f"PhilPapers processing failed: {e}")
+    
+    # Process Common Crawl News
+    if ENABLE_COMMON_CRAWL_NEWS:
+        try:
+            ccnews_processor = CommonCrawlNewsProcessor(CC_NEWS_DOMAINS)
+            files = ccnews_processor.create_dataset_files(
+                OUTPUT_DIR,
+                MAX_FILES_PER_SOURCE,
+                MB_PER_FILE
+            )
+            all_created_files.extend(files)
+            total_mb += sum(mb for _, mb in files)
+        except Exception as e:
+            logging.error(f"Common Crawl News processing failed: {e}")
     
     # Print summary
     print(f"\n{'='*60}")
