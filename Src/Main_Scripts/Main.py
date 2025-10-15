@@ -179,7 +179,7 @@ def validate_data_paths(data_params: dict) -> bool:
                 size = path.stat().st_size / (1024*1024)
                 print(f"  ✅ [{i}] {path_str} ({size:.2f} MB)")
             else:
-                print(f"  ⚠️  [{i}] {path_str} - File not found (will use training data)")
+                print(f"  ⚠️ [{i}] {path_str} - File not found (will use training data)")
     
     # Summary
     print("\n" + "="*80)
@@ -614,7 +614,7 @@ def print_system_diagnostics():
                 print(f"  Note: MPS uses unified memory (shared with system)")
                 recommended_mem = 16.0  # GB
                 if total_mem < recommended_mem:
-                    print(f"  ⚠️  Warning: {recommended_mem:.0f}GB+ recommended for MPS training")
+                    print(f"  ⚠️ Warning: {recommended_mem:.0f}GB+ recommended for MPS training")
         
         if system_info.get('cpu_count'):
             print(f"  CPU Cores: {system_info.get('cpu_count', 0)}")
@@ -649,9 +649,9 @@ def print_system_diagnostics():
                 if "MPS" in issue or "Apple Silicon" in issue:
                     symbol = "ℹ️ "
                 elif "insufficient" in issue.lower() or "low" in issue.lower():
-                    symbol = "⚠️  "
+                    symbol = "⚠️ "
                 elif "slow" in issue.lower() or "not available" in issue.lower():
-                    symbol = "⚠️  "
+                    symbol = "⚠️ "
                 else:
                     symbol = "   "
                 print(f"    {symbol}{i}. {issue}")
@@ -760,16 +760,16 @@ def print_system_diagnostics():
             elif total_mem >= 16:
                 print("  ✓ Good memory (16GB+) for MPS training")
             elif total_mem >= 8:
-                print("  ⚠️  Limited memory (8GB) - use small models only")
+                print("  ⚠️ Limited memory (8GB) - use small models only")
             else:
-                print("  ⚠️  Insufficient memory (<8GB) - not recommended")
+                print("  ⚠️ Insufficient memory (<8GB) - not recommended")
         elif system_info.get('cuda_available'):
             gpu_mem = system_info.get('gpu_memory_gb', 0)
             sys_mem = system_info.get('system_memory_gb', 0)
             print(f"  GPU Memory: {gpu_mem:.1f}GB")
             print(f"  System Memory: {sys_mem:.1f}GB")
             if sys_mem < 16:
-                print("  ⚠️  Consider 16GB+ system RAM for optimal performance")
+                print("  ⚠️ Consider 16GB+ system RAM for optimal performance")
         
     else:
         print("  Utils not available - showing basic diagnostics only")
@@ -967,7 +967,7 @@ def estimate_and_display_training_time(config, dataset_size: int):
         print(f"    Memory Utilization: {estimates['memory_utilization']:.1%}")
         
         if estimates.get('memory_warning'):
-            print(f"    ⚠️  WARNING: High memory utilization expected!")
+            print(f"    ⚠️ WARNING: High memory utilization expected!")
             print(f"       Consider reducing batch size or enabling gradient checkpointing")
         else:
             print(f"    ✓ Memory utilization within safe limits")
@@ -1134,12 +1134,13 @@ def save_experiment_metadata(experiment_dir: Path, config, model, datasets_info)
             'gradient_accumulation': config.gradient_accumulation_steps,
         },
         'model_config': {
+            'vocab_size': config.vocab_size,
             'hidden_size': config.hidden_size,
             'num_layers': config.num_layers,
             'num_heads': config.num_heads,
+            'num_kv_heads': config.num_kv_heads,
             'seq_length': config.seq_length,
-            'use_moe': config.use_moe,
-            'num_experts': config.num_experts if config.use_moe else None,
+            'intermediate_size': config.intermediate_size,
         }
     }
     
@@ -1238,6 +1239,10 @@ def main():
     
     # Training mode selection
     use_adaptive_training = TRAINING_INFRASTRUCTURE_AVAILABLE  # Orchestrator with AI-driven optimization
+
+    # CHECKPOINT RESUMPTION CONFIGURATION
+    continue_training_from_checkpoint = True  # Set to True to resume from checkpoint
+    checkpoint_path = "checkpoints/deepspeed_epoch_1"  # Path to checkpoint file or directory
 
     # Training parameters
     training_params = {
@@ -1376,24 +1381,28 @@ def main():
     # =================================================
     # END CONFIGURATION SECTION
 
+    # MPS Compatibility Check
     if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
         print_banner("MPS COMPATIBILITY CHECK")
-        is_compatible, issues = validate_mps_compatibility(config)
+        
+        # Create a temporary config for validation
+        temp_config_dict = {**training_params, **deepspeed_params}
+        temp_config = type('obj', (object,), temp_config_dict)
+        
+        is_compatible, issues = validate_mps_compatibility(temp_config)
         
         if not is_compatible:
             print("MPS Compatibility Issues Detected:")
             for i, issue in enumerate(issues, 1):
                 print(f"  {i}. {issue}")
             
-            print("\nApplying automatic fixes...")
-            config.apply_device_optimizations('mps')
-            
-            # Re-validate
-            is_compatible, remaining_issues = validate_mps_compatibility(config)
-            if remaining_issues:
-                print("\nRemaining issues after auto-fix:")
-                for issue in remaining_issues:
-                    print(f"  ⚠️  {issue}")
+            print("\n⚠️ Please fix the configuration issues listed above.")
+            print("Common fixes for MPS:")
+            print("  - Set use_deepspeed = False")
+            print("  - Set use_flash_attention = False")
+            print("  - Set precision = 'fp16' or 'fp32'")
+            print("  - Set compile = False")
+            return 1
         else:
             print("✓ Configuration is MPS compatible")
     
@@ -1422,11 +1431,12 @@ def main():
     print(f"  CUDA: {'Available' if torch.cuda.is_available() else 'Not Available'}")
     if torch.cuda.is_available():
         print(f"  GPU Count: {torch.cuda.device_count()}")
+    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        print(f"  MPS (Apple Silicon): Available")
     print("="*80)
     
     try:
         # Step 1: System diagnostics
-        print_banner("STEP 1: SYSTEM DIAGNOSTICS")
         print_system_diagnostics()
         
         # Step 2: Create base configuration
@@ -1439,8 +1449,6 @@ def main():
         else:
             raise ValueError(f"Unknown config preset: {config_choice}")
 
-        # After: config = getattr(ConfigPresets, config_choice)()
-        
         # FORCE REMOVE ANY LIMITS
         config.limit_train_batches = None
         config.max_train_steps = None  
@@ -1476,7 +1484,9 @@ def main():
         
         # Step 3: Validate precision support
         print_banner("STEP 3: VALIDATING PRECISION SUPPORT")
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        device = torch.device('cuda' if torch.cuda.is_available() 
+                            else 'mps' if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available()
+                            else 'cpu')
         training_precision = training_params.get('precision', 'fp32')
         inference_precision = training_params.get('inference_precision', 'fp16')
         
@@ -1492,40 +1502,40 @@ def main():
             print(f"\nTraining cannot continue with unsupported precision.")
             return 1
         else:
-            print(f"Training precision validated successfully")
+            print(f"✓ Training precision validated successfully")
         
         # Validate inference precision
         is_supported, error_msg = validate_precision_support(inference_precision, device)
         if not is_supported:
-            print(f"\nWARNING: Inference precision not supported")
+            print(f"\n⚠️ WARNING: Inference precision not supported")
             print(f"  {error_msg}")
             print(f"  Using training precision for inference instead")
             config.inference_precision = training_precision
         else:
-            print(f"Inference precision validated successfully")
+            print(f"✓ Inference precision validated successfully")
         
         # Step 4: Validate configuration
         print_banner("STEP 4: VALIDATING CONFIGURATION")
         try:
             config.validate()
-            print("Configuration validation passed")
+            print("✓ Configuration validation passed")
             print(f"  Batch size: {config.batch_size}")
             print(f"  Sequence length: {config.seq_length}")
             print(f"  Learning rate: {config.learning_rate}")
             print(f"  Epochs: {config.num_epochs}")
         except Exception as e:
-            print(f"Configuration validation failed: {e}")
+            print(f"❌ Configuration validation failed: {e}")
             return 1
         
         # Step 5: Initialize tokenizer
         print_banner("STEP 5: INITIALIZING TOKENIZER")
         tokenizer = ConversationTokenizer()
         config.vocab_size = tokenizer.vocab_size
-        print(f"Tokenizer initialized successfully")
+        print(f"✓ Tokenizer initialized successfully")
         print(f"  Vocabulary size: {config.vocab_size:,}")
         print(f"  Special tokens: {len(tokenizer.special_tokens) if hasattr(tokenizer, 'special_tokens') else 'N/A'}")
         
-        # Step 6: Data preparation and validation (ADVANCED)
+        # Step 6: Data preparation and validation
         datasets_info = None
         if advanced_features.get('enable_data_validation'):
             datasets_info = prepare_and_validate_data(config, tokenizer)
@@ -1533,17 +1543,12 @@ def main():
             print_banner("STEP 6: DATA PREPARATION (BASIC)")
             print("Skipping advanced data validation")
         
-        # Complete replacement for Step 7 in Main.py (around line 1270-1350)
-        # This handles both single and multiple dataset files correctly
-
         # Step 7: Setup datasets
         print_banner("STEP 7: SETTING UP DATASETS")
         
-        # Use the HybridDatasetManager from dataset.py
         from core.dataset import HybridDatasetManager, setup_datasets
 
-        # First, transfer data_params to config attributes
-        # This ensures the HybridDatasetManager can read them
+        # Transfer data_params to config attributes
         config.base_training_paths = data_params.get('base_training_paths', [])
         config.base_eval_paths = data_params.get('base_eval_paths', [])
         config.finetuning_paths = data_params.get('finetuning_paths', [])
@@ -1551,8 +1556,6 @@ def main():
         config.training_mode = data_params.get('training_mode', 'finetuning_only')
         config.data_cache_dir = data_params.get('data_cache_dir', 'data/cache')
         config.streaming_threshold_gb = data_params.get('streaming_threshold_gb', 10.0)
-
-        # Additional config settings
         config.base_finetuning_ratio = data_params.get('base_finetuning_ratio', 0.5)
         config.max_conversations_per_dataset = data_params.get('max_conversations_per_dataset', None)
 
@@ -1560,7 +1563,6 @@ def main():
         print(f"Fine-tuning paths: {config.finetuning_paths}")
         print(f"Fine-tuning eval paths: {config.finetuning_eval_paths}")
 
-        # Use the setup_datasets function which handles everything
         print("\nSetting up datasets using HybridDatasetManager...")
         try:
             train_dataset, eval_dataset = setup_datasets(config, tokenizer)
@@ -1573,11 +1575,10 @@ def main():
                 print(f"  Using training data for evaluation")
 
         except Exception as e:
-            print(f"\n✗ Dataset loading failed: {e}")
+            print(f"\n❌ Dataset loading failed: {e}")
             import traceback
             traceback.print_exc()
 
-            # Provide helpful error messages
             print("\n" + "="*80)
             print("TROUBLESHOOTING DATASET ERROR")
             print("="*80)
@@ -1585,20 +1586,19 @@ def main():
             print("1. All file paths in finetuning_paths exist:")
             for i, path in enumerate(config.finetuning_paths, 1):
                 exists = Path(path).exists()
-                status = "✓" if exists else "✗"
+                status = "✓" if exists else "❌"
                 print(f"   {status} [{i}] {path}")
 
             print("\n2. Files are valid JSONL format")
             print("3. Directory permissions allow reading")
 
-        # Try to give specific advice based on the error
             if "IsADirectoryError" in str(e):
-                print("\n⚠️  ERROR: A directory path was passed instead of a file path")
+                print("\n⚠️ ERROR: A directory path was passed instead of a file path")
                 print("   Check that all paths in finetuning_paths point to actual files, not directories")
 
             sys.exit(1)
 
-        # Display dataset statistics if available
+        # Display dataset statistics
         print("\n" + "="*80)
         print("DATASET & TRAINING CALCULATION VERIFICATION")
         print("="*80)
@@ -1612,11 +1612,10 @@ def main():
         print(f"Total optimizer steps for training: {(len(train_dataset) / (config.batch_size * config.gradient_accumulation_steps)) * config.num_epochs:.0f}")
         print("="*80 + "\n")
         
-        # Step 8: Estimate training time (ADVANCED)
+        # Step 8: Estimate training time
         print_banner("STEP 8: ESTIMATE TRAINING TIME")
         if advanced_features.get('estimate_training_time'):
             estimate_and_display_training_time(config, len(train_dataset))
-        
         
         # Step 9: Initialize model
         print_banner("STEP 9: INITIALIZING MODEL")
@@ -1629,7 +1628,7 @@ def main():
         total_params = sum(p.numel() for p in model.parameters())
         trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         
-        print(f"\nModel Statistics:")
+        print(f"\n✓ Model Statistics:")
         print(f"  Architecture: DeepSeek Transformer")
         print(f"  Total Parameters: {total_params:,}")
         print(f"  Trainable Parameters: {trainable_params:,}")
@@ -1662,14 +1661,14 @@ def main():
             
             try:
                 orchestrator = AdaptiveTrainingOrchestrator(config)
-                print("\nOrchestrator initialized successfully")
+                print("\n✓ Orchestrator initialized successfully")
             except Exception as e:
-                print(f"\nERROR: Failed to initialize orchestrator: {e}")
+                print(f"\n❌ ERROR: Failed to initialize orchestrator: {e}")
                 traceback.print_exc()
                 return 1
             
         else:
-            print("ERROR: Advanced training infrastructure required but not available")
+            print("❌ ERROR: Advanced training infrastructure required but not available")
             print("Please ensure the following modules are available:")
             print("  - training.orchestrator")
             print("  - training.trainer")
@@ -1679,7 +1678,7 @@ def main():
         # Step 11: Setup signal handlers
         print_banner("STEP 11: SETTING UP SIGNAL HANDLERS")
         setup_signal_handlers(orchestrator)
-        print("Signal handlers configured for graceful shutdown")
+        print("✓ Signal handlers configured for graceful shutdown")
         print("  SIGINT (Ctrl+C): Save state and exit")
         print("  SIGTERM: Save state and exit")
         
@@ -1776,14 +1775,14 @@ def main():
         print(f"  Meta-Learning Runs: {status.get('meta_learning_runs', 'N/A')}")
         print(f"  Checkpoints Saved: {status.get('checkpoints_saved', 'N/A')}")
         
-        # Step 16: Generate final reports (ADVANCED)
+        # Step 16: Generate final reports
         if advanced_features.get('generate_training_reports') and UTILS_AVAILABLE:
             print_banner("STEP 16: GENERATING TRAINING REPORTS")
             try:
                 create_training_report(str(experiment_dir))
-                print(f"Training report generated: {experiment_dir}/training_report.html")
+                print(f"✓ Training report generated: {experiment_dir}/training_report.html")
             except Exception as e:
-                print(f"Warning: Could not generate training report: {e}")
+                print(f"⚠️ Warning: Could not generate training report: {e}")
         
         # Step 17: Save final summary
         print_section("Saving Final Summary")
@@ -1822,7 +1821,7 @@ def main():
         summary_path = experiment_dir / "training_summary.json"
         with open(summary_path, 'w') as f:
             json.dump(summary, f, indent=2, default=str)
-        print(f"Training summary saved: {summary_path}")
+        print(f"✓ Training summary saved: {summary_path}")
         
         # Final success message
         print_banner("ALL OPERATIONS COMPLETED SUCCESSFULLY")
@@ -1843,9 +1842,9 @@ def main():
         if 'orchestrator' in locals() and orchestrator:
             try:
                 orchestrator._save_meta_learning_state()
-                print("Meta-learning state saved successfully")
+                print("✓ Meta-learning state saved successfully")
             except Exception as e:
-                print(f"Error saving state: {e}")
+                print(f"❌ Error saving state: {e}")
         
         print("Graceful shutdown complete")
         return 0
@@ -1871,13 +1870,13 @@ def main():
             try:
                 print("Cleaning up orchestrator...")
                 orchestrator.cleanup()
-                print("Orchestrator cleanup complete")
+                print("✓ Orchestrator cleanup complete")
             except Exception as e:
-                print(f"Orchestrator cleanup error: {e}")
+                print(f"❌ Orchestrator cleanup error: {e}")
         
         # Clear GPU memory
         if torch.cuda.is_available():
-            print("Clearing GPU memory cache...")
+            print("Clearing CUDA memory cache...")
             torch.cuda.empty_cache()
             try:
                 memory_allocated = torch.cuda.memory_allocated() / 1e9
@@ -1886,6 +1885,9 @@ def main():
                 print(f"  GPU Memory Reserved: {memory_reserved:.2f} GB")
             except:
                 pass
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            print("Clearing MPS memory cache...")
+            torch.mps.empty_cache()
         
         # Run garbage collection
         print("Running garbage collection...")
@@ -1900,7 +1902,7 @@ def main():
             except:
                 pass
         
-        print("Cleanup complete")
+        print("✓ Cleanup complete")
         print("="*80)
 
 
