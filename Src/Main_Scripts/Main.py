@@ -1280,6 +1280,10 @@ def main():
             'datasets/gutenberg_1.txt',
             'datasets/arxiv_1.txt',
             'datasets/arxiv_2.txt',
+            'datasets/pubmed_1.txt',
+            'datasets/pubmed_2.txt',
+            'datasets/pubmed_3.txt',
+            'datasets/pubmed_4.txt',    
         ],
 
         'base_eval_paths': [ # Only .jsonl

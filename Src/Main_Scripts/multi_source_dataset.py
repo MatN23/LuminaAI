@@ -1,5 +1,3 @@
-# Copyright (c) 2025 MatN23. All rights reserved.
-# Licensed under the Custom License below.
 """
 Download and process LEGAL data sources for base training.
 
@@ -43,14 +41,18 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 # Output settings
 OUTPUT_DIR = 'datasets'
-MAX_FILES_PER_SOURCE = 2  # Number of files to create per data source
-MB_PER_FILE = 90.0       # Target size in MB for each file
+MAX_FILES_PER_SOURCE = 3  # Number of files to create per data source
+MB_PER_FILE = 100.0       # Target size in MB for each file
 
 # Data sources to enable (True/False)
-ENABLE_WIKIPEDIA = False
-ENABLE_GUTENBERG = False
+ENABLE_WIKIPEDIA = True
+ENABLE_GUTENBERG = True
 ENABLE_ARXIV = True
-ENABLE_STACKOVERFLOW = False
+ENABLE_STACKOVERFLOW = True
+ENABLE_PUBMED = True
+ENABLE_OPENWEBTEXT = True
+ENABLE_PHIL_PAPERS = True
+ENABLE_COMMON_CRAWL_NEWS = True
 
 # Wikipedia settings
 WIKI_LANGUAGE = 'simplewiki'  # 'simplewiki' (smaller) or 'enwiki' (full English)
@@ -62,6 +64,200 @@ ARXIV_PAPERS_PER_CATEGORY = 500
 # Stack Overflow settings
 STACKOVERFLOW_TAGS = ['python', 'javascript', 'machine-learning', 'algorithms']
 STACKOVERFLOW_MIN_SCORE = 10  # Minimum upvotes
+
+# PubMed settings
+PUBMED_SEARCH_TERMS = [
+    # ARTIFICIAL INTELLIGENCE / CS
+    "machine learning",
+    "artificial intelligence",
+    "deep learning",
+    "neural networks",
+    "natural language processing",
+    "computer vision",
+    "reinforcement learning",
+    "explainable AI",
+    "AI ethics",
+    "bioinformatics",
+    "computational biology",
+    "data mining",
+    "big data",
+    "predictive modeling",
+
+    # MEDICINE (BROAD)
+    "cancer",
+    "cardiology",
+    "neurology",
+    "psychiatry",
+    "immunology",
+    "endocrinology",
+    "genetics",
+    "epidemiology",
+    "public health",
+    "pediatrics",
+    "geriatrics",
+    "radiology",
+    "dermatology",
+    "surgery",
+    "internal medicine",
+
+    # MENTAL HEALTH
+    "depression",
+    "anxiety",
+    "bipolar disorder",
+    "schizophrenia",
+    "autism spectrum disorder",
+    "ADHD",
+    "PTSD",
+    "suicide prevention",
+    "cognitive behavioral therapy",
+    "mental health treatment",
+    "substance abuse",
+    "addiction medicine",
+
+    # NEUROSCIENCE
+    "brain imaging",
+    "EEG",
+    "fMRI",
+    "neuronal networks",
+    "synaptic plasticity",
+    "neurodegenerative diseases",
+    "Alzheimer's disease",
+    "Parkinson's disease",
+    "multiple sclerosis",
+    "spinal cord injury",
+    "neuroinflammation",
+    "neuropharmacology",
+
+    # GENETICS / MOLECULAR BIOLOGY
+    "DNA sequencing",
+    "RNA sequencing",
+    "gene expression",
+    "CRISPR",
+    "genome editing",
+    "gene therapy",
+    "proteomics",
+    "metabolomics",
+    "epigenetics",
+    "genome-wide association study",
+    "molecular diagnostics",
+
+    # PUBLIC HEALTH / EPIDEMIOLOGY
+    "infectious disease",
+    "pandemic",
+    "COVID-19",
+    "vaccination",
+    "disease prevention",
+    "health policy",
+    "health disparities",
+    "global health",
+    "healthcare access",
+    "environmental health",
+    "nutrition",
+    "obesity",
+
+    # PHARMACOLOGY / DRUGS
+    "drug discovery",
+    "pharmacokinetics",
+    "pharmacodynamics",
+    "clinical trials",
+    "drug side effects",
+    "antibiotic resistance",
+    "chemotherapy",
+    "analgesics",
+    "opioids",
+    "vaccine development",
+
+    # BIOTECH / ENGINEERING
+    "medical devices",
+    "biomedical engineering",
+    "prosthetics",
+    "wearable technology",
+    "telemedicine",
+    "robotic surgery",
+    "nanomedicine",
+    "tissue engineering",
+    "regenerative medicine",
+    "3D bioprinting",
+
+    # STATISTICS / MATH / COMPUTATION
+    "statistical analysis",
+    "Bayesian methods",
+    "survival analysis",
+    "time series analysis",
+    "computational modeling",
+    "simulation",
+    "optimization",
+    "signal processing",
+    "pattern recognition",
+
+    # EDUCATION / SOCIAL SCIENCE
+    "medical education",
+    "learning strategies",
+    "behavior change",
+    "patient compliance",
+    "health communication",
+    "medical ethics",
+    "socioeconomic status",
+    "quality of life",
+    "workplace stress",
+
+    # EMERGING TECH / FUTURE STUFF
+    "digital health",
+    "electronic health records",
+    "precision medicine",
+    "personalized medicine",
+    "digital therapeutics",
+    "virtual reality therapy",
+    "brain-computer interface",
+    "wearable sensors",
+    "smart healthcare",
+    "mobile health apps",
+
+    # DISEASE CATEGORIES (COVER EVERYTHING)
+    "diabetes",
+    "hypertension",
+    "stroke",
+    "heart failure",
+    "asthma",
+    "COPD",
+    "HIV/AIDS",
+    "tuberculosis",
+    "influenza",
+    "autoimmune diseases",
+    "rare diseases",
+
+    # HUMAN BIOLOGY / PHYSIOLOGY
+    "cell biology",
+    "metabolism",
+    "hormones",
+    "immune response",
+    "inflammation",
+    "microbiome",
+    "reproductive health",
+    "sleep",
+    "exercise physiology",
+
+    # HEALTHCARE SYSTEMS
+    "healthcare quality",
+    "healthcare costs",
+    "insurance",
+    "telehealth",
+    "patient outcomes",
+    "care coordination",
+    "health informatics",
+    "clinical decision support",
+
+    # ETHICS / POLICY
+    "bioethics",
+    "clinical ethics",
+    "data privacy",
+    "medical law",
+    "informed consent",
+    "regulatory policy",
+    "FDA approval",
+    "intellectual property"
+]
+PUBMED_PAPERS_PER_TERM = 500
 
 # ============================================
 
@@ -264,7 +460,7 @@ class WikipediaProcessor:
         for file_idx in range(num_files):
             output_path = output_dir / f"wikipedia_{file_idx+1}.txt"
             
-            logging.info(f"\n📝 Creating file {file_idx+1}/{num_files}: {output_path.name}")
+            logging.info(f"\n📚 Creating file {file_idx+1}/{num_files}: {output_path.name}")
             
             current_bytes = 0
             articles_written = 0
@@ -641,6 +837,166 @@ class StackOverflowProcessor:
         return created_files
 
 
+class PubMedProcessor:
+    """
+    Process PubMed articles (100% LEGAL - Public Domain/Open Access).
+    License: Public Domain (US Government work)
+    """
+    
+    def __init__(self, search_terms: List[str]):
+        self.search_terms = search_terms
+        self.base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
+    
+    def search_pubmed(self, term: str, max_results: int = 100) -> List[str]:
+        """Search PubMed and return list of PMIDs."""
+        logging.info(f"  Searching PubMed: {term}")
+        
+        search_url = f"{self.base_url}/esearch.fcgi"
+        params = {
+            'db': 'pubmed',
+            'term': term,
+            'retmax': max_results,
+            'retmode': 'json'
+        }
+        
+        try:
+            response = requests.get(search_url, params=params, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            
+            pmids = data.get('esearchresult', {}).get('idlist', [])
+            logging.info(f"    Found {len(pmids)} articles")
+            return pmids
+            
+        except Exception as e:
+            logging.warning(f"    PubMed search failed: {e}")
+            return []
+    
+    def fetch_abstracts(self, pmids: List[str]) -> List[dict]:
+        """Fetch abstracts for a list of PMIDs."""
+        if not pmids:
+            return []
+        
+        fetch_url = f"{self.base_url}/efetch.fcgi"
+        params = {
+            'db': 'pubmed',
+            'id': ','.join(pmids),
+            'retmode': 'xml'
+        }
+        
+        try:
+            response = requests.get(fetch_url, params=params, timeout=60)
+            response.raise_for_status()
+            
+            # Parse XML
+            root = ET.fromstring(response.content)
+            
+            articles = []
+            for article in root.findall('.//PubmedArticle'):
+                try:
+                    # Extract title
+                    title_elem = article.find('.//ArticleTitle')
+                    title = title_elem.text if title_elem is not None and title_elem.text else ""
+                    
+                    # Extract abstract
+                    abstract_texts = []
+                    for abstract_text in article.findall('.//AbstractText'):
+                        if abstract_text.text:
+                            abstract_texts.append(abstract_text.text)
+                    
+                    abstract = ' '.join(abstract_texts)
+                    
+                    if title and abstract:
+                        articles.append({
+                            'title': title,
+                            'abstract': abstract
+                        })
+                
+                except Exception as e:
+                    continue
+            
+            return articles
+            
+        except Exception as e:
+            logging.warning(f"    Failed to fetch abstracts: {e}")
+            return []
+    
+    def create_dataset_files(self, output_dir: str, num_files: int, mb_per_file: float, papers_per_term: int = 500):
+        """Create PubMed dataset files."""
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        target_bytes = int(mb_per_file * 1024 * 1024)
+        
+        logging.info(f"\n{'='*60}")
+        logging.info(f"Creating {num_files} PubMed dataset file(s)")
+        logging.info(f"Target size per file: {mb_per_file} MB")
+        logging.info(f"{'='*60}")
+        
+        # Collect articles from all search terms
+        all_articles = []
+        for term in self.search_terms:
+            pmids = self.search_pubmed(term, papers_per_term)
+            
+            # Fetch in batches of 200 (API limit)
+            batch_size = 200
+            for i in range(0, len(pmids), batch_size):
+                batch_pmids = pmids[i:i+batch_size]
+                articles = self.fetch_abstracts(batch_pmids)
+                all_articles.extend(articles)
+                time.sleep(0.5)  # Rate limiting
+            
+            time.sleep(1)  # Rate limiting between terms
+        
+        if not all_articles:
+            logging.warning("No PubMed articles found!")
+            return []
+        
+        logging.info(f"Total articles collected: {len(all_articles)}")
+        
+        created_files = []
+        
+        # Distribute articles across files
+        articles_per_file = len(all_articles) // num_files + 1
+        
+        for file_idx in range(num_files):
+            output_path = output_dir / f"pubmed_{file_idx+1}.txt"
+            
+            logging.info(f"\n🏥 Creating file {file_idx+1}/{num_files}: {output_path.name}")
+            
+            start_idx = file_idx * articles_per_file
+            end_idx = min(start_idx + articles_per_file, len(all_articles))
+            file_articles = all_articles[start_idx:end_idx]
+            
+            if not file_articles:
+                break
+            
+            current_bytes = 0
+            articles_written = 0
+            
+            with open(output_path, 'w', encoding='utf-8') as f:
+                for article in file_articles:
+                    if current_bytes >= target_bytes:
+                        break
+                    
+                    article_text = f"{article['title']}\n{article['abstract']}\n\n"
+                    f.write(article_text)
+                    
+                    current_bytes += len(article_text.encode('utf-8'))
+                    articles_written += 1
+                    
+                    if articles_written % 500 == 0:
+                        progress_pct = (current_bytes / target_bytes) * 100
+                        logging.info(f"  Progress: {current_bytes/(1024*1024):.1f}/{mb_per_file:.1f} MB "
+                                   f"({progress_pct:.1f}%) - {articles_written:,} articles")
+            
+            final_mb = current_bytes / (1024 * 1024)
+            logging.info(f"  ✅ File {file_idx+1} complete: {final_mb:.1f} MB, {articles_written} articles")
+            created_files.append((str(output_path), final_mb))
+        
+        return created_files
+
+
 def main():
     """Main execution function."""
     
@@ -659,6 +1015,8 @@ def main():
         print(f"  ✅ ArXiv Papers")
     if ENABLE_STACKOVERFLOW:
         print(f"  ✅ Stack Overflow")
+    if ENABLE_PUBMED:
+        print(f"  ✅ PubMed")
     print("="*60)
     
     output_dir = Path(OUTPUT_DIR)
@@ -728,6 +1086,21 @@ def main():
             total_mb += sum(mb for _, mb in files)
         except Exception as e:
             logging.error(f"Stack Overflow processing failed: {e}")
+    
+    # Process PubMed
+    if ENABLE_PUBMED:
+        try:
+            pubmed_processor = PubMedProcessor(PUBMED_SEARCH_TERMS)
+            files = pubmed_processor.create_dataset_files(
+                OUTPUT_DIR,
+                MAX_FILES_PER_SOURCE,
+                MB_PER_FILE,
+                PUBMED_PAPERS_PER_TERM
+            )
+            all_created_files.extend(files)
+            total_mb += sum(mb for _, mb in files)
+        except Exception as e:
+            logging.error(f"PubMed processing failed: {e}")
     
     # Print summary
     print(f"\n{'='*60}")
