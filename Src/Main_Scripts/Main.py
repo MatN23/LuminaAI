@@ -1174,6 +1174,63 @@ def save_experiment_metadata(experiment_dir: Path, config, model, datasets_info)
 
     # Add this to Main.py to fix multi-dataset support
 
+def load_checkpoint_for_continuation(checkpoint_path: str, orchestrator) -> Dict[str, Any]:
+    """
+    Load checkpoint and restore training state.
+    
+    Args:
+        checkpoint_path: Path to checkpoint file or directory
+        orchestrator: Training orchestrator instance
+        
+    Returns:
+        Dictionary with checkpoint info (start_epoch, global_step, etc.)
+    """
+    print("\n" + "="*80)
+    print("LOADING CHECKPOINT FOR CONTINUATION")
+    print("="*80)
+    
+    checkpoint_path = Path(checkpoint_path)
+    
+    # Find checkpoint file
+    if checkpoint_path.is_dir():
+        checkpoints = sorted(checkpoint_path.glob("checkpoint_*.pt"))
+        if not checkpoints:
+            raise FileNotFoundError(f"No checkpoints found in {checkpoint_path}")
+        checkpoint_file = checkpoints[-1]  # Latest checkpoint
+        print(f"Found {len(checkpoints)} checkpoints, using latest: {checkpoint_file.name}")
+    else:
+        checkpoint_file = checkpoint_path
+    
+    if not checkpoint_file.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {checkpoint_file}")
+    
+    print(f"\nLoading from: {checkpoint_file}")
+    print(f"File size: {checkpoint_file.stat().st_size / 1e6:.2f} MB")
+    
+    # Load checkpoint
+    checkpoint = torch.load(checkpoint_file, map_location='cpu')
+    
+    # Restore orchestrator state
+    if hasattr(orchestrator, 'load_checkpoint'):
+        orchestrator.load_checkpoint(str(checkpoint_file))
+        print("✓ Orchestrator state restored")
+    
+    # Extract info
+    info = {
+        'start_epoch': checkpoint.get('epoch', 0),
+        'global_step': checkpoint.get('global_step', 0),
+        'best_loss': checkpoint.get('best_loss', float('inf')),
+        'checkpoint_path': str(checkpoint_file)
+    }
+    
+    print(f"\nCheckpoint Info:")
+    print(f"  Epoch: {info['start_epoch']}")
+    print(f"  Global Step: {info['global_step']}")
+    print(f"  Best Loss: {info['best_loss']:.4f}")
+    print("="*80)
+    
+    return info
+
 def setup_multi_dataset_training(config, data_params):
     """
     Setup training with multi-dataset support.
@@ -1347,6 +1404,13 @@ def main():
     quantization_params = {
         'quantization_method': 'bnb',  # Options: None, 'bnb', 'gptq', 'quanto'
         'quantization_bits': 8,  # Options: None, 4, 8
+    }
+    # Add these to your monitoring_params or create a new checkpoint_params section:
+    checkpoint_params = {
+        'resume_from_checkpoint': None,  # Path to checkpoint file or directory (e.g., 'experiments/my_exp/checkpoints/checkpoint_epoch_5.pt')
+        'resume_training': False,        # Set to True to continue training from checkpoint
+        'reset_optimizer': False,        # Set to True to reset optimizer state (keeps model weights only)
+        'reset_scheduler': False,        # Set to True to reset learning rate scheduler
     }
     
     # Monitoring and logging
@@ -1732,6 +1796,24 @@ def main():
         print("")
         print("Press Ctrl+C at any time to gracefully stop training and save progress")
         print("="*80)
+        start_epoch = 0
+        if checkpoint_params.get('resume_training') and checkpoint_params.get('resume_from_checkpoint'):
+            try:
+                checkpoint_info = load_checkpoint_for_continuation(
+                    checkpoint_params['resume_from_checkpoint'],
+                    orchestrator
+                )
+                start_epoch = checkpoint_info['start_epoch']
+
+                # Optionally update config to continue from checkpoint
+                if start_epoch > 0:
+                    print(f"Resuming training from epoch {start_epoch}")
+                    # Adjust remaining epochs if needed
+                    orchestrator.config.start_epoch = start_epoch
+            
+            except Exception as e:
+                print(f"⚠️ Failed to load checkpoint: {e}")
+                print("Starting training from scratch...")
         
         training_start_time = time.time()
         
