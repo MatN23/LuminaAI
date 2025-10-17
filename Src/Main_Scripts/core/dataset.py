@@ -589,13 +589,23 @@ class HybridDatasetManager:
         """Combine multiple dataset files into one."""
         if len(paths) == 1:
             return dataset_class(paths[0], tokenizer, self.config, split_name)
-        
+
         # Create temporary combined file
         cache_dir = Path(getattr(self.config, 'data_cache_dir', 'data/cache'))
         cache_dir.mkdir(parents=True, exist_ok=True)
-        
-        combined_path = cache_dir / f"combined_{split_name}_{hash(tuple(paths))}.jsonl"
-        
+
+        # FIXED: Determine file extension from source files
+        first_path = Path(paths[0])
+        source_ext = first_path.suffix.lower()
+
+        # Use appropriate extension for combined file
+        if source_ext in ['.txt', '.text']:
+            combined_ext = '.txt'
+        else:
+            combined_ext = '.jsonl'
+
+        combined_path = cache_dir / f"combined_{split_name}_{hash(tuple(paths))}{combined_ext}"
+
         if not combined_path.exists():
             logging.info(f"Combining {len(paths)} {split_name} files...")
             with open(combined_path, 'w', encoding='utf-8') as out_f:
@@ -604,16 +614,16 @@ class HybridDatasetManager:
                     if not Path(path).exists():
                         logging.warning(f"File not found, skipping: {path}")
                         continue
-                    
+                        
                     with open(path, 'r', encoding='utf-8') as in_f:
                         for line in in_f:
                             out_f.write(line)
                             total_lines += 1
-                
+
                 logging.info(f"Combined {total_lines:,} lines from {len(paths)} files")
-        
+
         return dataset_class(str(combined_path), tokenizer, self.config, split_name)
-    
+        
     def _get_base_training_datasets(self, tokenizer):
         """Get base training datasets."""
         logging.info("Setting up base/pre-training datasets")

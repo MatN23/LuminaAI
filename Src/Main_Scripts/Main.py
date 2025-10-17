@@ -1307,7 +1307,7 @@ def main():
         'batch_size': 20,
         'gradient_accumulation_steps': 8,
         'precision': "fp16",
-        'inference_precision': "int8",
+        'inference_precision': "fp16",
         
         # Comment these out if your not using MoE
         'num_experts': None,
@@ -1366,7 +1366,7 @@ def main():
         # ===================================================================
         # TRAINING MODE
         # ===================================================================
-        'training_mode': 'finetuning_only',  # Options:
+        'training_mode': 'hybrid',  # Options:
         # - 'base_only': Only base/pre-training on raw text
         # - 'finetuning_only': Only instruction/chat fine-tuning (default)
         # - 'hybrid': Sequential - base training THEN fine-tuning
