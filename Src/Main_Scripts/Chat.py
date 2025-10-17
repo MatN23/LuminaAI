@@ -19,9 +19,9 @@ import torch.nn.functional as F
 PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from model import DeepSeekTransformer, DeepSeekConfig
-from tokenizer import ConversationTokenizer
-from config_manager import Config
+from core.model import DeepSeekTransformer, DeepSeekConfig
+from core.tokenizer import ConversationTokenizer
+from config.config_manager import Config
 
 # Disable logging for cleaner chat interface
 logging.basicConfig(level=logging.ERROR)
