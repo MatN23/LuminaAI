@@ -27,6 +27,12 @@ from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 import warnings
 import os
+import builtins
+import sys
+
+builtins.exit = sys.exit
+builtins.quit = sys.exit  # just in case some code calls quit()
+
 
 # Suppress warnings
 warnings.filterwarnings('ignore')
