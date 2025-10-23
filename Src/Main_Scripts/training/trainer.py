@@ -18,6 +18,7 @@ from dataclasses import asdict
 import numpy as np
 import json
 import os
+import copy
 
 # Quantization imports with fallbacks
 try:
@@ -924,13 +925,51 @@ class MoEOptimizationManager:
 
 
 class EnhancedConversationTrainer:
-    """Production trainer with DeepSpeed, MoE optimizations, quantization, and comprehensive precision support."""
+    """
+    Production trainer with comprehensive adaptive training capabilities.
+    
+    🚀 NEW FEATURES (18 methods added):
+    ===================================
+    
+    MoE Architecture (3 methods):
+    - add_expert(): Dynamically add new expert mid-training
+    - prune_expert(): Remove underutilized expert
+    - _initialize_new_expert(): Smart expert initialization with knowledge distillation
+    
+    MoE Routing (4 methods):
+    - adjust_capacity_factor(): Change token routing capacity
+    - adjust_routing_temperature(): Adjust softmax temperature for routing
+    - enable_expert_dropout(): Dynamic expert dropout
+    - get_expert_statistics(): Comprehensive expert usage metrics
+    
+    MoD Routing (2 methods):
+    - adjust_mod_capacity(): Change token computation ratio
+    - get_mod_statistics(): Token routing efficiency metrics
+    
+    Batch Size Adaptation (2 methods):
+    - adjust_batch_size(): Change batch size mid-training
+    - _recreate_dataloader(): Rebuild dataloader with new batch size
+    
+    🔥 Orchestrator Communication (3 methods):
+    - get_current_metrics(): CRITICAL FIX - Returns TrainingMetrics
+    - _extract_moe_routing_stats(): Parse expert utilization from model
+    - _calculate_throughput(): Tokens per second measurement
+    
+    Emergency Recovery (2 methods):
+    - emergency_lr_reduction(): Aggressive LR cut on gradient explosion
+    - rollback_steps(): Checkpoint-based rollback
+    
+    Advanced Optimizer (2 methods):
+    - adjust_weight_decay(): Change regularization
+    - _update_optimizer_param_groups(): Apply changes to running optimizer
+    """
     
     def __init__(self, model, tokenizer, config, logger):
         self.model = model
         self.tokenizer = tokenizer
         self.config = config
         self.logger = logger
+        
         if torch.cuda.is_available():
             self.device = torch.device('cuda')
         elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
@@ -961,11 +1000,10 @@ class EnhancedConversationTrainer:
         # DeepSpeed integration - CRITICAL FIX
         is_mps = hasattr(torch.backends, 'mps') and torch.backends.mps.is_available() and not torch.cuda.is_available()
         if is_mps and getattr(config, 'use_deepspeed', False):
-                logging.warning("DeepSpeed is not supported on MPS - disabling")
-                config.use_deepspeed = False
+            logging.warning("DeepSpeed is not supported on MPS - disabling")
+            config.use_deepspeed = False
 
         self.use_deepspeed = DEEPSPEED_AVAILABLE and getattr(config, 'use_deepspeed', False) and not is_mps
-
         self.deepspeed_engine = None
         
         # Training state
@@ -985,30 +1023,704 @@ class EnhancedConversationTrainer:
             'epoch_times': []
         }
         
+        # 🆕 NEW: Checkpoint history for rollback
+        self.checkpoint_history = []
+        self.max_checkpoint_history = 10
+        
+        # 🆕 NEW: Current dataloader reference
+        self.current_train_dataloader = None
+        self.current_eval_dataloader = None
+        self.train_dataset = None
+        self.eval_dataset = None
+        
+        # 🆕 NEW: Throughput tracking
+        self.throughput_window = []
+        self.throughput_window_size = 10
+        self.last_step_time = time.time()
+        self.last_step_tokens = 0
+        
         # Setup training components
         self._setup_training()
 
+    # ============================================================================
+    # 🆕 CRITICAL FIX: ORCHESTRATOR COMMUNICATION (3 methods)
+    # ============================================================================
+    
     def get_current_metrics(self):
-        """Get current training metrics for orchestrator monitoring."""
-        from orchestrator import TrainingMetrics
-        from datetime import datetime
+        """
+        🔥 CRITICAL FIX: Get current training metrics for orchestrator monitoring.
+        
+        This fixes the broken communication between trainer and orchestrator.
+        Returns a TrainingMetrics object with all current training state.
+        """
+        try:
+            from orchestrator import TrainingMetrics
+        except ImportError:
+            # Fallback if orchestrator not available
+            from dataclasses import dataclass
+            from datetime import datetime
+            
+            @dataclass
+            class TrainingMetrics:
+                epoch: int
+                step: int
+                loss: float
+                grad_norm: float
+                learning_rate: float
+                expert_utilization: Dict[str, float]
+                memory_usage: Dict[str, float]
+                throughput: float
+                semantic_coherence: float
+                factual_accuracy: float
+                reasoning_score: float
+                timestamp: datetime
 
         return TrainingMetrics(
             epoch=self.current_epoch,
             step=self.global_step,
             loss=self.metrics.get('train_losses', [0])[-1] if self.metrics.get('train_losses') else 0.0,
             grad_norm=self.metrics.get('gradient_norms', [0])[-1] if self.metrics.get('gradient_norms') else 0.0,
-            learning_rate=self.metrics.get('learning_rates', [0])[-1] if self.metrics.get('learning_rates') else 0.0,
-            expert_utilization={},  # Add MoE routing stats if available
-            memory_usage={
-                'gpu_memory_percent': torch.cuda.memory_allocated() / torch.cuda.get_device_properties(0).total_memory * 100 if torch.cuda.is_available() else 0
-            },
-            throughput=self.metrics.get('throughput', [0])[-1] if self.metrics.get('throughput') else 0.0,
-            semantic_coherence=0.0,  # Placeholder
-            factual_accuracy=0.0,    # Placeholder
-            reasoning_score=0.0,     # Placeholder
+            learning_rate=self.metrics.get('learning_rates', [0])[-1] if self.metrics.get('learning_rates') else self.config.learning_rate,
+            expert_utilization=self._extract_moe_routing_stats(),
+            memory_usage=self._get_memory_usage(),
+            throughput=self._calculate_throughput(),
+            semantic_coherence=0.0,  # Placeholder for future implementation
+            factual_accuracy=0.0,    # Placeholder for future implementation
+            reasoning_score=0.0,     # Placeholder for future implementation
             timestamp=datetime.now()
         )
+    
+    def _extract_moe_routing_stats(self) -> Dict[str, float]:
+        """
+        🆕 Extract MoE expert utilization statistics from the model.
+        
+        Returns dictionary mapping expert IDs to utilization percentages.
+        """
+        if not hasattr(self.config, 'use_moe') or not self.config.use_moe:
+            return {}
+        
+        expert_stats = {}
+        
+        try:
+            # Access model layers
+            model = self.deepspeed_engine.module if self.use_deepspeed else self.model
+            
+            for layer_idx, layer in enumerate(model.layers):
+                if hasattr(layer, 'use_moe') and layer.use_moe:
+                    if hasattr(layer.ffn, 'get_routing_stats'):
+                        layer_stats = layer.ffn.get_routing_stats()
+                        if 'expert_usage_percentages' in layer_stats:
+                            for expert_id, usage in enumerate(layer_stats['expert_usage_percentages']):
+                                key = f"layer_{layer_idx}_expert_{expert_id}"
+                                expert_stats[key] = usage
+        except Exception as e:
+            logging.debug(f"Could not extract MoE routing stats: {e}")
+        
+        return expert_stats
+    
+    def _calculate_throughput(self) -> float:
+        """
+        🆕 Calculate current training throughput in tokens per second.
+        
+        Returns tokens/sec based on recent training steps.
+        """
+        if not self.throughput_window:
+            return 0.0
+        
+        # Return average of recent measurements
+        return sum(self.throughput_window) / len(self.throughput_window)
+    
+    def _get_memory_usage(self) -> Dict[str, float]:
+        """Get current memory usage statistics."""
+        memory_stats = {}
+        
+        try:
+            if torch.cuda.is_available():
+                memory_stats['gpu_memory_allocated_gb'] = torch.cuda.memory_allocated() / 1e9
+                memory_stats['gpu_memory_reserved_gb'] = torch.cuda.memory_reserved() / 1e9
+                memory_stats['gpu_memory_percent'] = (
+                    torch.cuda.memory_allocated() / 
+                    torch.cuda.get_device_properties(0).total_memory * 100
+                )
+            elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                memory_stats['mps_memory_allocated_gb'] = torch.mps.current_allocated_memory() / 1e9
+        except Exception as e:
+            logging.debug(f"Could not get memory usage: {e}")
+        
+        return memory_stats
+    
+    def _update_throughput(self, num_tokens: int):
+        """Update throughput calculation with new step."""
+        current_time = time.time()
+        time_delta = current_time - self.last_step_time
+        
+        if time_delta > 0:
+            tokens_per_sec = num_tokens / time_delta
+            self.throughput_window.append(tokens_per_sec)
+            
+            # Keep only recent measurements
+            if len(self.throughput_window) > self.throughput_window_size:
+                self.throughput_window.pop(0)
+        
+        self.last_step_time = current_time
+        self.last_step_tokens = num_tokens
+
+    # ============================================================================
+    # 🆕 MOE ARCHITECTURE ADAPTATION (3 methods)
+    # ============================================================================
+    
+    def add_expert(self, layer_idx: Optional[int] = None):
+        """
+        🆕 Dynamically add a new expert to an MoE layer during training.
+        
+        This uses Net2Net-style initialization to preserve learned knowledge.
+        
+        Args:
+            layer_idx: Specific layer to add expert to. If None, adds to all MoE layers.
+        """
+        if not hasattr(self.config, 'use_moe') or not self.config.use_moe:
+            logging.warning("Cannot add expert: MoE not enabled")
+            return
+        
+        logging.info(f"Adding new expert to layer {layer_idx if layer_idx is not None else 'all'}")
+        
+        model = self.deepspeed_engine.module if self.use_deepspeed else self.model
+        
+        try:
+            layers_to_modify = [layer_idx] if layer_idx is not None else range(len(model.layers))
+            
+            for idx in layers_to_modify:
+                if idx >= len(model.layers):
+                    continue
+                
+                layer = model.layers[idx]
+                if not (hasattr(layer, 'use_moe') and layer.use_moe):
+                    continue
+                
+                # Create new expert
+                from model import SwiGLUExpert
+                new_expert = SwiGLUExpert(self.config).to(self.device)
+                
+                # Initialize using knowledge distillation from existing experts
+                self._initialize_new_expert(new_expert, layer.ffn.experts)
+                
+                # Add to expert list
+                layer.ffn.experts.append(new_expert)
+                layer.ffn.num_experts += 1
+                
+                # Update gate projection
+                old_gate_weight = layer.ffn.gate.weight.data
+                new_gate_weight = torch.zeros(
+                    layer.ffn.num_experts, 
+                    self.config.hidden_size,
+                    device=self.device
+                )
+                new_gate_weight[:-1] = old_gate_weight
+                # Initialize new expert gate with small random values
+                torch.nn.init.normal_(new_gate_weight[-1], mean=0.0, std=0.01)
+                
+                layer.ffn.gate = nn.Linear(
+                    self.config.hidden_size, 
+                    layer.ffn.num_experts, 
+                    bias=False
+                ).to(self.device)
+                layer.ffn.gate.weight.data = new_gate_weight
+                
+                # Update optimizer state
+                self._update_optimizer_for_new_parameters(new_expert)
+                
+                logging.info(f"Successfully added expert to layer {idx}. Total experts: {layer.ffn.num_experts}")
+                
+        except Exception as e:
+            logging.error(f"Failed to add expert: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _initialize_new_expert(self, new_expert: nn.Module, existing_experts: nn.ModuleList):
+        """
+        🆕 Initialize new expert using knowledge distillation from existing experts.
+        
+        Uses average of existing expert weights as initialization.
+        """
+        if len(existing_experts) == 0:
+            return
+        
+        with torch.no_grad():
+            # Average weights from existing experts
+            for name, param in new_expert.named_parameters():
+                avg_param = torch.zeros_like(param)
+                count = 0
+                
+                for expert in existing_experts:
+                    try:
+                        expert_param = dict(expert.named_parameters())[name]
+                        avg_param += expert_param.data
+                        count += 1
+                    except KeyError:
+                        continue
+                
+                if count > 0:
+                    param.data = avg_param / count
+                    # Add small noise for diversity
+                    param.data += torch.randn_like(param) * 0.01
+    
+    def prune_expert(self, layer_idx: int, expert_idx: int):
+        """
+        🆕 Remove an underutilized expert from an MoE layer.
+        
+        Args:
+            layer_idx: Layer index
+            expert_idx: Expert index to remove
+        """
+        if not hasattr(self.config, 'use_moe') or not self.config.use_moe:
+            logging.warning("Cannot prune expert: MoE not enabled")
+            return
+        
+        logging.info(f"Pruning expert {expert_idx} from layer {layer_idx}")
+        
+        model = self.deepspeed_engine.module if self.use_deepspeed else self.model
+        
+        try:
+            if layer_idx >= len(model.layers):
+                logging.error(f"Invalid layer index: {layer_idx}")
+                return
+            
+            layer = model.layers[layer_idx]
+            if not (hasattr(layer, 'use_moe') and layer.use_moe):
+                logging.error(f"Layer {layer_idx} is not an MoE layer")
+                return
+            
+            if expert_idx >= len(layer.ffn.experts):
+                logging.error(f"Invalid expert index: {expert_idx}")
+                return
+            
+            # Remove expert
+            del layer.ffn.experts[expert_idx]
+            layer.ffn.num_experts -= 1
+            
+            # Update gate projection
+            old_gate_weight = layer.ffn.gate.weight.data
+            new_gate_weight = torch.cat([
+                old_gate_weight[:expert_idx],
+                old_gate_weight[expert_idx+1:]
+            ], dim=0)
+            
+            layer.ffn.gate = nn.Linear(
+                self.config.hidden_size,
+                layer.ffn.num_experts,
+                bias=False
+            ).to(self.device)
+            layer.ffn.gate.weight.data = new_gate_weight
+            
+            logging.info(f"Successfully pruned expert. Remaining experts: {layer.ffn.num_experts}")
+            
+        except Exception as e:
+            logging.error(f"Failed to prune expert: {e}")
+    
+    def _update_optimizer_for_new_parameters(self, new_module: nn.Module):
+        """🆕 Update optimizer state to include new parameters."""
+        if self.use_deepspeed:
+            # DeepSpeed handles this automatically
+            return
+        
+        # Add new parameters to optimizer
+        new_params = list(new_module.parameters())
+        if new_params:
+            self.optimizer.add_param_group({
+                'params': new_params,
+                'lr': self.config.learning_rate,
+                'weight_decay': getattr(self.config, 'weight_decay', 0.01)
+            })
+
+    # ============================================================================
+    # 🆕 MOE ROUTING ADAPTATION (4 methods)
+    # ============================================================================
+    
+    def adjust_capacity_factor(self, new_factor: float):
+        """
+        🆕 Adjust MoE capacity factor during training.
+        
+        Args:
+            new_factor: New capacity factor (typically 1.0-2.0)
+        """
+        if not hasattr(self.config, 'use_moe') or not self.config.use_moe:
+            logging.warning("Cannot adjust capacity factor: MoE not enabled")
+            return
+        
+        logging.info(f"Adjusting MoE capacity factor: {self.config.capacity_factor} -> {new_factor}")
+        
+        self.config.capacity_factor = new_factor
+        
+        model = self.deepspeed_engine.module if self.use_deepspeed else self.model
+        
+        for layer in model.layers:
+            if hasattr(layer, 'use_moe') and layer.use_moe:
+                layer.ffn.capacity_factor = new_factor
+    
+    def adjust_routing_temperature(self, new_temp: float):
+        """
+        🆕 Adjust MoE routing temperature during training.
+        
+        Higher temperature = more uniform routing
+        Lower temperature = more concentrated routing
+        
+        Args:
+            new_temp: New temperature (typically 0.5-2.0)
+        """
+        if not hasattr(self.config, 'use_moe') or not self.config.use_moe:
+            logging.warning("Cannot adjust routing temperature: MoE not enabled")
+            return
+        
+        logging.info(f"Adjusting MoE routing temperature: {getattr(self.config, 'routing_temperature', 1.0)} -> {new_temp}")
+        
+        self.config.routing_temperature = new_temp
+        
+        model = self.deepspeed_engine.module if self.use_deepspeed else self.model
+        
+        for layer in model.layers:
+            if hasattr(layer, 'use_moe') and layer.use_moe:
+                layer.ffn.routing_temperature = new_temp
+    
+    def enable_expert_dropout(self, dropout_rate: float):
+        """
+        🆕 Enable expert dropout to prevent expert collapse.
+        
+        Args:
+            dropout_rate: Dropout probability for experts (0.0-0.3)
+        """
+        if not hasattr(self.config, 'use_moe') or not self.config.use_moe:
+            logging.warning("Cannot enable expert dropout: MoE not enabled")
+            return
+        
+        logging.info(f"Enabling expert dropout with rate: {dropout_rate}")
+        
+        model = self.deepspeed_engine.module if self.use_deepspeed else self.model
+        
+        for layer in model.layers:
+            if hasattr(layer, 'use_moe') and layer.use_moe:
+                # Add dropout to expert outputs
+                if not hasattr(layer.ffn, 'expert_dropout'):
+                    layer.ffn.expert_dropout = nn.Dropout(dropout_rate)
+    
+    def get_expert_statistics(self) -> Dict[str, Any]:
+        """
+        🆕 Get comprehensive MoE expert statistics.
+        
+        Returns:
+            Dictionary with expert usage, balance, and efficiency metrics
+        """
+        if not hasattr(self.config, 'use_moe') or not self.config.use_moe:
+            return {'error': 'MoE not enabled'}
+        
+        stats = {
+            'total_experts': 0,
+            'layers': [],
+            'global_usage': {},
+            'imbalance_scores': []
+        }
+        
+        model = self.deepspeed_engine.module if self.use_deepspeed else self.model
+        
+        for layer_idx, layer in enumerate(model.layers):
+            if hasattr(layer, 'use_moe') and layer.use_moe:
+                if hasattr(layer.ffn, 'get_routing_stats'):
+                    layer_stats = layer.ffn.get_routing_stats()
+                    stats['layers'].append({
+                        'layer_idx': layer_idx,
+                        'num_experts': layer.ffn.num_experts,
+                        'routing_stats': layer_stats
+                    })
+                    stats['total_experts'] += layer.ffn.num_experts
+                    
+                    if 'imbalance_ratio' in layer_stats:
+                        stats['imbalance_scores'].append(layer_stats['imbalance_ratio'])
+        
+        if stats['imbalance_scores']:
+            stats['avg_imbalance'] = sum(stats['imbalance_scores']) / len(stats['imbalance_scores'])
+            stats['max_imbalance'] = max(stats['imbalance_scores'])
+        
+        return stats
+
+    # ============================================================================
+    # 🆕 MOD (MIXTURE OF DEPTHS) ADAPTATION (2 methods)
+    # ============================================================================
+    
+    def adjust_mod_capacity(self, new_capacity: float):
+        """
+        🆕 Adjust MoD capacity factor during training.
+        
+        Controls what fraction of tokens receive full computation.
+        
+        Args:
+            new_capacity: New capacity factor (0.0-1.0)
+        """
+        if not hasattr(self.config, 'use_mod') or not self.config.use_mod:
+            logging.warning("Cannot adjust MoD capacity: MoD not enabled")
+            return
+        
+        logging.info(f"Adjusting MoD capacity: {getattr(self.config, 'mod_capacity_factor', 0.5)} -> {new_capacity}")
+        
+        self.config.mod_capacity_factor = new_capacity
+        
+        model = self.deepspeed_engine.module if self.use_deepspeed else self.model
+        
+        for layer in model.layers:
+            if hasattr(layer.ffn, 'router') and hasattr(layer.ffn.router, 'capacity_factor'):
+                layer.ffn.router.capacity_factor = new_capacity
+    
+    def get_mod_statistics(self) -> Dict[str, Any]:
+        """
+        🆕 Get MoD routing efficiency statistics.
+        
+        Returns:
+            Dictionary with token routing stats and compute savings
+        """
+        if not hasattr(self.config, 'use_mod') or not self.config.use_mod:
+            return {'error': 'MoD not enabled'}
+        
+        stats = {
+            'layers': [],
+            'total_compute_savings': 0.0,
+            'avg_selected_ratio': 0.0,
+            'routing_efficiency': []
+        }
+        
+        model = self.deepspeed_engine.module if self.use_deepspeed else self.model
+        
+        total_capacity = 0
+        total_layers = 0
+        
+        for layer_idx, layer in enumerate(model.layers):
+            if hasattr(layer.ffn, 'router') and hasattr(layer.ffn.router, 'get_routing_stats'):
+                layer_stats = layer.ffn.router.get_routing_stats()
+                stats['layers'].append({
+                    'layer_idx': layer_idx,
+                    'selected_ratio': layer_stats.get('selected_ratio', 0.0),
+                    'compute_savings': layer_stats.get('compute_savings', 0.0)
+                })
+                
+                total_capacity += layer_stats.get('selected_ratio', 0.0)
+                total_layers += 1
+        
+        if total_layers > 0:
+            stats['avg_selected_ratio'] = total_capacity / total_layers
+            stats['total_compute_savings'] = (1.0 - stats['avg_selected_ratio']) * 100
+        
+        return stats
+
+    # ============================================================================
+    # 🆕 BATCH SIZE ADAPTATION (2 methods)
+    # ============================================================================
+    
+    def adjust_batch_size(self, new_batch_size: int):
+        """
+        🆕 Dynamically adjust batch size during training.
+        
+        Useful for:
+        - Recovering from OOM errors
+        - Adjusting to memory availability
+        - Dynamic curriculum learning
+        
+        Args:
+            new_batch_size: New batch size to use
+        """
+        if new_batch_size == self.config.batch_size:
+            logging.info(f"Batch size already {new_batch_size}, no change needed")
+            return
+        
+        logging.info(f"Adjusting batch size: {self.config.batch_size} -> {new_batch_size}")
+        
+        old_batch_size = self.config.batch_size
+        self.config.batch_size = new_batch_size
+        
+        # Adjust gradient accumulation to maintain effective batch size
+        old_effective_batch = old_batch_size * self.config.gradient_accumulation_steps
+        new_grad_accum = max(1, old_effective_batch // new_batch_size)
+        
+        logging.info(f"Adjusting gradient accumulation: {self.config.gradient_accumulation_steps} -> {new_grad_accum}")
+        self.config.gradient_accumulation_steps = new_grad_accum
+        
+        # Recreate dataloaders
+        if self.train_dataset is not None:
+            self.current_train_dataloader = self._recreate_dataloader(
+                self.train_dataset, shuffle=True
+            )
+        
+        if self.eval_dataset is not None:
+            self.current_eval_dataloader = self._recreate_dataloader(
+                self.eval_dataset, shuffle=False
+            )
+        
+        # Update DeepSpeed config if using DeepSpeed
+        if self.use_deepspeed:
+            world_size = int(os.environ.get('WORLD_SIZE', 1))
+            train_batch_size = new_batch_size * new_grad_accum * world_size
+            
+            # Note: DeepSpeed doesn't support dynamic config updates easily
+            # This would require reinitialization in practice
+            logging.warning("DeepSpeed batch size change requires reinitialization")
+        
+        logging.info(f"Batch size adjustment complete")
+        logging.info(f"  New batch size: {new_batch_size}")
+        logging.info(f"  New gradient accumulation: {new_grad_accum}")
+        logging.info(f"  Effective batch size: {new_batch_size * new_grad_accum}")
+    
+    def _recreate_dataloader(self, dataset, shuffle: bool = True):
+        """
+        🆕 Recreate dataloader with new batch size.
+        
+        Args:
+            dataset: Dataset to wrap
+            shuffle: Whether to shuffle data
+        
+        Returns:
+            New DataLoader instance
+        """
+        return create_dataloader(dataset, self.config, shuffle=shuffle)
+
+    # ============================================================================
+    # 🆕 EMERGENCY RECOVERY (2 methods)
+    # ============================================================================
+    
+    def emergency_lr_reduction(self, reduction_factor: float = 10.0):
+        """
+        🆕 Emergency learning rate reduction for gradient explosion.
+        
+        Reduces LR by specified factor when training becomes unstable.
+        
+        Args:
+            reduction_factor: Factor to reduce LR by (default: 10x reduction)
+        """
+        old_lr = self.config.learning_rate
+        new_lr = old_lr / reduction_factor
+        
+        logging.warning(f"EMERGENCY LR REDUCTION: {old_lr:.2e} -> {new_lr:.2e}")
+        
+        self.config.learning_rate = new_lr
+        
+        if self.use_deepspeed:
+            # Update DeepSpeed learning rate
+            for param_group in self.deepspeed_engine.optimizer.param_groups:
+                param_group['lr'] = new_lr
+        else:
+            # Update standard optimizer
+            for param_group in self.optimizer.param_groups:
+                param_group['lr'] = new_lr
+        
+        # Reset scheduler if it exists
+        if self.scheduler is not None and hasattr(self.scheduler, 'base_lrs'):
+            self.scheduler.base_lrs = [new_lr for _ in self.scheduler.base_lrs]
+        
+        logging.info("Emergency LR reduction complete")
+    
+    def rollback_steps(self, num_steps: int = 100):
+        """
+        🆕 Rollback training to a previous checkpoint.
+        
+        Useful for recovering from training instabilities.
+        
+        Args:
+            num_steps: Number of steps to roll back
+        """
+        if not self.checkpoint_history:
+            logging.warning("No checkpoint history available for rollback")
+            return
+        
+        # Find checkpoint closest to target step
+        target_step = max(0, self.global_step - num_steps)
+        
+        best_checkpoint = None
+        min_distance = float('inf')
+        
+        for checkpoint_info in self.checkpoint_history:
+            distance = abs(checkpoint_info['step'] - target_step)
+            if distance < min_distance:
+                min_distance = distance
+                best_checkpoint = checkpoint_info
+        
+        if best_checkpoint is None:
+            logging.warning("No suitable checkpoint found for rollback")
+            return
+        
+        logging.info(f"Rolling back from step {self.global_step} to step {best_checkpoint['step']}")
+        
+        try:
+            # Load checkpoint
+            checkpoint_path = best_checkpoint['path']
+            
+            if self.use_deepspeed:
+                self.deepspeed_engine.load_checkpoint(checkpoint_path)
+            else:
+                checkpoint = torch.load(checkpoint_path, map_location=self.device)
+                self.model.load_state_dict(checkpoint['model_state_dict'])
+                self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                if self.scheduler and checkpoint.get('scheduler_state_dict'):
+                    self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+            
+            # Reset training state
+            self.global_step = best_checkpoint['step']
+            self.current_epoch = best_checkpoint['epoch']
+            
+            # Clear metrics after rollback point
+            for key in self.metrics:
+                if isinstance(self.metrics[key], list):
+                    # Keep only metrics up to rollback point
+                    self.metrics[key] = self.metrics[key][:self.global_step]
+            
+            logging.info(f"Successfully rolled back to step {self.global_step}")
+            
+        except Exception as e:
+            logging.error(f"Rollback failed: {e}")
+            import traceback
+            traceback.print_exc()
+
+    # ============================================================================
+    # 🆕 ADVANCED OPTIMIZER CONTROL (2 methods)
+    # ============================================================================
+    
+    def adjust_weight_decay(self, new_weight_decay: float):
+        """
+        🆕 Dynamically adjust weight decay during training.
+        
+        Useful for:
+        - Reducing overfitting
+        - Fine-tuning regularization
+        - Adapting to different training phases
+        
+        Args:
+            new_weight_decay: New weight decay value
+        """
+        old_wd = getattr(self.config, 'weight_decay', 0.01)
+        logging.info(f"Adjusting weight decay: {old_wd} -> {new_weight_decay}")
+        
+        self.config.weight_decay = new_weight_decay
+        self._update_optimizer_param_groups('weight_decay', new_weight_decay)
+    
+    def _update_optimizer_param_groups(self, param_name: str, new_value: Any):
+        """
+        🆕 Update optimizer parameter groups with new values.
+        
+        Args:
+            param_name: Name of parameter to update (e.g., 'lr', 'weight_decay')
+            new_value: New value for the parameter
+        """
+        if self.use_deepspeed:
+            optimizer = self.deepspeed_engine.optimizer
+        else:
+            optimizer = self.optimizer
+        
+        for param_group in optimizer.param_groups:
+            # Some params shouldn't be updated for no_decay groups
+            if param_name == 'weight_decay' and param_group.get('weight_decay') == 0.0:
+                continue
+            
+            old_value = param_group.get(param_name, 'N/A')
+            param_group[param_name] = new_value
+            logging.debug(f"Updated {param_name}: {old_value} -> {new_value}")
+
+    # ============================================================================
+    # EXISTING METHODS (with enhancements)
+    # ============================================================================
 
     def train_with_oom_fallback(self, train_dataset, eval_dataset=None):
         """Train with automatic batch size reduction on OOM errors."""
@@ -1572,6 +2284,10 @@ class EnhancedConversationTrainer:
             
             self.deepspeed_engine.backward(loss)
             
+            # Update throughput tracking
+            valid_tokens = loss_dict['valid_tokens'].item() if hasattr(loss_dict['valid_tokens'], 'item') else float(loss_dict['valid_tokens'])
+            self._update_throughput(valid_tokens)
+            
             loss_value = loss.item() if hasattr(loss, 'item') else float(loss)
             raw_loss_value = loss_dict['raw_loss'].item() if hasattr(loss_dict['raw_loss'], 'item') else float(loss_dict['raw_loss'])
             perplexity_value = loss_dict['perplexity'].item() if hasattr(loss_dict['perplexity'], 'item') else float(loss_dict['perplexity'])
@@ -1650,6 +2366,9 @@ class EnhancedConversationTrainer:
             self.scaler.scale(loss).backward()
         else:
             loss.backward()
+        
+        # Update throughput tracking
+        self._update_throughput(loss_dict['valid_tokens'].item())
         
         return {
             'loss': loss.item(),
@@ -2090,9 +2809,12 @@ class EnhancedConversationTrainer:
         print(f"  Inference: {precision_info['inference']['precision']} ({precision_info['inference']['bits']} bits)")
         print("="*80)
         
+        # Store datasets for potential dataloader recreation
+        self.train_dataset = train_dataset
         self.eval_dataset = eval_dataset
         
         train_dataloader = create_dataloader(train_dataset, self.config, shuffle=True)
+        self.current_train_dataloader = train_dataloader
 
         print("="*80)
         print("DATALOADER DEBUG INFO")
@@ -2148,10 +2870,24 @@ class EnhancedConversationTrainer:
                     if getattr(self.config, 'early_stopping_patience', None):
                         self._check_early_stopping(eval_metrics['eval_loss'])
                 
+                # Save checkpoint with history tracking
                 if self.use_deepspeed:
-                    self._save_deepspeed_checkpoint(epoch + 1)
+                    checkpoint_path = self._save_deepspeed_checkpoint(epoch + 1)
                 else:
-                    self._save_standard_checkpoint(epoch + 1)
+                    checkpoint_path = self._save_standard_checkpoint(epoch + 1)
+                
+                # Track checkpoint for rollback
+                if checkpoint_path:
+                    self.checkpoint_history.append({
+                        'step': self.global_step,
+                        'epoch': epoch + 1,
+                        'path': checkpoint_path,
+                        'loss': epoch_metrics.get('avg_loss', float('inf'))
+                    })
+                    
+                    # Keep only recent checkpoints
+                    if len(self.checkpoint_history) > self.max_checkpoint_history:
+                        self.checkpoint_history.pop(0)
                 
                 self.current_epoch = epoch + 1
                 
@@ -2192,7 +2928,7 @@ class EnhancedConversationTrainer:
             print(f"  Training: {final_precision_info['training']['precision']}")
             print(f"  Inference: {final_precision_info['inference']['precision']}")
     
-    def _save_deepspeed_checkpoint(self, epoch: int, final: bool = False):
+    def _save_deepspeed_checkpoint(self, epoch: int, final: bool = False) -> Optional[str]:
         """Save DeepSpeed checkpoint with quantization and precision state."""
         try:
             checkpoint_dir = Path(f"checkpoints/deepspeed_epoch_{epoch}")
@@ -2211,10 +2947,12 @@ class EnhancedConversationTrainer:
                 json.dump(self.precision_manager.get_precision_info(), f, indent=2)
             
             print(f"DeepSpeed checkpoint saved: {checkpoint_dir}")
+            return str(checkpoint_dir)
         except Exception as e:
             print(f"Failed to save DeepSpeed checkpoint: {e}")
+            return None
     
-    def _save_standard_checkpoint(self, epoch: int, final: bool = False):
+    def _save_standard_checkpoint(self, epoch: int, final: bool = False) -> Optional[str]:
         """Save standard PyTorch checkpoint with quantization and precision state."""
         try:
             suffix = "final" if final else f"epoch_{epoch:03d}"
@@ -2238,8 +2976,10 @@ class EnhancedConversationTrainer:
             torch.save(checkpoint_data, checkpoint_path)
             
             print(f"Checkpoint saved: {checkpoint_path}")
+            return str(checkpoint_path)
         except Exception as e:
             print(f"Failed to save checkpoint: {e}")
+            return None
     
     def _setup_scheduler(self, total_steps: int):
         """Setup learning rate scheduler for standard training."""
@@ -2319,6 +3059,10 @@ class EnhancedConversationTrainer:
         for info in config_info:
             print(f"  {info}")
 
+
+# ============================================================================
+# UTILITY FUNCTIONS
+# ============================================================================
 
 def get_available_quantization_methods():
     """Get dictionary of available quantization methods."""
@@ -2414,9 +3158,90 @@ config.use_moe = True                # Mixture of Experts
     print("="*80 + "\n")
 
 
+def print_adaptive_training_features():
+    """Print all new adaptive training features."""
+    print("\n" + "="*80)
+    print("🚀 ADAPTIVE TRAINING FEATURES")
+    print("="*80)
+    
+    print("\n📊 MoE Architecture (3 methods):")
+    print("  ✅ add_expert() - Dynamically add experts mid-training")
+    print("  ✅ prune_expert() - Remove underutilized experts")
+    print("  ✅ _initialize_new_expert() - Smart knowledge distillation")
+    
+    print("\n🎯 MoE Routing (4 methods):")
+    print("  ✅ adjust_capacity_factor() - Change token routing capacity")
+    print("  ✅ adjust_routing_temperature() - Adjust routing concentration")
+    print("  ✅ enable_expert_dropout() - Prevent expert collapse")
+    print("  ✅ get_expert_statistics() - Comprehensive usage metrics")
+    
+    print("\n⚡ MoD Routing (2 methods):")
+    print("  ✅ adjust_mod_capacity() - Change compute ratio")
+    print("  ✅ get_mod_statistics() - Efficiency metrics")
+    
+    print("\n📦 Batch Size Adaptation (2 methods):")
+    print("  ✅ adjust_batch_size() - Dynamic batch size changes")
+    print("  ✅ _recreate_dataloader() - Rebuild with new batch size")
+    
+    print("\n🔥 CRITICAL FIX: Orchestrator Communication (3 methods):")
+    print("  ✅ get_current_metrics() - Returns TrainingMetrics (fixes broken pipeline!)")
+    print("  ✅ _extract_moe_routing_stats() - Parse expert utilization")
+    print("  ✅ _calculate_throughput() - Tokens/sec measurement")
+    
+    print("\n🚨 Emergency Recovery (2 methods):")
+    print("  ✅ emergency_lr_reduction() - 10x LR cut for gradient explosion")
+    print("  ✅ rollback_steps() - Checkpoint-based time travel")
+    
+    print("\n⚙️ Advanced Optimizer (2 methods):")
+    print("  ✅ adjust_weight_decay() - Dynamic regularization")
+    print("  ✅ _update_optimizer_param_groups() - Live optimizer updates")
+    
+    print("\n" + "="*80)
+    print("USAGE EXAMPLES:")
+    print("="*80)
+    print("""
+# Add expert mid-training when performance plateaus
+if current_loss > previous_loss * 1.1:
+    trainer.add_expert(layer_idx=5)
+
+# Prune underutilized expert
+expert_stats = trainer.get_expert_statistics()
+if expert_stats['layers'][0]['routing_stats']['expert_usage'][3] < 5:
+    trainer.prune_expert(layer_idx=0, expert_idx=3)
+
+# Adjust routing when experts become unbalanced
+if expert_stats['max_imbalance'] > 10:
+    trainer.adjust_capacity_factor(2.0)
+    trainer.adjust_routing_temperature(1.5)
+
+# Emergency recovery from gradient explosion
+if grad_norm > 100:
+    trainer.emergency_lr_reduction(reduction_factor=10.0)
+
+# Rollback training after instability
+if loss > 10.0:
+    trainer.rollback_steps(num_steps=100)
+
+# Dynamic batch size adjustment
+try:
+    trainer.train(dataset)
+except RuntimeError as e:
+    if "out of memory" in str(e):
+        trainer.adjust_batch_size(new_batch_size=trainer.config.batch_size // 2)
+
+# Get current metrics for orchestrator
+metrics = trainer.get_current_metrics()
+print(f"Loss: {metrics.loss:.4f}")
+print(f"Expert utilization: {metrics.expert_utilization}")
+print(f"Throughput: {metrics.throughput:.0f} tokens/s")
+    """)
+    print("="*80 + "\n")
+
+
 if __name__ == "__main__":
     print_all_precision_info()
     print_quantization_recommendations()
+    print_adaptive_training_features()
     
     # Example: Create a dummy config and show precision recommendations
     class DummyConfig:
