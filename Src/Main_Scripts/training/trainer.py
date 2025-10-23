@@ -988,6 +988,28 @@ class EnhancedConversationTrainer:
         # Setup training components
         self._setup_training()
 
+    def get_current_metrics(self):
+        """Get current training metrics for orchestrator monitoring."""
+        from orchestrator import TrainingMetrics
+        from datetime import datetime
+
+        return TrainingMetrics(
+            epoch=self.current_epoch,
+            step=self.global_step,
+            loss=self.metrics.get('train_losses', [0])[-1] if self.metrics.get('train_losses') else 0.0,
+            grad_norm=self.metrics.get('gradient_norms', [0])[-1] if self.metrics.get('gradient_norms') else 0.0,
+            learning_rate=self.metrics.get('learning_rates', [0])[-1] if self.metrics.get('learning_rates') else 0.0,
+            expert_utilization={},  # Add MoE routing stats if available
+            memory_usage={
+                'gpu_memory_percent': torch.cuda.memory_allocated() / torch.cuda.get_device_properties(0).total_memory * 100 if torch.cuda.is_available() else 0
+            },
+            throughput=self.metrics.get('throughput', [0])[-1] if self.metrics.get('throughput') else 0.0,
+            semantic_coherence=0.0,  # Placeholder
+            factual_accuracy=0.0,    # Placeholder
+            reasoning_score=0.0,     # Placeholder
+            timestamp=datetime.now()
+        )
+
     def train_with_oom_fallback(self, train_dataset, eval_dataset=None):
         """Train with automatic batch size reduction on OOM errors."""
         original_batch_size = self.config.batch_size
