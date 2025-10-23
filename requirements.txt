@@ -1,36 +1,15 @@
-# Core ML/Deep Learning
-torch>=2.0.0
-numpy>=1.24.0
-
-# Tokenization
-tiktoken>=0.5.0
-
-# Data Processing
+torch>=2.1.0
+numpy>=1.25.0
+tiktoken>=0.5.1
 datasets>=2.14.0
 huggingface_hub>=0.17.0
-
-# System Monitoring
 psutil>=5.9.0
-
-# Configuration
 PyYAML>=6.0
-
-# HTTP Requests & Downloads
 requests>=2.31.0
-
-# DeepSpeed (for distributed training)
-deepspeed>=0.10.0
-
-# Flash Attention (CUDA only, significant speedup)
-flash-attn>=2.0.0
-
-# Triton (for custom kernels)
-triton>=2.0.0
-
-# Quantization Support
-bitsandbytes>=0.41.0
-auto-gptq>=0.4.0
-optimum>=1.12.0
-
-# Monitoring & Logging
+deepspeed>=0.11.0
+flash-attn>=2.0.1
+triton>=2.1.0
+bitsandbytes>=0.41.1
+auto-gptq>=0.4.1
+optimum>=1.13.0
 wandb>=0.15.0
