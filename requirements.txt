@@ -1,54 +1,36 @@
-# Core Dependencies
-torch>=2.1.0
+# Core ML/Deep Learning
+torch>=2.0.0
 numpy>=1.24.0
+
+# Tokenization
 tiktoken>=0.5.0
 
-# Training Infrastructure
-pyyaml>=6.0
+# Data Processing
+datasets>=2.14.0
+huggingface_hub>=0.17.0
+
+# System Monitoring
 psutil>=5.9.0
 
-# Optional: High-Performance Training
-deepspeed>=0.12.0  # Multi-GPU training, ZeRO optimization
-flash-attn>=2.0.0  # Flash Attention 2 (requires CUDA, compile from source)
+# Configuration
+PyYAML>=6.0
 
-# Optional: Quantization (for memory efficiency)
-bitsandbytes>=0.41.0  # 8-bit/4-bit quantization
-# auto-gptq>=0.5.0  # Alternative 4-bit quantization
-# optimum>=1.14.0  # Hugging Face optimization tools
+# HTTP Requests & Downloads
+requests>=2.31.0
 
-# Optional: Monitoring & Logging
-wandb>=0.16.0  # Weights & Biases logging
-# tensorboard>=2.15.0  # TensorBoard logging
-wikipedia-api
-beautifulsoup4
-requests
+# DeepSpeed (for distributed training)
+deepspeed>=0.10.0
 
-# Optional: Performance
-# triton>=2.1.0  # Triton kernels (auto-installed with PyTorch 2.1+)
+# Flash Attention (CUDA only, significant speedup)
+flash-attn>=2.0.0
 
-# Development Tools (optional)
-# pytest>=7.4.0
-# black>=23.0.0
-# pylint>=3.0.0
+# Triton (for custom kernels)
+triton>=2.0.0
 
-# Data Processing
-# pandas>=2.0.0  # For data analysis
-datasets>=2.14.0  # Hugging Face datasets library
+# Quantization Support
+bitsandbytes>=0.41.0
+auto-gptq>=0.4.0
+optimum>=1.12.0
 
-# System Requirements:
-# - Python 3.9+
-# - CUDA 11.8+ (for GPU training)
-# - 16GB+ RAM recommended
-# - For MPS (Apple Silicon): PyTorch with MPS support (automatically included in torch>=2.0)
-
-# Installation Notes:
-# 1. Basic install (CPU/MPS): pip install torch numpy tiktoken pyyaml psutil
-# 2. GPU install: pip install torch --index-url https://download.pytorch.org/whl/cu118
-# 3. Flash Attention (optional, CUDA only): pip install flash-attn --no-build-isolation
-# 4. DeepSpeed (optional, multi-GPU): pip install deepspeed
-# 5. Quantization (optional): pip install bitsandbytes
-
-# Platform-Specific Notes:
-# - Windows: DeepSpeed not officially supported, use WSL2
-# - macOS (Apple Silicon): MPS support built into torch>=2.0, skip flash-attn and deepspeed
-# - Linux: All features supported with proper CUDA installation
+# Monitoring & Logging
+wandb>=0.15.0

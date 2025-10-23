@@ -878,8 +878,8 @@ class ConfigPresets:
         """1B active parameter model (8x1B = 8B total)."""
         return Config(
             # Model architecture for ~1B active parameters
-            hidden_size=1536,
-            num_layers=16,
+            hidden_size=1908,
+            num_layers=31,
             num_heads=12,
             num_kv_heads=4,
             seq_length=2048,
