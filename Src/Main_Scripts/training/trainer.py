@@ -37,6 +37,14 @@ except ImportError:
     HF_BNB_AVAILABLE = False
 
 try:
+    import wandb
+    WANDB_AVAILABLE = True
+    logging.info("WandB available for experiment tracking")
+except ImportError:
+    WANDB_AVAILABLE = False
+    logging.warning("WandB not available - install with: pip install wandb")
+
+try:
     import auto_gptq
     GPTQ_AVAILABLE = True
     logging.info("AutoGPTQ available for 4-bit quantization")
@@ -2991,17 +2999,27 @@ class EnhancedConversationTrainer:
             return None
     
     def _setup_scheduler(self, total_steps: int):
-        """Setup learning rate scheduler for standard training."""
+        """Setup learning rate scheduler with warmup."""
         warmup_ratio = getattr(self.config, 'warmup_ratio', 0.1)
         warmup_steps = int(total_steps * warmup_ratio)
-        
+
         lr_scheduler = getattr(self.config, 'lr_scheduler', 'linear')
-        
+
         if lr_scheduler == "cosine":
-            self.scheduler = CosineAnnealingLR(
-                self.optimizer, T_max=total_steps, 
-                eta_min=getattr(self.config, 'min_lr', 1e-6)
-            )
+            from torch.optim.lr_scheduler import LambdaLR
+
+            def lr_lambda(current_step: int):
+                if current_step < warmup_steps:
+                    # Warmup: 0 -> 1.0
+                    return float(current_step) / float(max(1, warmup_steps))
+                else:
+                    # Cosine decay: 1.0 -> min_lr_ratio
+                    progress = (current_step - warmup_steps) / (total_steps - warmup_steps)
+                    min_lr_ratio = self.config.min_lr / self.config.learning_rate
+                    return max(min_lr_ratio, 0.5 * (1.0 + math.cos(math.pi * progress)))
+
+            self.scheduler = LambdaLR(self.optimizer, lr_lambda)
+
         elif lr_scheduler == "onecycle":
             self.scheduler = OneCycleLR(
                 self.optimizer, max_lr=self.config.learning_rate,
