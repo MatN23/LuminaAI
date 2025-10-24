@@ -1304,7 +1304,7 @@ def main():
 
     # Training parameters
     training_params = {
-        'use_moe': False,
+        'use_moe': True,
         'use_mod': True,
         'num_epochs': 20,
         'learning_rate': 1e-4,
@@ -1312,12 +1312,12 @@ def main():
         'lr_scheduler': "cosine",
         'batch_size': 20,
         'gradient_accumulation_steps': 8,
-        'precision': "fp16",
-        'inference_precision': "fp16",
+        'precision': "fp32",
+        'inference_precision': "fp32",
         
         # Comment these out if your not using MoE
-        'num_experts': None,
-        'moe_top_k': None,
+        'num_experts': 8,
+        'moe_top_k': 1,
         
         'compile': True,
         'max_memory_usage': 0.85,
@@ -1325,7 +1325,7 @@ def main():
         'eval_every_n_batches': 500,
         'use_flash_attention': True,
         'gradient_checkpointing': True,
-        'num_workers': 2,
+        'num_workers': 0,
         'save_total_limit': 5,
         'weight_decay': 0.01,
     }
@@ -1398,7 +1398,7 @@ def main():
     # DeepSpeed configuration
     deepspeed_params = {
         'use_deepspeed': False,
-        'cpu_offload': False,
+        'cpu_offload': True,
         'cpu_offload_optimizer': False,
         'cpu_offload_parameters': False,
         'zero_stage': 2,
@@ -1408,8 +1408,8 @@ def main():
     
     # Quantization configuration
     quantization_params = {
-        'quantization_method': 'bnb',  # Options: None, 'bnb', 'gptq', 'quanto'
-        'quantization_bits': 8,  # Options: None, 4, 8
+        'quantization_method': None,  # Options: None, 'bnb', 'gptq', 'quanto'
+        'quantization_bits': None,  # Options: None, 4, 8
     }
     # Add these to your monitoring_params or create a new checkpoint_params section:
     checkpoint_params = {
@@ -1697,6 +1697,19 @@ def main():
         print("Initializing model architecture...")
         model = DeepSeekTransformer(model_config)
         
+
+        def init_weights_for_fp16(module):
+            if isinstance(module, (nn.Linear, nn.Embedding)):
+                # Use smaller std for FP16 stability
+                module.weight.data.normal_(mean=0.0, std=0.02)
+                if isinstance(module, nn.Linear) and module.bias is not None:
+                    module.bias.data.zero_()
+            elif isinstance(module, nn.LayerNorm):
+                module.bias.data.zero_()
+                module.weight.data.fill_(1.0)
+
+        model.apply(init_weights_for_fp16)
+        print("✓ Applied FP16-safe weight initialization")
         total_params = sum(p.numel() for p in model.parameters())
         trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         

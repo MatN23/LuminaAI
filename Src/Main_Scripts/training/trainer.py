@@ -552,8 +552,9 @@ class QuantizationManager:
     
     def get_bnb_config(self) -> Optional[Dict[str, Any]]:
         """Get BitsAndBytes quantization configuration."""
-        if not BNB_AVAILABLE or self.quantization_method != 'bnb':
-            return None
+        if self.quantization_method == 'bnb' and not BNB_AVAILABLE:
+            self.quantization_method = None
+            self.quantization_bits = None
             
         if self.quantization_bits == 8:
             return {
@@ -572,30 +573,30 @@ class QuantizationManager:
         
         return None
     
-    def quantize_model_bnb(self, model):
-        """Apply BitsAndBytes quantization to model."""
-        if not BNB_AVAILABLE:
-            raise ValueError("BitsAndBytes not available")
-        
-        config = self.get_bnb_config()
-        if not config:
-            return model
-            
-        logging.info(f"Applying BitsAndBytes {self.quantization_bits}-bit quantization...")
-        
+    def get_bnb_config(self) -> Optional[Dict[str, Any]]:
+        """Get BitsAndBytes quantization configuration."""
+        # Auto-disable BnB if unavailable
+        if self.quantization_method == 'bnb' and not BNB_AVAILABLE:
+            self.quantization_method = None
+            self.quantization_bits = None
+            return None  # exit immediately
+
         if self.quantization_bits == 8:
-            model = self._replace_linear_layers_8bit(model)
+            return {
+                'load_in_8bit': True,
+                'llm_int8_threshold': 6.0,
+                'llm_int8_has_fp16_weight': False,
+                'llm_int8_enable_fp32_cpu_offload': getattr(self.config, 'cpu_offload', False)
+            }
         elif self.quantization_bits == 4:
-            logging.warning("4-bit quantization with BnB should ideally be done at model initialization")
-        
-        self.is_quantized = True
-        self.quantization_info = {
-            'method': 'bnb',
-            'bits': self.quantization_bits,
-            'config': config
-        }
-        
-        return model
+            return {
+                'load_in_4bit': True,
+                'bnb_4bit_use_double_quant': True,
+                'bnb_4bit_quant_type': 'nf4',
+                'bnb_4bit_compute_dtype': torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+            }
+
+        return None
     
     def _replace_linear_layers_8bit(self, model):
         """Replace Linear layers with 8-bit equivalents."""
@@ -2414,37 +2415,44 @@ class EnhancedConversationTrainer:
         }
     
     def _standard_optimizer_step(self) -> Dict[str, float]:
-        """Standard optimizer step with precision awareness."""
+        """Standard optimizer step with precision awareness - FIXED."""
+
+        # Unscale gradients if using mixed precision
         if self.use_amp and self.scaler is not None:
-            self.scaler.unscale_(self.optimizer)
-        
+            if self.precision_manager.train_precision in ['mixed_fp16', 'mixed_bf16', 'mixed_fp8']:
+                self.scaler.unscale_(self.optimizer)
+
+        # Clip gradients
         max_grad_norm = getattr(self.config, 'max_grad_norm', 1.0)
         grad_norm = torch.nn.utils.clip_grad_norm_(
             self.model.parameters(), max_grad_norm
         )
-        
+
+        # Check for NaN/Inf gradients BEFORE taking step
         if torch.isnan(grad_norm) or torch.isinf(grad_norm):
             print("NaN/Inf gradients detected, skipping step")
-            if self.quantization_manager.is_quantized:
-                print("This might be related to quantization - consider reducing learning rate")
             self.optimizer.zero_grad(set_to_none=True)
-            if self.use_amp and self.scaler is not None:
-                self.scaler.update()
+            # DO NOT update scaler here - let it detect the skip naturally
             return {'grad_norm': 0.0, 'lr': 0.0}
-        
+
+        # Take optimizer step
         if self.use_amp and self.scaler is not None:
+            # Scaler will skip the step if gradients are invalid
             self.scaler.step(self.optimizer)
-            self.scaler.update()
+            self.scaler.update()  # Update AFTER step
         else:
             self.optimizer.step()
-        
+
+        # Zero gradients AFTER successful step
         self.optimizer.zero_grad(set_to_none=True)
-        
+
+        # Update scheduler
         if self.scheduler:
             self.scheduler.step()
-        
+
+        # Get current learning rate
         current_lr = self.scheduler.get_last_lr()[0] if self.scheduler else self.config.learning_rate
-        
+
         return {'grad_norm': grad_norm.item(), 'lr': current_lr}
     
     @torch.no_grad()
@@ -2832,6 +2840,7 @@ class EnhancedConversationTrainer:
         if not self.use_deepspeed:
             gradient_accumulation_steps = getattr(self.config, 'gradient_accumulation_steps', 1)
             total_steps = len(train_dataloader) * self.config.num_epochs // gradient_accumulation_steps
+            total_steps = 200  # ← Set your desired number here!
             self._setup_scheduler(total_steps)
         
         self._log_training_config(len(train_dataloader))
