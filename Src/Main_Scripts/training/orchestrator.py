@@ -54,11 +54,39 @@ class AdaptiveDecision:
 class MetaLearningEngine:
     """Learns how to train more effectively over time."""
     
-    def __init__(self):
+    def __init__(self, orchestrator=None):
         self.training_history = []
         self.successful_strategies = []
         self.meta_model = None
         self.adaptation_buffer = deque(maxlen=1000)
+        self.orchestrator = orchestrator  # Store reference to get model params
+
+    def _synthesize_suggestions(self, successful_patterns, current_metrics):
+        """Synthesize hyperparameter suggestions from successful patterns."""
+        if not successful_patterns:
+            return {}
+
+        # Average successful hyperparameters
+        avg_lr = np.mean([p['config'].get('learning_rate', self.orchestrator.config.learning_rate if self.orchestrator else 0.001) 
+                            for p in successful_patterns])
+        
+        suggestions = {
+            'learning_rate': {
+                'value': avg_lr,
+                'confidence': min(len(successful_patterns) / 10.0, 0.9)
+            }
+        }
+
+        # Add batch size suggestions if available
+        batch_sizes = [p['config'].get('batch_size') for p in successful_patterns if 'batch_size' in p['config']]
+        if batch_sizes:
+            avg_batch_size = int(np.mean(batch_sizes))
+            suggestions['batch_size'] = {
+                'value': avg_batch_size,
+                'confidence': min(len(batch_sizes) / 10.0, 0.8)
+            }
+
+        return suggestions
         
     def record_training_outcome(self, config, metrics, final_performance):
         """Record the outcome of a training run for meta-learning."""
@@ -96,19 +124,26 @@ class MetaLearningEngine:
         """Suggest hyperparameter adjustments based on meta-learning."""
         if len(self.training_history) < 3:
             return self._conservative_suggestions(current_metrics)
-        
+
+        # Get model params from orchestrator
+        current_params = 0
+        current_device = 'cpu'
+        if self.orchestrator and self.orchestrator.model:
+            current_params = sum(p.numel() for p in self.orchestrator.model.parameters())
+            current_device = str(self.orchestrator.device.type)
+
         # Find similar training scenarios
-        similar_runs = self._find_similar_runs(current_metrics, config)
-        
+        similar_runs = self._find_similar_runs(current_metrics, config, current_params, current_device)
+
         # Extract successful patterns
         successful_patterns = [run for run in similar_runs if run['success_score'] > 0.7]
-        
+
         if not successful_patterns:
             return self._exploratory_suggestions(current_metrics)
-        
+
         # Generate suggestions based on successful patterns
         suggestions = self._synthesize_suggestions(successful_patterns, current_metrics)
-        
+
         return suggestions
     
     def _conservative_suggestions(self, current_metrics):
@@ -125,35 +160,57 @@ class MetaLearningEngine:
             'warmup_steps': {'value': 500, 'confidence': 0.5}
         }
     
-    def _find_similar_runs(self, current_metrics, config):
-        """Find training runs with similar characteristics."""
-        # Simple similarity based on loss range
+    def _find_similar_runs(self, current_metrics, config, current_model_params, current_device):
+        """Find training runs with similar characteristics using multi-dimensional similarity."""
         similar = []
-        current_loss = current_metrics.loss
-        
+
         for run in self.training_history:
-            if len(run['metrics_progression']) > 0:
-                initial_loss = run['metrics_progression'][0].get('loss', float('inf'))
-                if abs(initial_loss - current_loss) < 2.0:  # Within 2.0 loss units
-                    similar.append(run)
-        
-        return similar
+            if len(run['metrics_progression']) == 0:
+                continue
+                
+            similarity_score = self._calculate_run_similarity(
+                current_metrics, 
+                run, 
+                current_model_params,
+                current_device
+            )
+
+            # ✅ Use threshold of 0.6 for similarity
+            if similarity_score > 0.6:
+                similar.append((run, similarity_score))
+
+        # Return sorted by similarity (most similar first)
+        similar.sort(key=lambda x: x[1], reverse=True)
+        return [run for run, score in similar]
     
-    def _synthesize_suggestions(self, successful_patterns, current_metrics):
-        """Synthesize suggestions from successful patterns."""
-        if not successful_patterns:
-            return {}
-        
-        # Average successful hyperparameters
-        avg_lr = sum(p['config'].get('learning_rate', 0.0001) for p in successful_patterns) / len(successful_patterns)
-        
-        return {
-            'learning_rate': {
-                'value': avg_lr,
-                'confidence': 0.7,
-                'reason': f'Average LR from {len(successful_patterns)} successful runs'
-            }
-        }
+    def _calculate_run_similarity(self, current_metrics, historical_run, current_params, current_device):
+        """Calculate multi-dimensional similarity score between current and historical runs."""
+        score = 0.0
+    
+        # Loss similarity (weight: 0.4)
+        initial_loss = historical_run['metrics_progression'][0].get('loss', float('inf'))
+        if initial_loss < float('inf'):
+            loss_diff = abs(current_metrics.loss - initial_loss)
+            loss_similarity = max(0, 1.0 - loss_diff / 5.0)  # Normalize by max expected diff
+            score += 0.4 * loss_similarity
+
+        # Model size similarity (weight: 0.3)
+        if 'model_params' in historical_run and current_params > 0:
+            hist_params = historical_run['model_params']
+            size_ratio = min(current_params, hist_params) / max(current_params, hist_params)
+            score += 0.3 * size_ratio
+
+        # Hardware similarity (weight: 0.2)
+        if historical_run.get('device_type') == current_device:
+            score += 0.2
+
+        # Architecture similarity (weight: 0.1)
+        if historical_run['config'].get('use_moe') == getattr(self.config, 'use_moe', False):
+            score += 0.05
+        if historical_run['config'].get('use_mod') == getattr(self.config, 'use_mod', False):
+            score += 0.05
+
+        return score
     
     def predict_training_trajectory(self, current_metrics, config):
         """Predict how training will progress."""
@@ -328,12 +385,20 @@ class ArchitectureEvolution:
         return suggestions
 
 class RealTimeAnalytics:
-    """Provides real-time insights into training progress."""
-    
     def __init__(self):
         self.metrics_buffer = deque(maxlen=1000)
         self.anomaly_detector = None
         self.trend_analyzer = None
+        
+        # ✅ Configurable thresholds
+        self.anomaly_thresholds = {
+            'loss_spike_std_multiplier': 2.0,  # Standard deviations for loss spike
+            'loss_spike_min_increase': 0.1,     # Minimum absolute increase to flag
+            'gradient_explosion_threshold': 100.0,
+            'gradient_explosion_relative': 10.0,  # 10x historical mean
+            'min_buffer_size': 50,
+            'recent_window': 10,
+        }
         
     def analyze_loss_dynamics(self, recent_metrics):
         """Analyze loss curve dynamics for insights."""
@@ -360,39 +425,88 @@ class RealTimeAnalytics:
         return insights
     
     def detect_training_anomalies(self, current_metrics):
-        """Detect unusual patterns in training."""
-        if len(self.metrics_buffer) < 50:
+        """Detect unusual patterns in training using adaptive thresholds."""
+        if len(self.metrics_buffer) < self.anomaly_thresholds['min_buffer_size']:
             self.metrics_buffer.append(current_metrics)
             return None
-        
+
         self.metrics_buffer.append(current_metrics)
-        
-        # Check for sudden loss spikes
-        recent_losses = [m.loss for m in list(self.metrics_buffer)[-10:]]
-        historical_losses = [m.loss for m in list(self.metrics_buffer)[-50:-10]]
-        
+
+        # ✅ Configurable windows
+        recent_window = self.anomaly_thresholds['recent_window']
+        recent_losses = [m.loss for m in list(self.metrics_buffer)[-recent_window:]]
+        historical_losses = [m.loss for m in list(self.metrics_buffer)[-50:-recent_window]]
+
+        if not historical_losses:
+            return None
+
         recent_mean = np.mean(recent_losses)
         historical_mean = np.mean(historical_losses)
         historical_std = np.std(historical_losses)
-        
+
         anomalies = []
-        
-        if recent_mean > historical_mean + 2 * historical_std:
+
+        # ✅ Adaptive loss spike detection
+        std_multiplier = self.anomaly_thresholds['loss_spike_std_multiplier']
+        min_increase = self.anomaly_thresholds['loss_spike_min_increase']
+
+        threshold = historical_mean + std_multiplier * historical_std
+        absolute_increase = recent_mean - historical_mean
+
+        if recent_mean > threshold and absolute_increase > min_increase:
+            severity = 'critical' if absolute_increase > 1.0 else 'high'
             anomalies.append({
                 'type': 'loss_spike',
-                'severity': 'high',
-                'description': f'Loss increased significantly: {recent_mean:.3f} vs {historical_mean:.3f}'
+                'severity': severity,
+                'description': f'Loss increased significantly: {recent_mean:.3f} vs {historical_mean:.3f} (+{absolute_increase:.3f})',
+                'relative_increase': absolute_increase / historical_mean
             })
+
+        # ✅ Adaptive gradient explosion detection
+        abs_threshold = self.anomaly_thresholds['gradient_explosion_threshold']
+        relative_threshold = self.anomaly_thresholds['gradient_explosion_relative']
+
+        # Calculate historical gradient norm mean
+        historical_grad_norms = [m.grad_norm for m in list(self.metrics_buffer)[-50:-recent_window] if m.grad_norm > 0]
+
+        is_explosion = current_metrics.grad_norm > abs_threshold
         
-        # Check for gradient explosion
-        if current_metrics.grad_norm > 100:
+        if historical_grad_norms:
+            hist_grad_mean = np.mean(historical_grad_norms)
+            is_explosion = is_explosion or (current_metrics.grad_norm > hist_grad_mean * relative_threshold)
+    
+        if is_explosion:
             anomalies.append({
                 'type': 'gradient_explosion',
                 'severity': 'critical',
-                'description': f'Gradient norm extremely high: {current_metrics.grad_norm:.2f}'
+                'description': f'Gradient norm extremely high: {current_metrics.grad_norm:.2f}',
+                'threshold_used': abs_threshold
             })
-        
+
+        # ✅ New: Detect expert collapse in MoE
+        if hasattr(current_metrics, 'expert_utilization') and current_metrics.expert_utilization:
+            expert_usage = list(current_metrics.expert_utilization.values())
+            if expert_usage:
+                max_usage = max(expert_usage)
+                min_usage = min(expert_usage)
+
+                if min_usage < 0.01 and max_usage > 0.5:  # One expert < 1%, another > 50%
+                    anomalies.append({
+                        'type': 'expert_collapse',
+                        'severity': 'high',
+                        'description': f'Expert imbalance detected: min={min_usage:.1%}, max={max_usage:.1%}'
+                    })
+
         return anomalies if anomalies else None
+
+def update_anomaly_thresholds(self, threshold_name: str, new_value: float):
+    """Allow dynamic threshold adjustment."""
+    if threshold_name in self.anomaly_thresholds:
+        old_value = self.anomaly_thresholds[threshold_name]
+        self.anomaly_thresholds[threshold_name] = new_value
+        logging.info(f"Updated anomaly threshold '{threshold_name}': {old_value} -> {new_value}")
+    else:
+        logging.warning(f"Unknown threshold name: {threshold_name}")
     
     def _predict_convergence(self, coeffs, current_step):
         """Predict when training will converge."""
@@ -476,7 +590,7 @@ class AdaptiveTrainingOrchestrator:
         self.experiment_dir.mkdir(parents=True, exist_ok=True)
         
         # Adaptive intelligence components
-        self.meta_learner = MetaLearningEngine()
+        self.meta_learner = MetaLearningEngine(orchestrator=self)
         self.hyperparameter_optimizer = AdaptiveHyperparameterOptimizer()
         self.architecture_evolution = ArchitectureEvolution()
         self.analytics = RealTimeAnalytics()
@@ -1122,7 +1236,7 @@ class AdaptiveTrainingOrchestrator:
         """Setup datasets with adaptive loading strategies."""
         logging.info("Setting up datasets with adaptive loading...")
 
-        # USE HybridDatasetManager instead of direct file loading!
+        # ✅ USE HybridDatasetManager instead of direct file loading!
         try:
             from core.dataset import setup_datasets
 

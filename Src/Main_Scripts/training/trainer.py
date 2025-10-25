@@ -1058,7 +1058,7 @@ class EnhancedConversationTrainer:
     def get_current_metrics(self):
         """
         🔥 CRITICAL FIX: Get current training metrics for orchestrator monitoring.
-        
+    
         This fixes the broken communication between trainer and orchestrator.
         Returns a TrainingMetrics object with all current training state.
         """
@@ -1068,7 +1068,7 @@ class EnhancedConversationTrainer:
             # Fallback if orchestrator not available
             from dataclasses import dataclass
             from datetime import datetime
-            
+
             @dataclass
             class TrainingMetrics:
                 epoch: int
@@ -1098,7 +1098,6 @@ class EnhancedConversationTrainer:
             reasoning_score=0.0,     # Placeholder for future implementation
             timestamp=datetime.now()
         )
-    
     def _extract_moe_routing_stats(self) -> Dict[str, float]:
         """
         🆕 Extract MoE expert utilization statistics from the model.
@@ -1246,32 +1245,45 @@ class EnhancedConversationTrainer:
             traceback.print_exc()
     
     def _initialize_new_expert(self, new_expert: nn.Module, existing_experts: nn.ModuleList):
-        """
-        🆕 Initialize new expert using knowledge distillation from existing experts.
-        
-        Uses average of existing expert weights as initialization.
-        """
+        """Initialize new expert using knowledge distillation from existing experts."""
         if len(existing_experts) == 0:
+            logging.info("No existing experts to initialize from, using random initialization")
             return
-        
+    
+        initialized_params = []
+        missing_params = []
+
         with torch.no_grad():
+            # Build expert parameter dict once for efficiency
+            expert_params_list = [dict(expert.named_parameters()) for expert in existing_experts]
+
             # Average weights from existing experts
             for name, param in new_expert.named_parameters():
                 avg_param = torch.zeros_like(param)
                 count = 0
-                
-                for expert in existing_experts:
-                    try:
-                        expert_param = dict(expert.named_parameters())[name]
-                        avg_param += expert_param.data
+
+                for expert_params in expert_params_list:
+                    if name in expert_params:
+                        avg_param += expert_params[name].data
                         count += 1
-                    except KeyError:
-                        continue
-                
+
                 if count > 0:
+                    # ✅ Successfully initialized from existing experts
                     param.data = avg_param / count
                     # Add small noise for diversity
                     param.data += torch.randn_like(param) * 0.01
+                    initialized_params.append(name)
+                else:
+                    # ✅ Initialize with small random values
+                    torch.nn.init.normal_(param, mean=0.0, std=0.02)
+                    missing_params.append(name)
+
+        # ✅ Provide visibility into initialization process
+        logging.info(f"Expert initialization complete:")
+        logging.info(f"  Initialized from existing experts: {len(initialized_params)} parameters")
+        if missing_params:
+            logging.warning(f"  Randomly initialized (no match found): {len(missing_params)} parameters")
+            logging.debug(f"  Missing parameter names: {missing_params[:5]}..." if len(missing_params) > 5 else f"  Missing parameter names: {missing_params}")
     
     def prune_expert(self, layer_idx: int, expert_idx: int):
         """
@@ -2425,10 +2437,9 @@ class EnhancedConversationTrainer:
     def _standard_optimizer_step(self) -> Dict[str, float]:
         """Standard optimizer step with precision awareness - FIXED."""
 
-        # Unscale gradients if using mixed precision
+        # ✅ CRITICAL FIX: Only unscale for FP16 (scaler only exists for FP16)
         if self.use_amp and self.scaler is not None:
-            if self.precision_manager.train_precision in ['mixed_fp16', 'mixed_bf16', 'mixed_fp8']:
-                self.scaler.unscale_(self.optimizer)
+            self.scaler.unscale_(self.optimizer)  # Scaler only exists for FP16 anyway
 
         # Clip gradients
         max_grad_norm = getattr(self.config, 'max_grad_norm', 1.0)
@@ -2440,14 +2451,17 @@ class EnhancedConversationTrainer:
         if torch.isnan(grad_norm) or torch.isinf(grad_norm):
             print("NaN/Inf gradients detected, skipping step")
             self.optimizer.zero_grad(set_to_none=True)
-            # DO NOT update scaler here - let it detect the skip naturally
+
+            # ✅ CRITICAL: Update scaler to maintain internal state
+            if self.use_amp and self.scaler is not None:
+                self.scaler.update()  # This updates the loss scale counter
+
             return {'grad_norm': 0.0, 'lr': 0.0}
 
         # Take optimizer step
         if self.use_amp and self.scaler is not None:
-            # Scaler will skip the step if gradients are invalid
             self.scaler.step(self.optimizer)
-            self.scaler.update()  # Update AFTER step
+            self.scaler.update()
         else:
             self.optimizer.step()
 
@@ -2462,7 +2476,7 @@ class EnhancedConversationTrainer:
         current_lr = self.scheduler.get_last_lr()[0] if self.scheduler else self.config.learning_rate
 
         return {'grad_norm': grad_norm.item(), 'lr': current_lr}
-    
+
     @torch.no_grad()
     def evaluate(self, eval_dataset, max_batches: int = 100) -> Dict[str, float]:
         """Enhanced evaluation with proper perplexity calculation and precision support."""
@@ -2904,7 +2918,8 @@ class EnhancedConversationTrainer:
                     
                     # Keep only recent checkpoints
                     if len(self.checkpoint_history) > self.max_checkpoint_history:
-                        self.checkpoint_history.pop(0)
+                        old_checkpoint = self.checkpoint_history.pop(0)
+                        self._cleanup_old_checkpoint(old_checkpoint)
                 
                 self.current_epoch = epoch + 1
                 
@@ -2997,6 +3012,20 @@ class EnhancedConversationTrainer:
         except Exception as e:
             print(f"Failed to save checkpoint: {e}")
             return None
+    def _cleanup_old_checkpoint(self, checkpoint_info: Dict[str, Any]):
+        """Remove old checkpoint to save disk space."""
+        try:
+            checkpoint_path = Path(checkpoint_info['path'])
+            if checkpoint_path.exists():
+                if checkpoint_path.is_dir():
+                    import shutil
+                    shutil.rmtree(checkpoint_path)
+                else:
+                    checkpoint_path.unlink()
+                logging.info(f"Cleaned up old checkpoint: {checkpoint_path}")
+        except Exception as e:
+            logging.warning(f"Failed to cleanup checkpoint {checkpoint_info['path']}: {e}")
+
     
     def _setup_scheduler(self, total_steps: int):
         """Setup learning rate scheduler with warmup."""
