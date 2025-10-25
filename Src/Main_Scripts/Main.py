@@ -1828,7 +1828,14 @@ def main():
         
         print(f"✅ Trainer initialized: {type(orchestrator.trainer).__name__}")
         print(f"✅ Trainer has train method: {hasattr(orchestrator.trainer, 'train')}")
-        print(f"✅ Model device: {orchestrator.trainer.device}")
+
+        # ✅ SAFE device check (fallback trainer may not have device)
+        try:
+            device = orchestrator.trainer.device if hasattr(orchestrator.trainer, 'device') else 'unknown'
+            print(f"✅ Model device: {device}")
+        except:
+            print(f"✅ Model device: unknown (using fallback trainer)")
+
         print(f"✅ Model parameters: {sum(p.numel() for p in orchestrator.model.parameters()):,}")
         print("="*80)
         
