@@ -1815,24 +1815,22 @@ def main():
         print("")
         print("Press Ctrl+C at any time to gracefully stop training and save progress")
         print("="*80)
-        start_epoch = 0
-        if checkpoint_params.get('resume_training') and checkpoint_params.get('resume_from_checkpoint'):
-            try:
-                checkpoint_info = load_checkpoint_for_continuation(
-                    checkpoint_params['resume_from_checkpoint'],
-                    orchestrator
-                )
-                start_epoch = checkpoint_info['start_epoch']
-
-                # Optionally update config to continue from checkpoint
-                if start_epoch > 0:
-                    print(f"Resuming training from epoch {start_epoch}")
-                    # Adjust remaining epochs if needed
-                    orchestrator.config.start_epoch = start_epoch
-            
-            except Exception as e:
-                print(f"⚠️ Failed to load checkpoint: {e}")
-                print("Starting training from scratch...")
+        
+        # ✅ CRITICAL FIX: Initialize trainer BEFORE wrapping with OOM protection
+        print("="*80)
+        print("INITIALIZING TRAINER")
+        print("="*80)
+        orchestrator.initialize_training()
+        
+        if orchestrator.trainer is None:
+            print("❌ CRITICAL: Trainer initialization failed!")
+            return 1
+        
+        print(f"✅ Trainer initialized: {type(orchestrator.trainer).__name__}")
+        print(f"✅ Trainer has train method: {hasattr(orchestrator.trainer, 'train')}")
+        print(f"✅ Model device: {orchestrator.trainer.device}")
+        print(f"✅ Model parameters: {sum(p.numel() for p in orchestrator.model.parameters()):,}")
+        print("="*80)
         
         training_start_time = time.time()
         
