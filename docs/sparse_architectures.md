@@ -1,15 +1,10 @@
 # With adaptive orchestrator (recommended):
-training_params = {
-    'batch_size': 8,  # Start conservatively
-    'gradient_accumulation_steps': 4,
-    # Orchestrator will auto-tune for your hardware
-}
 
-# The orchestrator will:
-# - Start with specified batch size
-# - Monitor memory usage
-# - Automatically adjust on OOM
-# - Find optimal batch size for throughput
+## The orchestrator will:
+## - Start with specified batch size
+## - Monitor memory usage
+## - Automatically adjust on OOM
+## - Find optimal batch size for throughput
 ```
 
 #### **Sequence Length Selection**
