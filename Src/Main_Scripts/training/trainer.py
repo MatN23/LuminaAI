@@ -2103,58 +2103,50 @@ class EnhancedConversationTrainer:
         
         return ds_config
     
-    def _setup_standard_training(self):
-        """Setup standard PyTorch training with quantization and precision support as fallback."""
-        print("="*60)
-        print("SETTING UP STANDARD PYTORCH TRAINING")
-        print("="*60)
-        
-        # Get dtype from PrecisionManager
-        train_dtype = self.precision_manager.get_dtype(for_inference=False)
-        
-        # Move model to device with appropriate dtype
-        if train_dtype and not self.quantization_manager.is_quantized:
-            try:
-                self.model = self.model.to(device=self.device, dtype=train_dtype)
-                print(f"Model moved to {self.device} with dtype {train_dtype}")
-            except Exception as e:
-                print(f"Could not move model to {train_dtype}: {e}, using default dtype")
-                self.model = self.model.to(self.device)
-        else:
-            self.model = self.model.to(self.device)
-        
-        # Create optimizer (quantization-aware if possible)
-        quantized_optimizer = self.quantization_manager.create_quantized_optimizer(self.model)
-        if quantized_optimizer:
-            self.optimizer = quantized_optimizer
-            print(f"Using quantized optimizer: {type(quantized_optimizer).__name__}")
-        else:
-            self.optimizer = self._create_standard_optimizer()
-        
-        self.scheduler = None
-        
-        # Mixed precision setup from PrecisionManager
-        self.use_amp = self.precision_manager.PRECISION_REGISTRY[self.precision_manager.train_precision]['requires_amp']
-        self.scaler = GradScaler() if self.precision_manager.should_use_grad_scaler() and torch.cuda.is_available() else None
-        
-        # Model compilation (may not work with some quantized models)
-        if getattr(self.config, 'compile', True) and hasattr(torch, 'compile'):
-            try:
-                if not self.quantization_manager.is_quantized:
-                    self.model = torch.compile(self.model, mode='default')
-                    print("Model compiled successfully")
+    def _setup_scheduler(self, total_steps: int):
+        """Setup learning rate scheduler with warmup - FIXED to actually create scheduler."""
+        warmup_ratio = getattr(self.config, 'warmup_ratio', 0.1)
+        warmup_steps = int(total_steps * warmup_ratio)
+
+        lr_scheduler = getattr(self.config, 'lr_scheduler', 'cosine')  # ✅ Changed default to 'cosine'
+
+        if lr_scheduler == "cosine":
+            from torch.optim.lr_scheduler import LambdaLR
+
+            def lr_lambda(current_step: int):
+                if current_step < warmup_steps:
+                    # Warmup: 0 -> 1.0
+                    return float(current_step) / float(max(1, warmup_steps))
                 else:
-                    print("Skipping model compilation for quantized model")
-            except Exception as e:
-                print(f"Model compilation failed: {e}")
+                    # Cosine decay: 1.0 -> min_lr_ratio
+                    progress = (current_step - warmup_steps) / (total_steps - warmup_steps)
+                    min_lr_ratio = self.config.min_lr / self.config.learning_rate
+                    return max(min_lr_ratio, 0.5 * (1.0 + math.cos(math.pi * progress)))
+
+            self.scheduler = LambdaLR(self.optimizer, lr_lambda)
+            print(f"✅ Cosine scheduler initialized: warmup={warmup_steps}, total={total_steps}")
+
+        elif lr_scheduler == "onecycle":
+            self.scheduler = OneCycleLR(
+                self.optimizer, max_lr=self.config.learning_rate,
+                total_steps=total_steps, pct_start=warmup_ratio
+            )
+            print(f"✅ OneCycle scheduler initialized: warmup={warmup_steps}, total={total_steps}")
+
+        else:
+            # ✅ CRITICAL FIX: Create a basic linear warmup scheduler as fallback
+            from torch.optim.lr_scheduler import LambdaLR
+
+        def lr_lambda(current_step: int):
+            if current_step < warmup_steps:
+                return float(current_step) / float(max(1, warmup_steps))
+            else:
+                # Linear decay
+                progress = (current_step - warmup_steps) / max(1, (total_steps - warmup_steps))
+                return max(0.0, 1.0 - progress)
         
-        if self.quantization_manager.is_quantized:
-            quant_info = self.quantization_manager.get_quantization_info()
-            print(f"Model quantized: {quant_info['method']} {quant_info['bits']}-bit")
-        
-        precision_info = self.precision_manager.get_precision_info()
-        print(f"Training precision: {precision_info['training']['precision']}")
-        print(f"Standard training setup complete - Device: {self.device}")
+        self.scheduler = LambdaLR(self.optimizer, lr_lambda)
+        print(f"⚠️ Unknown scheduler '{lr_scheduler}', using linear warmup+decay: warmup={warmup_steps}, total={total_steps}")
     
     def _create_standard_optimizer(self) -> torch.optim.Optimizer:
         """Create standard PyTorch optimizer."""
@@ -2198,30 +2190,30 @@ class EnhancedConversationTrainer:
     
     def compute_loss(self, logits: torch.Tensor, labels: torch.Tensor, 
                     loss_weights: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
-        """Compute weighted loss with MoE auxiliary losses and accuracy metrics."""
-        
+        """Compute weighted loss with MoE auxiliary losses and accuracy metrics - FIXED PPL calculation."""
+
         shift_logits = logits[..., :-1, :].contiguous()
         shift_labels = labels[..., 1:].contiguous()
-        
+
         flat_logits = shift_logits.view(-1, shift_logits.size(-1))
         flat_labels = shift_labels.view(-1)
-        
+
         mask = (flat_labels != getattr(self.tokenizer, 'pad_token_id', 0)).float()
-        
+
         with torch.no_grad():
             predictions = torch.argmax(flat_logits, dim=-1)
             correct_predictions = (predictions == flat_labels).float() * mask
             accuracy = correct_predictions.sum() / mask.sum().clamp(min=1)
-        
+
         loss = F.cross_entropy(flat_logits, flat_labels, reduction='none')
-        
+
         if loss_weights is not None:
             shift_weights = loss_weights[..., 1:].contiguous()
             flat_weights = shift_weights.view(-1)
             weighted_loss = loss * flat_weights * mask
         else:
             weighted_loss = loss * mask
-        
+
         if torch.isnan(weighted_loss).any() or torch.isinf(weighted_loss).any():
             print("NaN or Inf detected in loss computation")
             if self.quantization_manager.is_quantized:
@@ -2233,27 +2225,28 @@ class EnhancedConversationTrainer:
                 'valid_tokens': torch.tensor(0.0, device=loss.device),
                 'accuracy': torch.tensor(0.0, device=loss.device)
             }
-        
+
         total_loss = weighted_loss.sum()
         total_weight = mask.sum().clamp(min=1)
         final_loss = total_loss / total_weight
-        
-        raw_loss = (loss * mask).sum() / total_weight
-        
+
+        # ✅ CRITICAL FIX: Use final_loss (the actual training loss) for perplexity
+        raw_loss = final_loss.detach()  # This is the real loss value
+
         clamped_loss = torch.clamp(raw_loss, min=0.0, max=15.0)
-        
+
         try:
             perplexity = torch.exp(clamped_loss)
         except (OverflowError, RuntimeError):
             perplexity = torch.tensor(float('inf'), device=loss.device)
-        
+
         if raw_loss.item() > 15.0:
             logging.warning(f"Loss value {raw_loss.item():.2f} exceeds clamp threshold - training may be unstable")
-        
+
         return {
             'loss': final_loss,
-            'raw_loss': raw_loss.detach(),
-            'perplexity': perplexity.detach(),
+            'raw_loss': raw_loss,  # ✅ Now matches the actual loss
+            'perplexity': perplexity,
             'valid_tokens': mask.sum().detach(),
             'accuracy': accuracy.detach()
         }
