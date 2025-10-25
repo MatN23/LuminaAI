@@ -2,15 +2,15 @@
 
 <div align="center">
 
-**Advanced Transformer Training System with MoE and MoD**
+**Next-Generation Transformer Training with AI-Driven Adaptive Intelligence**
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg)](https://pytorch.org/)
 [![License](https://img.shields.io/badge/License-Custom-green.svg)](LICENSE)
 
-*A production-ready system for training state-of-the-art language models with Mixture-of-Experts and Mixture-of-Depths*
+*A production-ready system featuring autonomous training optimization, real-time intelligence, and state-of-the-art architecture support*
 
-[Features](#-key-features) • [Architecture](#-architecture) • [Quick Start](#-quick-start) • [Training Modes](#-training-modes) • [Model Configurations](#-model-configurations)
+[Features](#-key-features) • [Architecture](#-architecture) • [Adaptive Orchestrator](#-adaptive-training-orchestrator) • [Quick Start](#-quick-start) • [Configurations](#-model-configurations)
 
 </div>
 
@@ -18,24 +18,62 @@
 
 ## 🌟 Overview
 
-LuminaAI is a comprehensive deep learning training system designed for building efficient, scalable transformer-based language models. The system supports both traditional dense architectures and cutting-edge sparse architectures including **Mixture-of-Experts (MoE)** and **Mixture-of-Depths (MoD)**, with full support for **hybrid architectures** that combine both techniques.
+LuminaAI is a comprehensive deep learning training system that combines cutting-edge transformer architectures with **autonomous AI-driven training optimization**. At its core is the **Adaptive Training Orchestrator** - an intelligent system that continuously monitors, analyzes, and optimizes training in real-time, making hundreds of micro-decisions to ensure optimal convergence and resource utilization.
 
-Built on PyTorch with DeepSpeed integration, LuminaAI provides everything needed to train models ranging from small experimental configs to massive multi-billion parameter systems with advanced optimization techniques.
+The system supports both traditional dense architectures and advanced sparse architectures including **Mixture-of-Experts (MoE)** and **Mixture-of-Depths (MoD)**, with full support for **hybrid architectures** that combine both techniques.
 
 ### Why LuminaAI?
 
+- **🧠 Autonomous Intelligence**: Self-optimizing training with AI-driven decision making
 - **🎯 Production-Ready**: Comprehensive error handling, checkpointing, and monitoring
 - **⚡ Efficient**: 10-30% faster than baseline implementations with 15-25% less memory
 - **🔧 Flexible**: Support for multiple training paradigms (base, fine-tuning, hybrid)
 - **📊 Observable**: Extensive metrics, profiling, and real-time health monitoring
 - **🚀 Scalable**: From single GPU to multi-node distributed training
-- **🧠 Advanced**: MoE, MoD, Flash Attention, GQA, and hybrid architectures
+- **🔬 Advanced**: MoE, MoD, Flash Attention, GQA, and hybrid architectures
 
 ---
 
 ## ✨ Key Features
 
-### 🏗️ Architecture Capabilities
+### 🤖 Adaptive Training Orchestrator
+
+**The brain of LuminaAI** - an autonomous training intelligence system that revolutionizes the training process:
+
+#### **Meta-Learning Engine**
+- **Learns from History**: Analyzes past training runs to identify successful patterns
+- **Strategy Synthesis**: Automatically generates optimal hyperparameter configurations
+- **Trajectory Prediction**: Predicts training outcomes before they happen
+- **Knowledge Transfer**: Applies learnings from previous experiments to new training runs
+
+#### **Real-Time Adaptive Decision Making**
+The orchestrator makes intelligent decisions during training:
+
+- **Automatic Hyperparameter Tuning**: Adjusts learning rate, batch size, and regularization on-the-fly
+- **Architecture Evolution**: Dynamically adds/removes MoE experts based on utilization
+- **Emergency Recovery**: Detects and recovers from training instabilities automatically
+- **Resource Optimization**: Balances compute, memory, and throughput in real-time
+
+#### **Advanced Analytics & Monitoring**
+- **Anomaly Detection**: Identifies loss spikes, gradient explosions, and expert imbalance
+- **Health Scoring**: Continuous assessment of training health with predictive alerts
+- **Performance Profiling**: Layer-by-layer analysis of bottlenecks
+- **Convergence Analysis**: Real-time loss dynamics and plateau detection
+
+#### **Adaptive Capabilities**
+
+| Capability | Description | Impact |
+|------------|-------------|--------|
+| Learning Rate Adaptation | Automatic adjustment based on loss curves | Faster convergence |
+| Expert Management | Add/remove MoE experts mid-training | Better resource utilization |
+| Batch Size Optimization | Dynamic batch size for memory efficiency | Higher throughput |
+| Routing Optimization | Adjust MoE/MoD capacity factors | Improved load balance |
+| Gradient Management | Emergency LR reduction on explosion | Training stability |
+| Checkpoint Rollback | Time-travel to previous checkpoints | Recover from instabilities |
+
+---
+
+### 🗃️ Architecture Capabilities
 
 #### **Mixture of Experts (MoE)**
 - Sparse activation for massive parameter efficiency
@@ -43,12 +81,14 @@ Built on PyTorch with DeepSpeed integration, LuminaAI provides everything needed
 - Advanced load balancing to prevent expert collapse
 - 40-60% less active parameters for same capacity
 - Flexible MoE patterns: all layers, interleaved, sandwich
+- **Adaptive expert management**: Add/remove experts during training
 
 #### **Mixture of Depths (MoD)**
 - Dynamic token-level compute allocation
 - Learn which tokens need full computation vs skip connections
 - 30-50% FLOPs reduction with minimal quality loss
 - Adaptive capacity factors for different use cases
+- **Real-time capacity adjustment** based on training phase
 
 #### **Hybrid MoE + MoD** 🚀
 - **NEW**: Combine MoE and MoD in the same model!
@@ -62,11 +102,13 @@ Built on PyTorch with DeepSpeed integration, LuminaAI provides everything needed
 - SwiGLU activation for improved performance
 - RMS Normalization for training stability
 
+---
+
 ### ⚡ Training & Optimization
 
 #### **Multi-Device Support**
 - **NVIDIA CUDA**: Full feature support with DeepSpeed integration
-- **Apple Silicon (MPS)**: Native M1/M2/M3 support with automatic optimizations
+- **Apple Silicon (MPS)**: Native M1/M2/M3/M4 support with automatic optimizations
 - **CPU**: Fallback for development and debugging
 
 #### **DeepSpeed Integration**
@@ -74,6 +116,7 @@ Built on PyTorch with DeepSpeed integration, LuminaAI provides everything needed
 - CPU/NVMe offloading for training massive models
 - Gradient compression for multi-GPU communication
 - Automatic mixed precision training (FP16/BF16)
+- **Adaptive ZeRO stage selection** based on available memory
 
 #### **Flash Attention 2**
 - 2-4x faster attention for long sequences
@@ -81,11 +124,13 @@ Built on PyTorch with DeepSpeed integration, LuminaAI provides everything needed
 - Automatic fallback to optimized standard attention
 
 #### **Advanced Training Features**
-- Gradient checkpointing for memory efficiency
-- Adaptive learning rate scheduling (cosine, OneCycle)
-- Automatic batch size tuning with OOM recovery
-- Early stopping with patience configuration
-- Continuous checkpointing with best model tracking
+- **Adaptive gradient checkpointing** for optimal memory/speed tradeoff
+- **Dynamic learning rate scheduling** with anomaly-aware adjustments
+- **Automatic batch size tuning** with OOM recovery
+- **Smart early stopping** with patience configuration
+- **Continuous checkpointing** with best model tracking and rollback support
+
+---
 
 ### 📊 Data Processing
 
@@ -99,7 +144,7 @@ Built on PyTorch with DeepSpeed integration, LuminaAI provides everything needed
 - **Base Only**: Pre-training on raw text
 - **Fine-tuning Only**: Instruction tuning on conversations
 - **Hybrid**: Sequential (base → fine-tuning)
-- **Interleaved**: Mixed base and fine-tuning
+- **Interleaved**: Mixed base and fine-tuning with adaptive ratios
 
 #### **Smart Data Loading**
 - Automatic format detection (JSONL, TXT)
@@ -107,14 +152,17 @@ Built on PyTorch with DeepSpeed integration, LuminaAI provides everything needed
 - Conversation validation and preprocessing
 - Configurable data caching
 - Dynamic batching and prefetching
+- **Adaptive data sampling** based on training phase
+
+---
 
 ### 🔬 Monitoring & Analysis
 
 #### **Real-Time Health Monitoring**
-- Automatic anomaly detection (loss spikes, gradient explosion)
-- Training phase detection (initialization, volatile, converging)
-- Performance benchmarking against targets
-- Resource utilization tracking
+- **Adaptive anomaly detection** (loss spikes, gradient explosion)
+- **Intelligent training phase detection** (initialization, volatile, converging)
+- **Performance benchmarking** against historical baselines
+- **Resource utilization tracking** with predictive alerts
 
 #### **Comprehensive Metrics**
 - Loss, perplexity, and accuracy tracking
@@ -122,6 +170,7 @@ Built on PyTorch with DeepSpeed integration, LuminaAI provides everything needed
 - Memory usage (GPU/MPS/CPU)
 - Expert/token routing statistics
 - Learning rate and gradient norms
+- **Meta-learning insights** from training history
 
 #### **Profiling & Diagnostics**
 - Per-layer performance profiling
@@ -129,10 +178,11 @@ Built on PyTorch with DeepSpeed integration, LuminaAI provides everything needed
 - Expert utilization analysis
 - Data validation reports
 - Training health scores
+- **Adaptive decision logs** with reasoning explanations
 
 ---
 
-## 🏛️ Architecture
+## 🛠️ Architecture
 
 ### Model Architecture
 
@@ -145,29 +195,29 @@ Built on PyTorch with DeepSpeed integration, LuminaAI provides everything needed
         │  Transformer Block  │  ×N layers
         └──────────┬──────────┘
                    │
-    ┌──────────────▼─────────────────┐
+    ┌──────────────▼────────────────────┐
     │       Pre-normalization        │
     │         (RMSNorm)              │
-    └──────────────┬─────────────────┘
+    └──────────────┬────────────────────┘
                    │
-    ┌──────────────▼─────────────────┐
+    ┌──────────────▼────────────────────┐
     │   Grouped Query Attention      │
     │   • Multi-head attention       │
     │   • Rotary embeddings (RoPE)   │
     │   • Flash Attention support    │
     │   • KV cache for inference     │
-    └──────────────┬─────────────────┘
+    └──────────────┬────────────────────┘
                    │
-    ┌──────────────▼─────────────────┐
+    ┌──────────────▼────────────────────┐
     │         Residual Add           │
-    └──────────────┬─────────────────┘
+    └──────────────┬────────────────────┘
                    │
-    ┌──────────────▼─────────────────┐
+    ┌──────────────▼────────────────────┐
     │       Post-normalization       │
     │         (RMSNorm)              │
-    └──────────────┬─────────────────┘
+    └──────────────┬────────────────────┘
                    │
-    ┌──────────────▼─────────────────┐
+    ┌──────────────▼────────────────────┐
     │      Feed-Forward Network      │
     │                                │
     │  Choice of:                    │
@@ -177,11 +227,12 @@ Built on PyTorch with DeepSpeed integration, LuminaAI provides everything needed
     │     • Top-k expert routing     │
     │     • Load balancing           │
     │     • 8-64 expert support      │
-    └──────────────┬─────────────────┘
+    │     • Adaptive management      │
+    └──────────────┬────────────────────┘
                    │
-    ┌──────────────▼─────────────────┐
+    ┌──────────────▼────────────────────┐
     │         Residual Add           │
-    └──────────────┬─────────────────┘
+    └──────────────┬────────────────────┘
                    │
                 [Repeat]
                    │
@@ -207,11 +258,12 @@ Built on PyTorch with DeepSpeed integration, LuminaAI provides everything needed
 └──────────────┬───────────────────────────────┘
                │
     ┌──────────▼────────────┐
-    │  Orchestrator.py      │
-    │  • Adaptive training  │
+    │  Orchestrator.py      │  🧠 ADAPTIVE INTELLIGENCE
     │  • Meta-learning      │
-    │  • Auto-optimization  │
     │  • Real-time monitor  │
+    │  • Auto-optimization  │
+    │  • Anomaly detection  │
+    │  • Decision making    │
     └──────────┬────────────┘
                │
     ┌──────────▼────────────┐
@@ -220,15 +272,16 @@ Built on PyTorch with DeepSpeed integration, LuminaAI provides everything needed
     │  • Loss computation   │
     │  • Gradient handling  │
     │  • Quantization       │
+    │  • 18 adaptive methods│
     └──────────┬────────────┘
                │
-    ┌──────────▼────────────────────┐
+    ┌──────────▼──────────────────────┐
     │  Dataset.py (HybridManager)   │
     │  • Base training datasets     │
     │  • Fine-tuning datasets       │
     │  • Multi-file support         │
     │  • Streaming datasets         │
-    └──────────┬────────────────────┘
+    └──────────┬──────────────────────┘
                │
     ┌──────────▼────────────┐
     │   Model.py            │
@@ -282,7 +335,10 @@ pip install flash-attn --no-build-isolation
 # 1. Choose model size
 config_choice = 'b1'  # 1B active parameters
 
-# 2. Configure training
+# 2. Configure adaptive training
+use_adaptive_training = True  # Enable AI-driven optimization
+
+# 3. Training parameters
 training_params = {
     'num_epochs': 3,
     'batch_size': 8,
@@ -290,7 +346,7 @@ training_params = {
     'precision': 'auto',  # Auto-detects best precision for hardware
 }
 
-# 3. Specify data
+# 4. Specify data
 data_params = {
     'training_mode': 'finetuning_only',
     'finetuning_paths': [
@@ -301,7 +357,7 @@ data_params = {
     ],
 }
 
-# Run training
+# Run training - The Orchestrator handles the rest!
 # python Main.py
 ```
 
@@ -319,7 +375,7 @@ training_params = {
 }
 ```
 
-#### Apple Silicon (M1/M2/M3)
+#### Apple Silicon (M1/M2/M3/M4)
 
 ```python
 # MPS-optimized configuration (auto-applied)
@@ -334,123 +390,34 @@ training_params = {
 
 ---
 
-## 📚 Training Modes
-
-### 1. Base/Pre-Training Mode
-
-Train on raw text corpora (The Pile, C4, etc.) for foundational language understanding.
-
-**Data Format**: Plain text (`.txt`) or JSONL with `text` field
-
-```python
-data_params = {
-    'training_mode': 'base_only',
-    'base_training_paths': [
-        'data/pile/pile_shard_00.txt',
-        'data/pile/pile_shard_01.jsonl',
-    ],
-    'base_eval_paths': [
-        'data/pile/pile_eval.jsonl',
-    ],
-}
-```
-
-**Features**:
-- Fixed-length chunking for efficient training
-- Document continuation across chunks
-- Streaming support for massive datasets
-- No conversation structure required
-
-### 2. Fine-Tuning/Instruction Mode
-
-Train on conversational data for instruction following and chat capabilities.
-
-**Data Format**: JSONL with conversation structure
-
-```python
-data_params = {
-    'training_mode': 'finetuning_only',
-    'finetuning_paths': [
-        'data/oasst1_train.jsonl',
-        'data/custom_conversations.jsonl',
-    ],
-    'finetuning_eval_paths': [
-        'data/oasst1_validation.jsonl',
-    ],
-}
-```
-
-**Required Format**:
-```json
-{
-  "conversation_id": "conv_001",
-  "messages": [
-    {"role": "user", "content": "Hello!"},
-    {"role": "assistant", "content": "Hi! How can I help?"}
-  ]
-}
-```
-
-**Features**:
-- Conversation validation and preprocessing
-- Role-based loss weighting
-- Multi-turn conversation support
-- Automatic format detection
-
-### 3. Hybrid Mode (Sequential)
-
-Combine base pre-training followed by fine-tuning in a two-phase approach.
-
-```python
-data_params = {
-    'training_mode': 'hybrid',
-    'base_training_paths': ['data/pile/train.txt'],
-    'finetuning_paths': ['data/oasst1_train.jsonl'],
-    # Phase 1: Base training
-    # Phase 2: Fine-tuning (automatic transition)
-}
-```
-
-### 4. Interleaved Mode
-
-Mix base and fine-tuning data during training for balanced learning.
-
-```python
-data_params = {
-    'training_mode': 'interleaved',
-    'base_training_paths': ['data/pile/train.txt'],
-    'finetuning_paths': ['data/oasst1_train.jsonl'],
-    'base_finetuning_ratio': 0.7,  # 70% base, 30% fine-tuning
-}
-```
-
----
-
 ## 🎛️ Model Configurations
 
 ### Available Presets
 
-LuminaAI includes pre-configured model sizes optimized for different hardware and use cases:
+LuminaAI includes pre-configured model sizes optimized for different hardware and use cases. Each configuration is designed with the Adaptive Orchestrator in mind, which can further optimize these settings during training:
 
-| Preset | Active Params | Total Params | Architecture | Use Case | Hardware |
-|--------|--------------|--------------|--------------|----------|----------|
-| `debug` | ~500K | ~4M | 8x MoE | Development | Any |
-| `debug_200m` | ~200M | ~6B | 32x MoD | Testing | T4/MPS |
-| `b1` | ~1B | ~8B | 8x MoE | Experimentation | RTX 3090, M1 Max |
-| `b7` | ~7B | ~56B | 8x MoE | General Purpose | A100 40GB, M2 Ultra |
-| `b14` | ~14B | ~112B | 8x MoE | High Performance | A100 80GB |
-| `b30` | ~30B | ~240B | 8x MoE | Advanced Research | Multi-A100 |
-| `b50` | ~50B | ~400B | 8x MoE | Enterprise | Multi-H100 |
-| `b100` | ~100B | ~800B | 8x MoE | Cutting Edge | Large H100 Cluster |
-| `b200` | ~200B | ~1.6T | 8x MoE | Frontier | Massive H100 Cluster |
-| `b300` | ~300B | ~2.4T | 8x MoE | Ultra-Scale | Ultra-Large Cluster |
+| Preset | Active Params | Total Params | Architecture | Use Case | Hardware | Adaptive Recommendations |
+|--------|--------------|--------------|--------------|----------|----------|--------------------------|
+| `debug` | ~500K | ~4M | 8x MoE | Development & Testing | Any | Minimal adaptive features, fast iteration |
+| `debug_200m` | ~200M | ~6B | 32x MoD | Architecture Testing | T4/MPS/CPU | Test adaptive routing, MoD optimization |
+| `b1` | ~1B | ~8B | 8x MoE | Small-Scale Experiments | RTX 3090, M1 Max, A10 | Full adaptive features, rapid convergence |
+| `b7` | ~7B | ~56B | 8x MoE | General Purpose | A100 40GB, M2 Ultra, RTX 4090 | Meta-learning enabled, expert management |
+| `b14` | ~14B | ~112B | 8x MoE | High Performance | A100 80GB, Multi-A10 | Advanced recovery, memory optimization |
+| `b30` | ~30B | ~240B | 8x MoE | Advanced Research | Multi-A100, H100 | Full orchestrator suite, multi-node adaptive |
+| `b50` | ~50B | ~400B | 8x MoE | Enterprise Scale | Multi-H100 | Distributed adaptive intelligence |
+| `b100` | ~100B | ~800B | 8x MoE | Cutting Edge | Large H100 Cluster | Cluster-wide optimization |
+| `b200` | ~200B | ~1.6T | 8x MoE | Frontier Research | Massive H100 Cluster | Advanced meta-learning across nodes |
+| `b300` | ~300B | ~2.4T | 8x MoE | Ultra-Scale | Ultra-Large Cluster | Global adaptive optimization |
 
 ### Configuration Examples
 
-#### Small Efficient Model (1B)
+#### Small Efficient Model (1B) with Adaptive Training
 
 ```python
 config_choice = 'b1'
+
+# Enable adaptive orchestrator for autonomous optimization
+use_adaptive_training = True
 
 training_params = {
     'batch_size': 8,
@@ -458,12 +425,20 @@ training_params = {
     'use_moe': True,
     'use_mod': False,  # Pure MoE
 }
+
+# The orchestrator will automatically:
+# - Adjust learning rate based on loss curves
+# - Monitor and balance expert utilization
+# - Detect and recover from anomalies
+# - Optimize batch size for your hardware
 ```
 
 #### Medium Model with Hybrid Architecture (7B)
 
 ```python
 config_choice = 'b7'
+
+use_adaptive_training = True  # Strongly recommended for complex architectures
 
 training_params = {
     'batch_size': 16,
@@ -474,12 +449,20 @@ training_params = {
     'moe_top_k': 2,
     'mod_capacity_factor': 0.5,
 }
+
+# Adaptive features for hybrid models:
+# - Dynamic expert addition/removal
+# - MoD capacity adjustment
+# - Routing temperature optimization
+# - Cross-architecture balancing
 ```
 
 #### Large Model with Aggressive Optimization (14B)
 
 ```python
 config_choice = 'b14'
+
+use_adaptive_training = True  # Essential for stable large-scale training
 
 training_params = {
     'use_deepspeed': True,
@@ -488,6 +471,12 @@ training_params = {
     'gradient_checkpointing': True,
     'precision': 'mixed_bf16',
 }
+
+# The orchestrator provides:
+# - Automatic OOM recovery with batch size reduction
+# - Gradient explosion detection and emergency LR cuts
+# - Memory pressure monitoring with preemptive actions
+# - Convergence prediction and plateau intervention
 ```
 
 ### Custom Configuration
@@ -519,6 +508,9 @@ config = Config(
     learning_rate=1e-4,
     num_epochs=3,
 )
+
+# Enable adaptive orchestrator
+use_adaptive_training = True
 ```
 
 ---
@@ -527,15 +519,94 @@ config = Config(
 
 ### Adaptive Training Orchestrator
 
-The orchestrator provides AI-driven training optimization:
-
-- **Meta-Learning**: Learn optimal hyperparameters from previous runs
-- **Real-Time Monitoring**: Detect and respond to training issues
-- **Automatic Recovery**: Handle OOM errors with batch size adjustment
-- **Performance Profiling**: Track bottlenecks and optimization opportunities
+The orchestrator provides AI-driven training optimization that makes your training runs smarter and more resilient:
 
 ```python
-use_adaptive_training = True  # Enable in Main.py
+# Enable in Main.py
+use_adaptive_training = True  # Recommended for all production training
+
+# What the orchestrator does automatically:
+# ✅ Meta-learning from previous runs
+# ✅ Real-time performance monitoring
+# ✅ Automatic hyperparameter adjustments
+# ✅ Anomaly detection and recovery
+# ✅ Expert utilization optimization
+# ✅ Memory pressure management
+# ✅ Convergence prediction
+# ✅ Emergency intervention
+```
+
+#### Key Adaptive Features
+
+**1. Meta-Learning**
+```python
+# The orchestrator learns from your training history
+# and applies successful strategies automatically:
+#
+# - Optimal learning rate schedules
+# - Best batch size configurations
+# - Successful regularization patterns
+# - Convergence acceleration techniques
+```
+
+**2. Real-Time Decision Making**
+```python
+# During training, the orchestrator makes intelligent decisions:
+#
+# IF loss plateaus → Increase LR or add expert
+# IF gradients explode → Emergency LR reduction
+# IF expert imbalance → Adjust routing parameters
+# IF memory pressure → Reduce batch size
+# IF convergence predicted → Optimize for final phase
+```
+
+**3. Advanced Recovery**
+```python
+# Automatic recovery from common training issues:
+#
+# - OOM errors: Automatic batch size reduction
+# - Gradient explosion: Emergency LR cuts
+# - Loss spikes: Checkpoint rollback
+# - Expert collapse: Dynamic expert management
+# - Convergence stalls: Adaptive interventions
+```
+
+### 18 New Adaptive Methods
+
+The enhanced trainer provides fine-grained control:
+
+```python
+# MoE Architecture (3 methods)
+trainer.add_expert(layer_idx=5)           # Add expert mid-training
+trainer.prune_expert(layer_idx=0, expert_idx=3)  # Remove underutilized expert
+trainer._initialize_new_expert(new_expert, existing_experts)  # Smart initialization
+
+# MoE Routing (4 methods)
+trainer.adjust_capacity_factor(2.0)        # Change token capacity
+trainer.adjust_routing_temperature(1.5)    # Adjust routing concentration
+trainer.enable_expert_dropout(0.1)         # Prevent expert collapse
+stats = trainer.get_expert_statistics()    # Comprehensive metrics
+
+# MoD Routing (2 methods)
+trainer.adjust_mod_capacity(0.7)           # Change compute ratio
+stats = trainer.get_mod_statistics()       # Efficiency metrics
+
+# Batch Size Adaptation (2 methods)
+trainer.adjust_batch_size(4)               # Dynamic batch size
+trainer._recreate_dataloader(dataset)      # Rebuild dataloader
+
+# Orchestrator Communication (3 methods) - CRITICAL
+metrics = trainer.get_current_metrics()    # Real-time training state
+routing = trainer._extract_moe_routing_stats()  # Expert utilization
+throughput = trainer._calculate_throughput()    # Tokens/second
+
+# Emergency Recovery (2 methods)
+trainer.emergency_lr_reduction(10.0)       # 10x LR cut
+trainer.rollback_steps(100)                # Time-travel to previous state
+
+# Advanced Optimizer (2 methods)
+trainer.adjust_weight_decay(0.05)          # Dynamic regularization
+trainer._update_optimizer_param_groups('lr', 1e-5)  # Live updates
 ```
 
 ### Quantization Support
@@ -584,14 +655,16 @@ deepspeed --num_nodes=4 --num_gpus=8 --node_rank=N Main.py
 
 ### Training Metrics
 
-The system tracks comprehensive metrics:
+The system tracks comprehensive metrics with adaptive insights:
 
-- **Loss & Perplexity**: Training and validation curves
+- **Loss & Perplexity**: Training and validation curves with trend analysis
 - **Accuracy**: Token-level prediction accuracy
 - **Throughput**: Tokens/second processing speed
 - **Memory**: GPU/MPS/CPU utilization
-- **Learning Rate**: Current LR with scheduler info
+- **Learning Rate**: Current LR with scheduler info and adaptive adjustments
 - **Gradient Norms**: Detect training instability
+- **Expert Utilization**: Real-time MoE routing statistics
+- **Adaptive Decisions**: Log of all orchestrator interventions
 
 ### Health Monitoring
 
@@ -603,6 +676,26 @@ Automatic health checks detect:
 - Token routing issues (MoD)
 - Memory pressure
 - Training stagnation
+- **Convergence predictions**
+- **Performance anomalies**
+
+### Adaptive Insights
+
+The orchestrator provides detailed reports:
+
+```python
+# Get adaptive status
+status = orchestrator.get_adaptive_status()
+
+print(f"Adaptive decisions made: {status['adaptive_decisions_made']}")
+print(f"Meta-learning runs: {status['meta_learning_runs']}")
+print(f"Monitoring active: {status['monitoring_active']}")
+
+# Recent adaptive decisions with reasoning
+for decision in status['recent_decisions']:
+    print(f"{decision['type']}: {decision['reasoning']}")
+    print(f"  Confidence: {decision['confidence']:.2%}")
+```
 
 ### Logging Levels
 
@@ -616,13 +709,19 @@ monitoring_params = {
 
 ### Checkpointing
 
-Automatic checkpoint management:
+Automatic checkpoint management with rollback support:
 
 ```python
 training_params = {
     'save_every_n_batches': 1000,
     'save_total_limit': 5,  # Keep only N best checkpoints
     'early_stopping_patience': 10,
+}
+
+# Resume from checkpoint
+checkpoint_params = {
+    'resume_from_checkpoint': 'experiments/my_exp/checkpoints/checkpoint_epoch_5.pt',
+    'resume_training': True,
 }
 ```
 
@@ -632,13 +731,14 @@ training_params = {
 
 ### Out of Memory (OOM)
 
-The system automatically handles OOM:
+The **Adaptive Orchestrator automatically handles OOM**:
 
-1. **Automatic Recovery**: Reduces batch size and retries
-2. **Gradient Accumulation**: Maintains effective batch size
-3. **Recommendations**: Suggests memory optimizations
+1. **Automatic Detection**: Catches OOM errors during training
+2. **Smart Recovery**: Reduces batch size while maintaining effective batch size via gradient accumulation
+3. **Adaptive Retry**: Recreates training components and continues
+4. **Configuration Saving**: Saves optimal settings for future runs
 
-Manual fixes:
+Manual intervention (if needed):
 ```python
 training_params = {
     'batch_size': 2,  # Reduce
@@ -650,7 +750,7 @@ training_params = {
 
 ### Slow Training
 
-Optimization checklist:
+The orchestrator monitors and optimizes throughput automatically, but you can also:
 
 - [ ] Enable `compile=True` (PyTorch 2.0+)
 - [ ] Use `precision='mixed_bf16'` or `'mixed_fp16'`
@@ -658,6 +758,39 @@ Optimization checklist:
 - [ ] Increase `num_workers` for data loading
 - [ ] Check `batch_size` isn't too small
 - [ ] Enable DeepSpeed for multi-GPU
+
+The orchestrator will suggest optimizations if it detects performance issues.
+
+### Training Instabilities
+
+The **Adaptive Orchestrator handles most instabilities automatically**:
+
+**Gradient Explosion:**
+```python
+# Automatic emergency LR reduction when grad_norm > 100
+# The orchestrator detects and responds immediately
+```
+
+**Loss Spikes:**
+```python
+# Automatic rollback to previous checkpoint
+# The orchestrator maintains checkpoint history for recovery
+```
+
+**Expert Imbalance (MoE):**
+```python
+# Automatic routing adjustments
+# The orchestrator monitors and balances expert utilization
+```
+
+Manual tuning (if needed):
+```python
+training_params = {
+    'load_balancing_weight': 0.02,  # Increase (from 0.01)
+    'routing_temperature': 1.2,  # Increase exploration
+    'capacity_factor': 1.5,  # Allow more tokens per expert
+}
+```
 
 ### MPS (Apple Silicon) Issues
 
@@ -672,16 +805,44 @@ training_params = {
 }
 ```
 
-### Expert Imbalance (MoE)
+---
 
-If experts aren't being used evenly:
+## 📊 Example: Adaptive Training in Action
 
-```python
-training_params = {
-    'load_balancing_weight': 0.02,  # Increase (from 0.01)
-    'routing_temperature': 1.2,  # Increase exploration
-    'capacity_factor': 1.5,  # Allow more tokens per expert
-}
+Here's what happens during a typical adaptive training run:
+
+```
+[STEP 100] Normal training...
+  Loss: 2.456 | PPL: 11.65 | Acc: 45.2%
+
+[ORCHESTRATOR] Detected loss plateau
+  Decision: Increase learning rate by 1.5x
+  Confidence: 75%
+  Reasoning: Loss variance < 0.001 for 50 steps
+
+[STEP 200] Improved convergence...
+  Loss: 2.234 | PPL: 9.34 | Acc: 48.7%
+
+[ORCHESTRATOR] Expert imbalance detected
+  Decision: Adjust capacity factor 1.25 → 1.75
+  Confidence: 82%
+  Reasoning: Expert 3 utilization at 92%, Expert 5 at 8%
+
+[STEP 300] Gradient spike detected...
+  Loss: 2.189 | GradNorm: 156.2
+
+[ORCHESTRATOR] Emergency intervention
+  Decision: Emergency LR reduction by 10x
+  Confidence: 95%
+  Reasoning: Gradient norm > 100 (explosion detected)
+
+[STEP 350] Training stabilized...
+  Loss: 2.156 | PPL: 8.63 | Acc: 52.1%
+
+[ORCHESTRATOR] Convergence predicted in ~200 steps
+  Decision: Continue current settings
+  Confidence: 88%
+  Expected final loss: 2.05 ± 0.15
 ```
 
 ---
@@ -692,10 +853,11 @@ If you use LuminaAI in your research, please cite:
 
 ```bibtex
 @software{luminaai2025,
-  title = {LuminaAI: Advanced Transformer Training with MoE and MoD},
+  title = {LuminaAI: Advanced Transformer Training with Adaptive Intelligence},
   author = {MatN23},
   year = {2025},
-  url = {https://github.com/yourusername/luminaai}
+  url = {https://github.com/yourusername/luminaai},
+  note = {AI-driven training optimization with MoE and MoD support}
 }
 ```
 
@@ -720,12 +882,25 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for gui
 - tiktoken for fast tokenization
 - PyTorch team for the foundation
 - OpenAssistant for conversational datasets
+- The open-source AI community for continuous inspiration
+
+---
+
+## 🔗 Additional Resources
+
+- **Documentation**: [docs/](docs/)
+- **Adaptive Training Guide**: [docs/adaptive_training.md](docs/adaptive_training.md)
+- **MoE/MoD Tutorial**: [docs/sparse_architectures.md](docs/sparse_architectures.md)
+- **Issues**: [issues/](issues/)
+- **Discussions**: [discussions/](discussions/)
 
 ---
 
 <div align="center">
 
 **Built with ❤️ for the AI research community**
+
+*Featuring autonomous training intelligence that learns, adapts, and optimizes*
 
 [Documentation](docs/) • [Issues](issues/) • [Discussions](discussions/)
 
