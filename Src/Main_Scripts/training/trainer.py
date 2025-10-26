@@ -2856,10 +2856,12 @@ class EnhancedConversationTrainer:
         
         if not self.use_deepspeed:
             gradient_accumulation_steps = getattr(self.config, 'gradient_accumulation_steps', 1)
-            total_steps = len(train_dataloader) * self.config.num_epochs // gradient_accumulation_steps
-            self._setup_scheduler(total_steps)
-    
-            logging.info(f"Scheduler initialized with {total_steps} total steps")
+            effective_steps_per_epoch = len(train_dataloader) // gradient_accumulation_steps
+
+            scheduler_total_steps = 200  # your desired number
+            required_epochs = math.ceil(scheduler_total_steps / effective_steps_per_epoch)
+            self.config.num_epochs = required_epochs  # adjust epochs to match
+            self._setup_scheduler(scheduler_total_steps)
         
         self._log_training_config(len(train_dataloader))
         
