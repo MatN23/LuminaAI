@@ -1682,6 +1682,154 @@ def main():
         print(f"Total epochs: {config.num_epochs}")
         print(f"Total optimizer steps for training: {(len(train_dataset) / (config.batch_size * config.gradient_accumulation_steps)) * config.num_epochs:.0f}")
         print("="*80 + "\n")
+
+        python
+        # Step 7: Setup datasets
+        print_banner("STEP 7: SETTING UP DATASETS")
+        
+        # ... (your existing dataset setup code)
+        
+        print(f"\n✓ Datasets loaded successfully!")
+        print(f"  Training dataset: {len(train_dataset):,} samples")
+        
+        # ============================================================================
+        # 🧠 CHINCHILLA-OPTIMAL TRAINING CALCULATOR
+        # ============================================================================
+        print("\n" + "="*80)
+        print("CHINCHILLA-OPTIMAL TRAINING CALCULATOR")
+        print("="*80)
+        
+        # Calculate effective parameters for MoE/MoD
+        effective_params = total_params
+        
+        if config.use_moe:
+            # MoE: Only top-k experts are active per token
+            # Effective params ≈ shared params + (top_k / num_experts) × expert params
+            active_expert_ratio = config.moe_top_k / config.num_experts
+            
+            # Rough estimate: expert layers are ~60% of total params in MoE models
+            expert_param_fraction = 0.6
+            shared_params = total_params * (1 - expert_param_fraction)
+            expert_params = total_params * expert_param_fraction
+            
+            effective_params = shared_params + (expert_params * active_expert_ratio)
+            
+            print(f"\n🔀 Mixture of Experts (MoE) Detected:")
+            print(f"  Total Parameters: {total_params:,}")
+            print(f"  Active Experts per Token: {config.moe_top_k}/{config.num_experts}")
+            print(f"  Active Expert Ratio: {active_expert_ratio:.1%}")
+            print(f"  Estimated Shared Params: {shared_params:,.0f}")
+            print(f"  Estimated Expert Params: {expert_params:,.0f}")
+            print(f"  Effective Active Params: {effective_params:,.0f}")
+            print(f"  Parameter Efficiency: {effective_params/total_params:.1%} active per token")
+        
+        if config.use_mod:
+            # MoD: Not all layers process all tokens
+            # Further reduces effective compute
+            mod_capacity = getattr(config, 'mod_capacity_factor', 0.5)
+            effective_params = effective_params * (1 - (1 - mod_capacity) * 0.3)  # ~30% param reduction from MoD
+            
+            print(f"\n📊 Mixture of Depths (MoD) Detected:")
+            print(f"  MoD Capacity Factor: {mod_capacity:.1%}")
+            print(f"  Further Reduced Effective Params: {effective_params:,.0f}")
+        
+        if not config.use_moe and not config.use_mod:
+            print(f"\nStandard Dense Model:")
+            print(f"  Total Parameters: {total_params:,}")
+            print(f"  Effective Parameters: {effective_params:,} (100% active)")
+        
+        # Chinchilla scaling law: D ≈ 20 × P
+        CHINCHILLA_RATIO = 20  # 🎛️ ADJUST THIS: 10=undertrain, 20=optimal, 30=overtrain
+        
+        target_tokens = int(effective_params * CHINCHILLA_RATIO)
+        
+        print(f"\n📐 Chinchilla Scaling Law:")
+        print(f"  Formula: Target Tokens = Parameters × {CHINCHILLA_RATIO}")
+        print(f"  Effective Parameters: {effective_params:,}")
+        print(f"  Target Training Tokens: {target_tokens:,}")
+        print(f"  Target (Human Readable): {target_tokens / 1e9:.2f}B tokens")
+        
+        # Estimate tokens per sample
+        # Use actual tokenizer statistics if available from validation
+        if datasets_info and 'train' in datasets_info:
+            avg_tokens_per_sample = datasets_info['train']['token_stats'].get('avg_tokens', config.seq_length * 0.7)
+        else:
+            # Conservative estimate: 70% of max sequence length
+            avg_tokens_per_sample = config.seq_length * 0.7
+        
+        print(f"\n📊 Dataset Analysis:")
+        print(f"  Dataset Size: {len(train_dataset):,} samples")
+        print(f"  Avg Tokens per Sample: ~{avg_tokens_per_sample:.0f}")
+        
+        # Calculate total available tokens
+        total_dataset_tokens = int(len(train_dataset) * avg_tokens_per_sample)
+        print(f"  Total Dataset Tokens: {total_dataset_tokens:,}")
+        print(f"  Dataset Size (Human Readable): {total_dataset_tokens / 1e9:.2f}B tokens")
+        
+        # Calculate required epochs for Chinchilla optimal
+        required_epochs = math.ceil(target_tokens / total_dataset_tokens)
+        
+        print(f"\n🎯 Chinchilla-Optimal Training:")
+        print(f"  Required Epochs: {required_epochs}")
+        print(f"  Current Config Epochs: {config.num_epochs}")
+        
+        # Calculate actual tokens that will be seen
+        actual_tokens = config.num_epochs * total_dataset_tokens
+        chinchilla_ratio_actual = actual_tokens / effective_params
+        
+        print(f"\n📈 Training Token Analysis:")
+        print(f"  Tokens with Current Config: {actual_tokens:,} ({actual_tokens / 1e9:.2f}B)")
+        print(f"  Actual Ratio: {chinchilla_ratio_actual:.1f}x tokens per parameter")
+        print(f"  Chinchilla Optimal Ratio: {CHINCHILLA_RATIO}x")
+        
+        # Provide recommendations
+        if required_epochs < config.num_epochs:
+            over_ratio = config.num_epochs / required_epochs
+            print(f"\n⚠️  OVERTRAINING ALERT:")
+            print(f"  You're training {over_ratio:.1f}x longer than Chinchilla optimal")
+            print(f"  This may lead to:")
+            print(f"    • Overfitting on small datasets")
+            print(f"    • Diminishing returns after epoch {required_epochs}")
+            print(f"    • Wasted compute (~{(1 - 1/over_ratio)*100:.0f}% excess)")
+            print(f"  Recommendation: Reduce to {required_epochs} epochs or add more data")
+        
+        elif required_epochs > config.num_epochs:
+            under_ratio = required_epochs / config.num_epochs
+            print(f"\n⚠️  UNDERTRAINING ALERT:")
+            print(f"  You're training {under_ratio:.1f}x shorter than Chinchilla optimal")
+            print(f"  This may lead to:")
+            print(f"    • Model not reaching full potential")
+            print(f"    • Suboptimal loss for compute spent")
+            print(f"    • ~{(1 - config.num_epochs/required_epochs)*100:.0f}% of model capacity unused")
+            print(f"  Recommendation: Increase to {required_epochs} epochs or reduce model size")
+        
+        else:
+            print(f"\n✅ PERFECT CHINCHILLA SCALING!")
+            print(f"  Your configuration matches compute-optimal training")
+        
+        # Auto-adjustment option
+        AUTO_ADJUST_EPOCHS = False  # 🎛️ SET TO True TO AUTO-ADJUST
+        
+        if AUTO_ADJUST_EPOCHS and required_epochs != config.num_epochs:
+            old_epochs = config.num_epochs
+            config.num_epochs = required_epochs
+            print(f"\n🔧 AUTO-ADJUSTED: {old_epochs} → {required_epochs} epochs")
+            print(f"  New total tokens: {required_epochs * total_dataset_tokens:,}")
+            print(f"  Now Chinchilla-optimal!")
+        elif not AUTO_ADJUST_EPOCHS and required_epochs != config.num_epochs:
+            print(f"\n💡 To enable auto-adjustment: Set AUTO_ADJUST_EPOCHS = True")
+        
+        # Compute efficiency metrics
+        print(f"\n💰 Compute Efficiency:")
+        params_billions = effective_params / 1e9
+        tokens_billions = actual_tokens / 1e9
+        
+        # FLOPs estimate: 6 × params × tokens (forward + backward)
+        total_flops = 6 * effective_params * actual_tokens
+        print(f"  Total Training FLOPs: ~{total_flops / 1e18:.2f} ExaFLOPs")
+        print(f"  Chinchilla Efficiency: {min(chinchilla_ratio_actual / CHINCHILLA_RATIO, CHINCHILLA_RATIO / chinchilla_ratio_actual) * 100:.0f}%")
+        
+        print("="*80 + "\n")
         
         # Step 8: Estimate training time (ADVANCED)
         print_banner("STEP 8: ESTIMATE TRAINING TIME")

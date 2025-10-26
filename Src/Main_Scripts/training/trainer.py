@@ -2363,6 +2363,8 @@ class EnhancedConversationTrainer:
                 loss_dict = self.compute_loss(logits, labels, loss_weights)
         
         loss = loss_dict['loss']
+
+        loss = loss / self.config.gradient_accumulation_steps
         
         if torch.isnan(loss).any() or torch.isinf(loss).any():
             print("Invalid loss detected, skipping batch")
@@ -2385,7 +2387,7 @@ class EnhancedConversationTrainer:
         self._update_throughput(loss_dict['valid_tokens'].item())
         
         return {
-            'loss': loss.item(),
+            'loss': loss.item() * self.config.gradient_accumulation_steps,
             'raw_loss': loss_dict['raw_loss'].item(),
             'perplexity': loss_dict['perplexity'].item(),
             'valid_tokens': loss_dict['valid_tokens'].item(),
@@ -2430,9 +2432,9 @@ class EnhancedConversationTrainer:
     def _standard_optimizer_step(self) -> Dict[str, float]:
         """Standard optimizer step with precision awareness - FIXED."""
 
-        # ✅ CRITICAL FIX: Only unscale for FP16 (scaler only exists for FP16)
+        # Only unscale for FP16 (scaler only exists for FP16)
         if self.use_amp and self.scaler is not None:
-            self.scaler.unscale_(self.optimizer)  # Scaler only exists for FP16 anyway
+            self.scaler.unscale_(self.optimizer)
 
         # Clip gradients
         max_grad_norm = getattr(self.config, 'max_grad_norm', 1.0)
@@ -2445,9 +2447,8 @@ class EnhancedConversationTrainer:
             print("NaN/Inf gradients detected, skipping step")
             self.optimizer.zero_grad(set_to_none=True)
 
-            # ✅ CRITICAL: Update scaler to maintain internal state
             if self.use_amp and self.scaler is not None:
-                self.scaler.update()  # This updates the loss scale counter
+                self.scaler.update()
 
             return {'grad_norm': 0.0, 'lr': 0.0}
 
@@ -2461,7 +2462,8 @@ class EnhancedConversationTrainer:
         # Zero gradients AFTER successful step
         self.optimizer.zero_grad(set_to_none=True)
 
-        # Update scheduler
+        # ✅ FIXED: This method is only called AFTER gradient accumulation completes
+        # So scheduler step here is correct - it steps once per optimizer update
         if self.scheduler:
             self.scheduler.step()
 
@@ -2855,8 +2857,9 @@ class EnhancedConversationTrainer:
         if not self.use_deepspeed:
             gradient_accumulation_steps = getattr(self.config, 'gradient_accumulation_steps', 1)
             total_steps = len(train_dataloader) * self.config.num_epochs // gradient_accumulation_steps
-            total_steps = 200  # ← Set your desired number here!
             self._setup_scheduler(total_steps)
+    
+            logging.info(f"Scheduler initialized with {total_steps} total steps")
         
         self._log_training_config(len(train_dataloader))
         
