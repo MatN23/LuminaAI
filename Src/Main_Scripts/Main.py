@@ -1809,6 +1809,7 @@ def main():
         print(f"  Total Training Steps: {(len(train_dataset) // (config.batch_size * config.gradient_accumulation_steps)) * config.num_epochs}")
         
         # Step 14: Start training
+        # Step 14: Start training
         print_banner("STEP 14: STARTING ADAPTIVE TRAINING")
         print(f"Training begins at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"Experiment directory: {experiment_dir}")
@@ -1820,25 +1821,44 @@ def main():
         print("="*80)
         print("INITIALIZING TRAINER")
         print("="*80)
-        orchestrator.initialize_training()
         
-        if orchestrator.trainer is None:
+        try:
+            orchestrator.initialize_training()
+            
+            if orchestrator.trainer is None:
+                print("❌ CRITICAL: Trainer initialization returned None!")
+                return 1
+            
+            # Check if using fallback trainer (bad sign)
+            trainer_type = type(orchestrator.trainer).__name__
+            if trainer_type == 'AdaptiveTrainer':
+                print("⚠️  WARNING: Using fallback AdaptiveTrainer!")
+                print("   Real trainer initialization failed silently")
+                print("   Training may not work properly")
+            
+            print(f"✅ Trainer initialized: {trainer_type}")
+            print(f"✅ Trainer has train method: {hasattr(orchestrator.trainer, 'train')}")
+            
+            # Safe device check
+            try:
+                if hasattr(orchestrator.trainer, 'device'):
+                    print(f"✅ Model device: {orchestrator.trainer.device}")
+                else:
+                    print(f"⚠️  Device attribute not available (fallback trainer)")
+            except Exception as e:
+                print(f"⚠️  Could not get device: {e}")
+            
+            print(f"✅ Model parameters: {sum(p.numel() for p in orchestrator.model.parameters()):,}")
+            print("="*80)
+            
+        except Exception as e:
             print("❌ CRITICAL: Trainer initialization failed!")
+            print(f"Error: {e}")
+            import traceback
+            traceback.print_exc()
             return 1
         
-        print(f"✅ Trainer initialized: {type(orchestrator.trainer).__name__}")
-        print(f"✅ Trainer has train method: {hasattr(orchestrator.trainer, 'train')}")
-
-        # ✅ SAFE device check (fallback trainer may not have device)
-        try:
-            device = orchestrator.trainer.device if hasattr(orchestrator.trainer, 'device') else 'unknown'
-            print(f"✅ Model device: {device}")
-        except:
-            print(f"✅ Model device: unknown (using fallback trainer)")
-
-        print(f"✅ Model parameters: {sum(p.numel() for p in orchestrator.model.parameters()):,}")
-        print("="*80)
-        
+        # ✅ START TIMING (YOU WERE MISSING THIS!)
         training_start_time = time.time()
         
         # Run adaptive training with OOM protection
@@ -1858,6 +1878,7 @@ def main():
             print("TRAINING ERROR")
             print("="*80)
             print(f"Error: {e}")
+            import traceback
             traceback.print_exc()
             raise
         
