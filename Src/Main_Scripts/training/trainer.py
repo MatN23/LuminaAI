@@ -1900,7 +1900,20 @@ class EnhancedConversationTrainer:
         if self.use_deepspeed:
             self._setup_deepspeed_training()
         else:
-            self._setup_standard_training()
+            # Setup standard PyTorch training
+            self.model = self.model.to(self.device)
+
+            # Create optimizer
+            self.optimizer = self._create_standard_optimizer()
+
+            # Setup gradient scaler for mixed precision
+            self.use_amp = self.precision_manager.should_use_grad_scaler()
+            self.scaler = GradScaler() if self.use_amp else None
+
+            # Scheduler will be set up later with dataset info
+            self.scheduler = None
+
+            print("Standard PyTorch training initialized")
 
     def _setup_deepspeed_training(self):
         """Setup DeepSpeed training with MoE, CPU offloading, quantization, and precision optimizations."""
@@ -2119,7 +2132,7 @@ class EnhancedConversationTrainer:
                     return float(current_step) / float(max(1, warmup_steps))
                 else:
                     # Cosine decay: 1.0 -> min_lr_ratio
-                    progress = (current_step - warmup_steps) / (total_steps - warmup_steps)
+                    progress = (current_step - warmup_steps) / max(1, (total_steps - warmup_steps))
                     min_lr_ratio = self.config.min_lr / self.config.learning_rate
                     return max(min_lr_ratio, 0.5 * (1.0 + math.cos(math.pi * progress)))
 
@@ -2137,16 +2150,16 @@ class EnhancedConversationTrainer:
             # ✅ CRITICAL FIX: Create a basic linear warmup scheduler as fallback
             from torch.optim.lr_scheduler import LambdaLR
 
-        def lr_lambda(current_step: int):
-            if current_step < warmup_steps:
-                return float(current_step) / float(max(1, warmup_steps))
-            else:
-                # Linear decay
-                progress = (current_step - warmup_steps) / max(1, (total_steps - warmup_steps))
-                return max(0.0, 1.0 - progress)
-        
-        self.scheduler = LambdaLR(self.optimizer, lr_lambda)
-        print(f"⚠️ Unknown scheduler '{lr_scheduler}', using linear warmup+decay: warmup={warmup_steps}, total={total_steps}")
+            def lr_lambda(current_step: int):
+                if current_step < warmup_steps:
+                    return float(current_step) / float(max(1, warmup_steps))
+                else:
+                    # Linear decay
+                    progress = (current_step - warmup_steps) / max(1, (total_steps - warmup_steps))
+                    return max(0.0, 1.0 - progress)
+
+            self.scheduler = LambdaLR(self.optimizer, lr_lambda)
+            print(f"⚠️ Unknown scheduler '{lr_scheduler}', using linear warmup+decay: warmup={warmup_steps}, total={total_steps}")
     
     def _create_standard_optimizer(self) -> torch.optim.Optimizer:
         """Create standard PyTorch optimizer."""

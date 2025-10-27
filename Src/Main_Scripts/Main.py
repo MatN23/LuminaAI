@@ -4,7 +4,7 @@
 import os
 import sys
 import logging
-import traceback
+import traceback as tb_module
 import psutil
 import gc
 import json
@@ -1747,8 +1747,38 @@ def main():
             try:
                 orchestrator = AdaptiveTrainingOrchestrator(config)
                 print("\nOrchestrator initialized successfully")
+                print("\n" + "="*80)
+                print("🔍 TRAINER VERIFICATION")
+                print("="*80)
+
+                # Initialize training system
+                orchestrator.initialize_training()
+
+                # Verify trainer is real
+                trainer_type = type(orchestrator.trainer).__name__
+                print(f"Trainer type: {trainer_type}")
+
+                if trainer_type == 'AdaptiveTrainer':
+                    print("❌ CRITICAL ERROR: Using fallback trainer!")
+                    print("   Real EnhancedConversationTrainer failed to load")
+                    print("   Training will NOT work!")
+                    sys.exit(1)
+
+                # Verify train method exists and is callable
+                if not hasattr(orchestrator.trainer, 'train'):
+                    print("❌ CRITICAL ERROR: Trainer has no train method!")
+                    sys.exit(1)
+
+                if not callable(orchestrator.trainer.train):
+                    print("❌ CRITICAL ERROR: Trainer.train is not callable!")
+                    sys.exit(1)
+
+                print("✅ Trainer verification passed")
+                print(f"✅ Trainer class: {orchestrator.trainer.__class__.__module__}.{trainer_type}")
+                print("="*80 + "\n")
             except Exception as e:
                 print(f"\nERROR: Failed to initialize orchestrator: {e}")
+                import traceback
                 traceback.print_exc()
                 return 1
             
@@ -1985,6 +2015,7 @@ def main():
         print(f"Error Type: {type(e).__name__}")
         print(f"Error Message: {e}")
         print("\nFull Traceback:")
+        import traceback
         traceback.print_exc()
         print("="*80)
         return 1

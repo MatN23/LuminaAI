@@ -904,36 +904,73 @@ class AdaptiveTrainingOrchestrator:
             raise
     
     def _initialize_adaptive_trainer(self):
-        """Initialize trainer with adaptive capabilities."""
+        """Initialize trainer with adaptive capabilities - FIXED."""
+        logging.info("Attempting to initialize EnhancedConversationTrainer...")
+    
+        # Try to import the real trainer
         trainer_classes = [
             ('training.trainer', 'EnhancedConversationTrainer'),
             ('trainer', 'EnhancedConversationTrainer'),
-            ('training.trainer', 'ConversationTrainer'),
-            ('trainer', 'ConversationTrainer'),
         ]
-        
+
+        trainer_initialized = False
+
         for module_name, class_name in trainer_classes:
             try:
+                logging.info(f"Trying to import {class_name} from {module_name}...")
                 module = __import__(module_name, fromlist=[class_name])
                 trainer_class = getattr(module, class_name)
+                print("="*80)
+                print("DEBUG: PRE-TRAINER INITIALIZATION CHECK")
+                print("="*80)
+                print(f"DEBUG: model = {self.model is not None}")
+                print(f"DEBUG: tokenizer = {self.tokenizer is not None}")
+                print(f"DEBUG: config = {self.config is not None}")
+                print(f"DEBUG: logger = {self.logger is not None}")
+                if self.model is not None:
+                    print(f"DEBUG: model type = {type(self.model).__name__}")
+                if self.tokenizer is not None:
+                    print(f"DEBUG: tokenizer type = {type(self.tokenizer).__name__}")
+                print("="*80)
+
+                # ✅ CRITICAL: Pass ALL required arguments to trainer
                 self.trainer = trainer_class(
-                    self.model, self.tokenizer, self.config, self.logger
+                    model=self.model,
+                    tokenizer=self.tokenizer,
+                    config=self.config,
+                    logger=self.logger
                 )
-                
+
                 # Enhance trainer with adaptive capabilities
                 self._enhance_trainer_with_adaptive_features()
+
+                logging.info(f"✅ Real trainer initialized: {class_name}")
+                trainer_initialized = True
+                break
                 
-                logging.info(f"Adaptive trainer initialized: {class_name}")
-                return
             except (ImportError, AttributeError) as e:
-                logging.debug(f"Could not import {class_name} from {module_name}: {e}")
+                print(f"❌ Import failed: {class_name} from {module_name}")
+                print(f"   Error: {e}")
+                import traceback
+                traceback.print_exc()
                 continue
-        
-        # Fallback to basic adaptive trainer
-        self.trainer = self._create_adaptive_trainer()
-        
-        if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-            self.config.apply_device_optimizations('mps')
+            except Exception as e:
+                print(f"❌ Unexpected error importing {class_name} from {module_name}")
+                print(f"   Error type: {type(e).__name__}")
+                print(f"   Error: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
+                
+        if not trainer_initialized:
+            # ❌ CRITICAL ERROR: Don't fall back silently!
+            error_msg = (
+                "CRITICAL: Could not initialize EnhancedConversationTrainer!\n"
+                "This means training will NOT work.\n"
+                "Please ensure trainer.py is in the correct location."
+            )
+            logging.error(error_msg)
+            raise RuntimeError(error_msg)
     
     def _enhance_trainer_with_adaptive_features(self):
         """Add adaptive features to existing trainer."""
@@ -975,9 +1012,14 @@ class AdaptiveTrainingOrchestrator:
             logging.info(f"✅ Trainer confirmed: {type(self.trainer).__name__}")
             logging.info(f"✅ Trainer has train method: {hasattr(self.trainer, 'train')}")
 
-            # Setup datasets
+            # ✅ Setup datasets using HybridDatasetManager
             logging.info("Setting up datasets...")
             train_dataset, eval_dataset = self._setup_datasets()
+
+            # ✅ VERIFY datasets are actually loaded
+            if train_dataset is None or len(train_dataset) == 0:
+                raise RuntimeError("Training dataset is empty or None!")
+
             logging.info(f"✅ Train dataset: {len(train_dataset)} samples")
             logging.info(f"✅ Eval dataset: {len(eval_dataset)} samples")
 
@@ -990,23 +1032,21 @@ class AdaptiveTrainingOrchestrator:
             logging.info("STARTING ACTUAL TRAINING LOOP")
             logging.info("="*80)
 
-            if hasattr(self.trainer, 'train'):
-                logging.info(f"Calling trainer.train() with:")
-                logging.info(f"  Train samples: {len(train_dataset)}")
-                logging.info(f"  Eval samples: {len(eval_dataset)}")
-                logging.info(f"  Epochs: {self.config.num_epochs}")
-                logging.info(f"  Batch size: {self.config.batch_size}")
+            if not hasattr(self.trainer, 'train'):
+                raise AttributeError(f"Trainer {type(self.trainer).__name__} has no train method!")
 
-                # THE ACTUAL TRAINING CALL
-                self.trainer.train(train_dataset, eval_dataset)
+            logging.info(f"Calling trainer.train() with:")
+            logging.info(f"  Train samples: {len(train_dataset)}")
+            logging.info(f"  Eval samples: {len(eval_dataset)}")
+            logging.info(f"  Epochs: {self.config.num_epochs}")
+            logging.info(f"  Batch size: {self.config.batch_size}")
 
-                logging.info("="*80)
-                logging.info("TRAINING LOOP COMPLETED")
-                logging.info("="*80)
-            else:
-                logging.error(f"Trainer {type(self.trainer).__name__} has no train method!")
-                logging.error(f"Available methods: {[m for m in dir(self.trainer) if not m.startswith('_')]}")
-                raise AttributeError("Trainer missing train method")
+            # ✅ THE ACTUAL TRAINING CALL
+            self.trainer.train(train_dataset, eval_dataset)
+
+            logging.info("="*80)
+            logging.info("TRAINING LOOP COMPLETED")
+            logging.info("="*80)
 
             # Post-training analysis
             end_time = datetime.now()
