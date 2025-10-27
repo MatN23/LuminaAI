@@ -1900,40 +1900,7 @@ class EnhancedConversationTrainer:
         if self.use_deepspeed:
             self._setup_deepspeed_training()
         else:
-            # ✅ FIXED: Standard training setup (was calling non-existent _setup_standard_training)
-            print("="*60)
-            print("INITIALIZING STANDARD PYTORCH TRAINING")
-            print("="*60)
-
-            # Move model to device
-            self.model = self.model.to(self.device)
-            print(f"Model moved to device: {self.device}")
-
-            # Setup precision
-            precision_info = self.precision_manager.get_precision_info()
-            print(f"Training precision: {precision_info['training']['precision']}")
-
-            # Setup AMP (Automatic Mixed Precision) if needed
-            self.use_amp = self.precision_manager.should_use_grad_scaler()
-            self.scaler = GradScaler() if self.use_amp else None
-
-            if self.use_amp:
-                print(f"✅ AMP enabled with gradient scaling")
-
-            # Create optimizer (check for quantized optimizer first)
-            quantized_optimizer = self.quantization_manager.create_quantized_optimizer(self.model)
-            if quantized_optimizer:
-                self.optimizer = quantized_optimizer
-                print(f"✅ Using quantized optimizer")
-            else:
-                self.optimizer = self._create_standard_optimizer()
-                print(f"✅ Using standard AdamW optimizer")
-
-            # Scheduler will be setup in train() when we know total steps
-            self.scheduler = None
-
-            print(f"✅ Standard training setup complete")
-            print("="*60)
+            self._setup_standard_training()
 
     def _setup_deepspeed_training(self):
         """Setup DeepSpeed training with MoE, CPU offloading, quantization, and precision optimizations."""
@@ -2170,16 +2137,16 @@ class EnhancedConversationTrainer:
             # ✅ CRITICAL FIX: Create a basic linear warmup scheduler as fallback
             from torch.optim.lr_scheduler import LambdaLR
 
-            def lr_lambda(current_step: int):
-                if current_step < warmup_steps:
-                    return float(current_step) / float(max(1, warmup_steps))
-                else:
-                    # Linear decay
-                    progress = (current_step - warmup_steps) / max(1, (total_steps - warmup_steps))
-                    return max(0.0, 1.0 - progress)
-
-            self.scheduler = LambdaLR(self.optimizer, lr_lambda)
-            print(f"⚠️ Unknown scheduler '{lr_scheduler}', using linear warmup+decay: warmup={warmup_steps}, total={total_steps}")
+        def lr_lambda(current_step: int):
+            if current_step < warmup_steps:
+                return float(current_step) / float(max(1, warmup_steps))
+            else:
+                # Linear decay
+                progress = (current_step - warmup_steps) / max(1, (total_steps - warmup_steps))
+                return max(0.0, 1.0 - progress)
+        
+        self.scheduler = LambdaLR(self.optimizer, lr_lambda)
+        print(f"⚠️ Unknown scheduler '{lr_scheduler}', using linear warmup+decay: warmup={warmup_steps}, total={total_steps}")
     
     def _create_standard_optimizer(self) -> torch.optim.Optimizer:
         """Create standard PyTorch optimizer."""
@@ -2249,6 +2216,8 @@ class EnhancedConversationTrainer:
 
         if torch.isnan(weighted_loss).any() or torch.isinf(weighted_loss).any():
             print("NaN or Inf detected in loss computation")
+            if self.quantization_manager.is_quantized:
+                print("This might be related to quantization - consider adjusting precision or quantization settings")
             return {
                 'loss': torch.tensor(0.0, device=loss.device, requires_grad=True),
                 'raw_loss': torch.tensor(0.0, device=loss.device),
@@ -2281,7 +2250,7 @@ class EnhancedConversationTrainer:
             'valid_tokens': mask.sum().detach(),
             'accuracy': accuracy.detach()
         }
-        
+    
     def train_step(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
         """Enhanced training step with DeepSpeed, MoE, quantization, and precision support."""
         if self.use_deepspeed:
@@ -2394,8 +2363,6 @@ class EnhancedConversationTrainer:
                 loss_dict = self.compute_loss(logits, labels, loss_weights)
         
         loss = loss_dict['loss']
-
-        loss = loss / self.config.gradient_accumulation_steps
         
         if torch.isnan(loss).any() or torch.isinf(loss).any():
             print("Invalid loss detected, skipping batch")
@@ -2418,7 +2385,7 @@ class EnhancedConversationTrainer:
         self._update_throughput(loss_dict['valid_tokens'].item())
         
         return {
-            'loss': loss.item() * self.config.gradient_accumulation_steps,
+            'loss': loss.item(),
             'raw_loss': loss_dict['raw_loss'].item(),
             'perplexity': loss_dict['perplexity'].item(),
             'valid_tokens': loss_dict['valid_tokens'].item(),
@@ -2463,9 +2430,9 @@ class EnhancedConversationTrainer:
     def _standard_optimizer_step(self) -> Dict[str, float]:
         """Standard optimizer step with precision awareness - FIXED."""
 
-        # Only unscale for FP16 (scaler only exists for FP16)
+        # ✅ CRITICAL FIX: Only unscale for FP16 (scaler only exists for FP16)
         if self.use_amp and self.scaler is not None:
-            self.scaler.unscale_(self.optimizer)
+            self.scaler.unscale_(self.optimizer)  # Scaler only exists for FP16 anyway
 
         # Clip gradients
         max_grad_norm = getattr(self.config, 'max_grad_norm', 1.0)
@@ -2478,8 +2445,9 @@ class EnhancedConversationTrainer:
             print("NaN/Inf gradients detected, skipping step")
             self.optimizer.zero_grad(set_to_none=True)
 
+            # ✅ CRITICAL: Update scaler to maintain internal state
             if self.use_amp and self.scaler is not None:
-                self.scaler.update()
+                self.scaler.update()  # This updates the loss scale counter
 
             return {'grad_norm': 0.0, 'lr': 0.0}
 
@@ -2493,8 +2461,7 @@ class EnhancedConversationTrainer:
         # Zero gradients AFTER successful step
         self.optimizer.zero_grad(set_to_none=True)
 
-        # ✅ FIXED: This method is only called AFTER gradient accumulation completes
-        # So scheduler step here is correct - it steps once per optimizer update
+        # Update scheduler
         if self.scheduler:
             self.scheduler.step()
 
@@ -2846,26 +2813,6 @@ class EnhancedConversationTrainer:
         else:
             print("STARTING STANDARD TRAINING")
         print("="*80)
-
-        # 🚨 CRITICAL FIX: Check for epoch count mismatch
-        if hasattr(self.config, 'num_epochs'):
-            actual_epochs = self.config.num_epochs
-            print(f"✅ Config epochs verified: {actual_epochs}")
-        else:
-            print("⚠️  WARNING: num_epochs not found in config!")
-            actual_epochs = 1
-
-        # 🚨 CRITICAL DEBUG: Print what we're actually going to train
-        print(f"🔍 EPOCH VERIFICATION:")
-        print(f"   self.config.num_epochs = {getattr(self.config, 'num_epochs', 'NOT FOUND')}")
-        print(f"   Will train for: {actual_epochs} epochs")
-        """Main training loop with enhanced logging, accuracy tracking, quantization, and precision monitoring."""
-        print("="*80)
-        if self.use_deepspeed:
-            print("STARTING DEEPSPEED TRAINING")
-        else:
-            print("STARTING STANDARD TRAINING")
-        print("="*80)
         
         if self.quantization_manager.is_quantized:
             quant_status = self.get_quantization_status()
@@ -2907,12 +2854,9 @@ class EnhancedConversationTrainer:
         
         if not self.use_deepspeed:
             gradient_accumulation_steps = getattr(self.config, 'gradient_accumulation_steps', 1)
-            effective_steps_per_epoch = len(train_dataloader) // gradient_accumulation_steps
-
-            scheduler_total_steps = 200  # your desired number
-            required_epochs = math.ceil(scheduler_total_steps / effective_steps_per_epoch)
-            self.config.num_epochs = required_epochs  # adjust epochs to match
-            self._setup_scheduler(scheduler_total_steps)
+            total_steps = len(train_dataloader) * self.config.num_epochs // gradient_accumulation_steps
+            total_steps = 200  # ← Set your desired number here!
+            self._setup_scheduler(total_steps)
         
         self._log_training_config(len(train_dataloader))
         
