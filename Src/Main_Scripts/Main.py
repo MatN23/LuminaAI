@@ -1294,7 +1294,7 @@ def auto_adjust_epochs_chinchilla(config, model, dataset):
     """
     Chinchilla-style automatic epoch adjustment based on dataset size and model parameters.
     
-    Formula: N_opt ≈ P^0.73 (where P = model parameters)
+    Formula: N_opt ≈ 20 * P (where P = model parameters in billions)
     
     Args:
         config: Training configuration object
@@ -1304,9 +1304,6 @@ def auto_adjust_epochs_chinchilla(config, model, dataset):
     Returns:
         Updated config with adjusted num_epochs
     """
-    if not getattr(config, 'auto_epoch_scaling', False):
-        return config
-    
     print("\n" + "="*80)
     print("🧠 CHINCHILLA-STYLE EPOCH SCALING")
     print("="*80)
@@ -1314,7 +1311,8 @@ def auto_adjust_epochs_chinchilla(config, model, dataset):
     # Get model parameter count
     try:
         P = sum(p.numel() for p in model.parameters())
-        print(f"📊 Model Parameters: {P:,} ({P/1e9:.2f}B)")
+        P_billions = P / 1e9
+        print(f"📊 Model Parameters: {P:,} ({P_billions:.2f}B)")
     except Exception as e:
         print(f"⚠️  Could not count model parameters: {e}")
         print("   Skipping auto-epoch scaling")
@@ -1335,15 +1333,15 @@ def auto_adjust_epochs_chinchilla(config, model, dataset):
             print("   Skipping auto-epoch scaling")
             return config
         
-        print(f"📚 Dataset Tokens: {dataset_tokens:,} ({dataset_tokens/1e6:.1f}M)")
+        print(f"📚 Dataset Tokens: {dataset_tokens:,} ({dataset_tokens/1e9:.2f}B)")
     except Exception as e:
         print(f"⚠️  Could not estimate dataset tokens: {e}")
         print("   Skipping auto-epoch scaling")
         return config
     
-    # Apply Chinchilla scaling: N_opt ≈ P^0.73
-    N_opt = int(P ** 0.73)
-    print(f"🎯 Chinchilla Optimal Tokens: {N_opt:,} ({N_opt/1e6:.1f}M)")
+    # Chinchilla scaling: N_opt ≈ 20 * P (20 tokens per parameter)
+    N_opt = int(20 * P)  # Optimal total tokens to see
+    print(f"🎯 Chinchilla Optimal Tokens: {N_opt:,} ({N_opt/1e9:.2f}B)")
     
     # Calculate needed epochs
     if dataset_tokens <= 0:
@@ -1653,6 +1651,12 @@ def main():
                     override_count += 1
         
         print(f"Applied {override_count} configuration overrides")
+
+        # Apply Chinchilla scaling parameters
+        print("\nApplying Chinchilla scaling parameters...")
+        for key, value in chinchilla_params.items():
+            setattr(config, key, value)
+            print(f"  {key}: {value}")
         
         # Step 3: Validate precision support
         print_banner("STEP 3: VALIDATING PRECISION SUPPORT")
@@ -1791,11 +1795,6 @@ def main():
         print(f"Total epochs: {config.num_epochs}")
         print(f"Total optimizer steps for training: {(len(train_dataset) / (config.batch_size * config.gradient_accumulation_steps)) * config.num_epochs:.0f}")
         print("="*80 + "\n")
-
-        # Step 7.5: Auto-adjust epochs using Chinchilla scaling
-        if getattr(config, 'auto_epoch_scaling', False):
-            print_banner("STEP 7.5: CHINCHILLA EPOCH SCALING")
-            config = auto_adjust_epochs_chinchilla(config, model, train_dataset)
         
         # Step 8: Estimate training time (ADVANCED)
         print_banner("STEP 8: ESTIMATE TRAINING TIME")
@@ -1841,6 +1840,16 @@ def main():
             print(f"  Top-K Routing: {config.moe_top_k}")
             print(f"  Capacity Factor: {config.capacity_factor}")
             print(f"  Load Balancing Weight: {config.load_balancing_weight}")
+
+        # Step 9.5: Auto-adjust epochs using Chinchilla scaling
+        if getattr(config, 'auto_epoch_scaling', False):
+            print_banner("STEP 9.5: CHINCHILLA EPOCH SCALING")
+            print(f"Before Chinchilla: {config.num_epochs} epochs")
+            config = auto_adjust_epochs_chinchilla(config, model, train_dataset)
+            print(f"After Chinchilla: {config.num_epochs} epochs")
+        else:
+            print_banner("STEP 9.5: CHINCHILLA SCALING (DISABLED)")
+            print(f"auto_epoch_scaling is False - using manual epochs: {config.num_epochs}")
         
         # Step 10: Initialize training system
         print_banner("STEP 10: INITIALIZING TRAINING SYSTEM")
