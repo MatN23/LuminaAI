@@ -1290,6 +1290,109 @@ def setup_multi_dataset_training(config, data_params):
     
     return train_data_path, eval_data_path
 
+def auto_adjust_epochs_chinchilla(config, model, dataset):
+    """
+    Chinchilla-style automatic epoch adjustment based on dataset size and model parameters.
+    
+    Formula: N_opt ≈ P^0.73 (where P = model parameters)
+    
+    Args:
+        config: Training configuration object
+        model: Model instance (to count parameters)
+        dataset: Dataset instance (to estimate tokens)
+        
+    Returns:
+        Updated config with adjusted num_epochs
+    """
+    if not getattr(config, 'auto_epoch_scaling', False):
+        return config
+    
+    print("\n" + "="*80)
+    print("🧠 CHINCHILLA-STYLE EPOCH SCALING")
+    print("="*80)
+    
+    # Get model parameter count
+    try:
+        P = sum(p.numel() for p in model.parameters())
+        print(f"📊 Model Parameters: {P:,} ({P/1e9:.2f}B)")
+    except Exception as e:
+        print(f"⚠️  Could not count model parameters: {e}")
+        print("   Skipping auto-epoch scaling")
+        return config
+    
+    # Estimate dataset tokens
+    try:
+        # Method 1: Try to get from dataset directly
+        if hasattr(dataset, 'total_tokens'):
+            dataset_tokens = dataset.total_tokens
+        # Method 2: Estimate from dataset size and sequence length
+        elif hasattr(dataset, '__len__'):
+            num_samples = len(dataset)
+            seq_length = getattr(config, 'seq_length', 2048)
+            dataset_tokens = num_samples * seq_length
+        else:
+            print("⚠️  Could not estimate dataset size")
+            print("   Skipping auto-epoch scaling")
+            return config
+        
+        print(f"📚 Dataset Tokens: {dataset_tokens:,} ({dataset_tokens/1e6:.1f}M)")
+    except Exception as e:
+        print(f"⚠️  Could not estimate dataset tokens: {e}")
+        print("   Skipping auto-epoch scaling")
+        return config
+    
+    # Apply Chinchilla scaling: N_opt ≈ P^0.73
+    N_opt = int(P ** 0.73)
+    print(f"🎯 Chinchilla Optimal Tokens: {N_opt:,} ({N_opt/1e6:.1f}M)")
+    
+    # Calculate needed epochs
+    if dataset_tokens <= 0:
+        print("⚠️  Invalid dataset token count")
+        return config
+    
+    tokens_per_epoch = dataset_tokens
+    optimal_epochs = max(1, round(N_opt / tokens_per_epoch))
+    
+    # Get current epoch setting
+    old_epochs = getattr(config, 'num_epochs', 3)
+    
+    # Apply constraints
+    min_epochs = getattr(config, 'min_auto_epochs', 1)
+    max_epochs = getattr(config, 'max_auto_epochs', 50)
+    final_epochs = max(min_epochs, min(optimal_epochs, max_epochs))
+    
+    print(f"\n📈 Epoch Calculation:")
+    print(f"   Tokens per epoch: {tokens_per_epoch:,}")
+    print(f"   Optimal epochs (unconstrained): {optimal_epochs}")
+    print(f"   Epoch constraints: {min_epochs} - {max_epochs}")
+    print(f"   Original config: {old_epochs} epochs")
+    print(f"   ➡️  Adjusted to: {final_epochs} epochs")
+    
+    # Calculate total training tokens
+    total_tokens = tokens_per_epoch * final_epochs
+    chinchilla_ratio = (total_tokens / N_opt) * 100
+    
+    print(f"\n🔢 Training Token Budget:")
+    print(f"   Total tokens (new): {total_tokens:,} ({total_tokens/1e9:.2f}B)")
+    print(f"   Chinchilla target: {N_opt:,} ({N_opt/1e9:.2f}B)")
+    print(f"   Coverage: {chinchilla_ratio:.1f}% of optimal")
+    
+    if chinchilla_ratio < 50:
+        print(f"   ⚠️  WARNING: Significantly under Chinchilla recommendation")
+        print(f"      Consider increasing max_auto_epochs or dataset size")
+    elif chinchilla_ratio > 150:
+        print(f"   ⚠️  WARNING: Exceeding Chinchilla recommendation")
+        print(f"      May lead to overfitting - consider early stopping")
+    else:
+        print(f"   ✅ Within reasonable range of Chinchilla scaling")
+    
+    # Update config
+    config.num_epochs = final_epochs
+    
+    print("="*80 + "\n")
+    
+    return config
+
 def main():
     """Main training function with advanced features and comprehensive logging."""
     
@@ -1335,6 +1438,7 @@ def main():
         # ===================================================================
         # BASE TRAINING (Pre-training on raw text like The Pile, C4, etc. Works on .txt and .jsonl)
         # ===================================================================
+
         'base_training_paths': [
             'datasets/wikipedia_1.txt',
             'datasets/wikipedia_2.txt',
@@ -1442,6 +1546,11 @@ def main():
         'continuous_checkpointing': True,
         'enable_profiling': False,
         'save_optimizer_states': True,
+    }
+    chinchilla_params = {
+        'auto_epoch_scaling': True,      # Enable/disable auto-scaling
+        'min_auto_epochs': 1,            # Minimum epochs (safety)
+        'max_auto_epochs': 50,           # Maximum epochs (safety)
     }
     
     # =================================================
@@ -1682,6 +1791,11 @@ def main():
         print(f"Total epochs: {config.num_epochs}")
         print(f"Total optimizer steps for training: {(len(train_dataset) / (config.batch_size * config.gradient_accumulation_steps)) * config.num_epochs:.0f}")
         print("="*80 + "\n")
+
+        # Step 7.5: Auto-adjust epochs using Chinchilla scaling
+        if getattr(config, 'auto_epoch_scaling', False):
+            print_banner("STEP 7.5: CHINCHILLA EPOCH SCALING")
+            config = auto_adjust_epochs_chinchilla(config, model, train_dataset)
         
         # Step 8: Estimate training time (ADVANCED)
         print_banner("STEP 8: ESTIMATE TRAINING TIME")
