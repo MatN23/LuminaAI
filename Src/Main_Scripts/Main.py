@@ -281,6 +281,17 @@ def wrap_orchestrator_with_oom_protection(orchestrator, train_dataset, eval_data
             print(f"  Batch size: {orchestrator.config.batch_size}")
             print(f"  Gradient accumulation: {orchestrator.config.gradient_accumulation_steps}")
             print(f"  Effective batch size: {orchestrator.config.batch_size * orchestrator.config.gradient_accumulation_steps}")
+
+            print("="*80)
+            print("🔍 FINAL EPOCH VERIFICATION BEFORE TRAINING")
+            print("="*80)
+            print(f"config.num_epochs = {config.num_epochs}")
+            print(f"orchestrator.config.num_epochs = {orchestrator.config.num_epochs}")
+            if config.num_epochs != 11:
+                print(f"⚠️  CORRECTING: {config.num_epochs} → 11")
+                config.num_epochs = 11
+                orchestrator.config.num_epochs = 11
+            print("="*80)
             
             # Run adaptive training
             orchestrator.run_adaptive_training()
@@ -1682,16 +1693,52 @@ def main():
         print(f"Total epochs: {config.num_epochs}")
         print(f"Total optimizer steps for training: {(len(train_dataset) / (config.batch_size * config.gradient_accumulation_steps)) * config.num_epochs:.0f}")
         print("="*80 + "\n")
+        
+        # Step 8: Estimate training time (ADVANCED)
+        print_banner("STEP 8: ESTIMATE TRAINING TIME")
+        if advanced_features.get('estimate_training_time'):
+            estimate_and_display_training_time(config, len(train_dataset))
+        
+        
+        # Step 9: Initialize model
+        print_banner("STEP 9: INITIALIZING MODEL")
+        print("Creating model configuration...")
+        model_config = config_to_deepseek_config(config)
+        
+        print("Initializing model architecture...")
+        model = DeepSeekTransformer(model_config)
+        
 
-        python
-        # Step 7: Setup datasets
-        print_banner("STEP 7: SETTING UP DATASETS")
+        def init_weights_for_fp16(module):
+            if isinstance(module, (nn.Linear, nn.Embedding)):
+                # Use smaller std for FP16 stability
+                module.weight.data.normal_(mean=0.0, std=0.02)
+                if isinstance(module, nn.Linear) and module.bias is not None:
+                    module.bias.data.zero_()
+            elif isinstance(module, nn.LayerNorm):
+                module.bias.data.zero_()
+                module.weight.data.fill_(1.0)
+
+        model.apply(init_weights_for_fp16)
+        print("✓ Applied FP16-safe weight initialization")
+        total_params = sum(p.numel() for p in model.parameters())
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         
-        # ... (your existing dataset setup code)
+        print(f"\nModel Statistics:")
+        print(f"  Architecture: DeepSeek Transformer")
+        print(f"  Total Parameters: {total_params:,}")
+        print(f"  Trainable Parameters: {trainable_params:,}")
+        print(f"  Non-trainable Parameters: {total_params - trainable_params:,}")
+        print(f"  Model Size (FP32): {total_params * 4 / 1e9:.2f} GB")
+        print(f"  Model Size (FP16): {total_params * 2 / 1e9:.2f} GB")
         
-        print(f"\n✓ Datasets loaded successfully!")
-        print(f"  Training dataset: {len(train_dataset):,} samples")
-        
+        if config.use_moe:
+            print(f"\nMixture of Experts Configuration:")
+            print(f"  Number of Experts: {config.num_experts}")
+            print(f"  Top-K Routing: {config.moe_top_k}")
+            print(f"  Capacity Factor: {config.capacity_factor}")
+            print(f"  Load Balancing Weight: {config.load_balancing_weight}")
+
         # ============================================================================
         # 🧠 CHINCHILLA-OPTIMAL TRAINING CALCULATOR
         # ============================================================================
@@ -1808,7 +1855,7 @@ def main():
             print(f"  Your configuration matches compute-optimal training")
         
         # Auto-adjustment option
-        AUTO_ADJUST_EPOCHS = False  # 🎛️ SET TO True TO AUTO-ADJUST
+        AUTO_ADJUST_EPOCHS = True  # 🎛️ SET TO True TO AUTO-ADJUST
         
         if AUTO_ADJUST_EPOCHS and required_epochs != config.num_epochs:
             old_epochs = config.num_epochs
@@ -1830,51 +1877,6 @@ def main():
         print(f"  Chinchilla Efficiency: {min(chinchilla_ratio_actual / CHINCHILLA_RATIO, CHINCHILLA_RATIO / chinchilla_ratio_actual) * 100:.0f}%")
         
         print("="*80 + "\n")
-        
-        # Step 8: Estimate training time (ADVANCED)
-        print_banner("STEP 8: ESTIMATE TRAINING TIME")
-        if advanced_features.get('estimate_training_time'):
-            estimate_and_display_training_time(config, len(train_dataset))
-        
-        
-        # Step 9: Initialize model
-        print_banner("STEP 9: INITIALIZING MODEL")
-        print("Creating model configuration...")
-        model_config = config_to_deepseek_config(config)
-        
-        print("Initializing model architecture...")
-        model = DeepSeekTransformer(model_config)
-        
-
-        def init_weights_for_fp16(module):
-            if isinstance(module, (nn.Linear, nn.Embedding)):
-                # Use smaller std for FP16 stability
-                module.weight.data.normal_(mean=0.0, std=0.02)
-                if isinstance(module, nn.Linear) and module.bias is not None:
-                    module.bias.data.zero_()
-            elif isinstance(module, nn.LayerNorm):
-                module.bias.data.zero_()
-                module.weight.data.fill_(1.0)
-
-        model.apply(init_weights_for_fp16)
-        print("✓ Applied FP16-safe weight initialization")
-        total_params = sum(p.numel() for p in model.parameters())
-        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        
-        print(f"\nModel Statistics:")
-        print(f"  Architecture: DeepSeek Transformer")
-        print(f"  Total Parameters: {total_params:,}")
-        print(f"  Trainable Parameters: {trainable_params:,}")
-        print(f"  Non-trainable Parameters: {total_params - trainable_params:,}")
-        print(f"  Model Size (FP32): {total_params * 4 / 1e9:.2f} GB")
-        print(f"  Model Size (FP16): {total_params * 2 / 1e9:.2f} GB")
-        
-        if config.use_moe:
-            print(f"\nMixture of Experts Configuration:")
-            print(f"  Number of Experts: {config.num_experts}")
-            print(f"  Top-K Routing: {config.moe_top_k}")
-            print(f"  Capacity Factor: {config.capacity_factor}")
-            print(f"  Load Balancing Weight: {config.load_balancing_weight}")
         
         # Step 10: Initialize training system
         print_banner("STEP 10: INITIALIZING TRAINING SYSTEM")

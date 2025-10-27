@@ -904,37 +904,88 @@ class AdaptiveTrainingOrchestrator:
             raise
     
     def _initialize_adaptive_trainer(self):
-        """Initialize trainer with adaptive capabilities."""
+        """Initialize trainer with adaptive capabilities - FIXED to not silently fail."""
+
+        # ✅ CRITICAL FIX: Don't silently catch exceptions - we NEED to know if trainer init fails
+        print("Attempting to initialize EnhancedConversationTrainer...")
+    
+        # Try all possible import paths
         trainer_classes = [
             ('training.trainer', 'EnhancedConversationTrainer'),
             ('trainer', 'EnhancedConversationTrainer'),
-            ('training.trainer', 'ConversationTrainer'),
-            ('trainer', 'ConversationTrainer'),
         ]
-        
+
+        trainer_initialized = False
+        last_error = None
+
         for module_name, class_name in trainer_classes:
             try:
+                print(f"  Trying to import {class_name} from {module_name}...")
                 module = __import__(module_name, fromlist=[class_name])
                 trainer_class = getattr(module, class_name)
+
+                print(f"  ✅ Successfully imported {class_name}")
+                print(f"  Initializing trainer with:")
+                print(f"    - Model: {type(self.model).__name__}")
+                print(f"    - Tokenizer: {type(self.tokenizer).__name__}")
+                print(f"    - Config: {type(self.config).__name__}")
+                print(f"    - Logger: {type(self.logger).__name__}")
+
+                # Actually initialize the trainer
                 self.trainer = trainer_class(
-                    self.model, self.tokenizer, self.config, self.logger
+                    self.model, 
+                    self.tokenizer, 
+                    self.config, 
+                    self.logger
                 )
-                
-                # Enhance trainer with adaptive capabilities
+
+                print(f"  ✅ Trainer initialized successfully!")
+                print(f"  Trainer type: {type(self.trainer).__name__}")
+                print(f"  Has train method: {hasattr(self.trainer, 'train')}")
+
+                # Verify trainer has required attributes
+                required_attrs = ['train', 'model', 'tokenizer', 'config']
+                missing_attrs = [attr for attr in required_attrs if not hasattr(self.trainer, attr)]
+
+                if missing_attrs:
+                    raise AttributeError(f"Trainer missing required attributes: {missing_attrs}")
+
+                    # Enhance trainer with adaptive capabilities
                 self._enhance_trainer_with_adaptive_features()
-                
-                logging.info(f"Adaptive trainer initialized: {class_name}")
+
+                trainer_initialized = True
+                logging.info(f"✅ Real trainer initialized: {class_name}")
                 return
-            except (ImportError, AttributeError) as e:
-                logging.debug(f"Could not import {class_name} from {module_name}: {e}")
+
+            except ImportError as e:
+                last_error = e
+                print(f"  ❌ Import failed: {e}")
                 continue
-        
-        # Fallback to basic adaptive trainer
-        self.trainer = self._create_adaptive_trainer()
-        
-        if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-            self.config.apply_device_optimizations('mps')
-    
+            except Exception as e:
+                last_error = e
+                print(f"  ❌ Initialization failed: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
+                
+        # If we get here, all attempts failed
+        if not trainer_initialized:
+            error_msg = f"CRITICAL: Could not initialize EnhancedConversationTrainer. Last error: {last_error}"
+            print(f"\n{'='*80}")
+            print(f"❌ TRAINER INITIALIZATION FAILED")
+            print(f"{'='*80}")
+            print(error_msg)
+            print(f"\nTried import paths:")
+            for module_name, class_name in trainer_classes:
+                print(f"  - {module_name}.{class_name}")
+            print(f"\nCurrent sys.path:")
+            import sys
+            for i, path in enumerate(sys.path[:5]):
+                print(f"  [{i}] {path}")
+            print(f"{'='*80}\n")
+
+            # DO NOT use fallback - raise exception instead
+            raise RuntimeError(error_msg)
     def _enhance_trainer_with_adaptive_features(self):
         """Add adaptive features to existing trainer."""
         # Inject monitoring callback
@@ -1304,7 +1355,6 @@ class AdaptiveTrainingOrchestrator:
                 return train_dataset, eval_dataset
             except ImportError:
                 raise ImportError("Could not import dataset setup functions")
-    
     
     def _save_emergency_adaptive_state(self):
         """Save emergency state including adaptive decisions."""

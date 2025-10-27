@@ -1900,7 +1900,40 @@ class EnhancedConversationTrainer:
         if self.use_deepspeed:
             self._setup_deepspeed_training()
         else:
-            self._setup_standard_training()
+            # ✅ FIXED: Standard training setup (was calling non-existent _setup_standard_training)
+            print("="*60)
+            print("INITIALIZING STANDARD PYTORCH TRAINING")
+            print("="*60)
+
+            # Move model to device
+            self.model = self.model.to(self.device)
+            print(f"Model moved to device: {self.device}")
+
+            # Setup precision
+            precision_info = self.precision_manager.get_precision_info()
+            print(f"Training precision: {precision_info['training']['precision']}")
+
+            # Setup AMP (Automatic Mixed Precision) if needed
+            self.use_amp = self.precision_manager.should_use_grad_scaler()
+            self.scaler = GradScaler() if self.use_amp else None
+
+            if self.use_amp:
+                print(f"✅ AMP enabled with gradient scaling")
+
+            # Create optimizer (check for quantized optimizer first)
+            quantized_optimizer = self.quantization_manager.create_quantized_optimizer(self.model)
+            if quantized_optimizer:
+                self.optimizer = quantized_optimizer
+                print(f"✅ Using quantized optimizer")
+            else:
+                self.optimizer = self._create_standard_optimizer()
+                print(f"✅ Using standard AdamW optimizer")
+
+            # Scheduler will be setup in train() when we know total steps
+            self.scheduler = None
+
+            print(f"✅ Standard training setup complete")
+            print("="*60)
 
     def _setup_deepspeed_training(self):
         """Setup DeepSpeed training with MoE, CPU offloading, quantization, and precision optimizations."""
@@ -2137,16 +2170,16 @@ class EnhancedConversationTrainer:
             # ✅ CRITICAL FIX: Create a basic linear warmup scheduler as fallback
             from torch.optim.lr_scheduler import LambdaLR
 
-        def lr_lambda(current_step: int):
-            if current_step < warmup_steps:
-                return float(current_step) / float(max(1, warmup_steps))
-            else:
-                # Linear decay
-                progress = (current_step - warmup_steps) / max(1, (total_steps - warmup_steps))
-                return max(0.0, 1.0 - progress)
-        
-        self.scheduler = LambdaLR(self.optimizer, lr_lambda)
-        print(f"⚠️ Unknown scheduler '{lr_scheduler}', using linear warmup+decay: warmup={warmup_steps}, total={total_steps}")
+            def lr_lambda(current_step: int):
+                if current_step < warmup_steps:
+                    return float(current_step) / float(max(1, warmup_steps))
+                else:
+                    # Linear decay
+                    progress = (current_step - warmup_steps) / max(1, (total_steps - warmup_steps))
+                    return max(0.0, 1.0 - progress)
+
+            self.scheduler = LambdaLR(self.optimizer, lr_lambda)
+            print(f"⚠️ Unknown scheduler '{lr_scheduler}', using linear warmup+decay: warmup={warmup_steps}, total={total_steps}")
     
     def _create_standard_optimizer(self) -> torch.optim.Optimizer:
         """Create standard PyTorch optimizer."""
@@ -2216,8 +2249,6 @@ class EnhancedConversationTrainer:
 
         if torch.isnan(weighted_loss).any() or torch.isinf(weighted_loss).any():
             print("NaN or Inf detected in loss computation")
-            if self.quantization_manager.is_quantized:
-                print("This might be related to quantization - consider adjusting precision or quantization settings")
             return {
                 'loss': torch.tensor(0.0, device=loss.device, requires_grad=True),
                 'raw_loss': torch.tensor(0.0, device=loss.device),
@@ -2250,7 +2281,7 @@ class EnhancedConversationTrainer:
             'valid_tokens': mask.sum().detach(),
             'accuracy': accuracy.detach()
         }
-    
+        
     def train_step(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
         """Enhanced training step with DeepSpeed, MoE, quantization, and precision support."""
         if self.use_deepspeed:
@@ -2808,6 +2839,26 @@ class EnhancedConversationTrainer:
             print(f"[TRAINING ERROR] {fallback_msg}")
     
     def train(self, train_dataset, eval_dataset=None):
+        """Main training loop with enhanced logging, accuracy tracking, quantization, and precision monitoring."""
+        print("="*80)
+        if self.use_deepspeed:
+            print("STARTING DEEPSPEED TRAINING")
+        else:
+            print("STARTING STANDARD TRAINING")
+        print("="*80)
+
+        # 🚨 CRITICAL FIX: Check for epoch count mismatch
+        if hasattr(self.config, 'num_epochs'):
+            actual_epochs = self.config.num_epochs
+            print(f"✅ Config epochs verified: {actual_epochs}")
+        else:
+            print("⚠️  WARNING: num_epochs not found in config!")
+            actual_epochs = 1
+
+        # 🚨 CRITICAL DEBUG: Print what we're actually going to train
+        print(f"🔍 EPOCH VERIFICATION:")
+        print(f"   self.config.num_epochs = {getattr(self.config, 'num_epochs', 'NOT FOUND')}")
+        print(f"   Will train for: {actual_epochs} epochs")
         """Main training loop with enhanced logging, accuracy tracking, quantization, and precision monitoring."""
         print("="*80)
         if self.use_deepspeed:
