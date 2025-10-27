@@ -2223,9 +2223,13 @@ class EnhancedConversationTrainer:
         if loss_weights is not None:
             shift_weights = loss_weights[..., 1:].contiguous()
             flat_weights = shift_weights.view(-1)
-            weighted_loss = loss * flat_weights * mask
+            weighted_loss = loss * flat_weights
+            total_weight = (flat_weights * mask).sum().clamp(min=1)
         else:
             weighted_loss = loss * mask
+            total_weight = mask.sum().clamp(min=1)
+
+        final_loss = weighted_loss.sum() / total_weight
 
         if torch.isnan(weighted_loss).any() or torch.isinf(weighted_loss).any():
             print("NaN or Inf detected in loss computation")
@@ -2244,7 +2248,8 @@ class EnhancedConversationTrainer:
         final_loss = total_loss / total_weight
 
         # ✅ CRITICAL FIX: Use final_loss (the actual training loss) for perplexity
-        raw_loss = final_loss.detach()  # This is the real loss value
+        raw_loss = (loss * mask).sum() / mask.sum().clamp(min=1)
+        raw_loss = raw_loss.detach()  # This is the real loss value
 
         clamped_loss = torch.clamp(raw_loss, min=0.0, max=15.0)
 
@@ -2661,7 +2666,7 @@ class EnhancedConversationTrainer:
                 continue
             
             accumulation_metrics['loss'] += step_metrics['loss'] / gradient_accumulation_steps
-            accumulation_metrics['raw_loss'] += step_metrics['raw_loss']
+            accumulation_metrics['raw_loss'] += step_metrics['raw_loss'] / gradient_accumulation_steps
             accumulation_metrics['tokens'] += step_metrics['valid_tokens']
             accumulation_metrics['accuracy'] += step_metrics['accuracy']
             
