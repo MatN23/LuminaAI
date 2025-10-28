@@ -2203,7 +2203,7 @@ class EnhancedConversationTrainer:
     
     def compute_loss(self, logits: torch.Tensor, labels: torch.Tensor, 
                     loss_weights: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
-        """Compute weighted loss with MoE auxiliary losses and accuracy metrics - FIXED PPL calculation."""
+        """Compute weighted loss with MoE auxiliary losses and accuracy metrics."""
 
         shift_logits = logits[..., :-1, :].contiguous()
         shift_labels = labels[..., 1:].contiguous()
@@ -2213,17 +2213,24 @@ class EnhancedConversationTrainer:
 
         mask = (flat_labels != getattr(self.tokenizer, 'pad_token_id', 0)).float()
 
+        # Calculate accuracy
         with torch.no_grad():
             predictions = torch.argmax(flat_logits, dim=-1)
             correct_predictions = (predictions == flat_labels).float() * mask
             accuracy = correct_predictions.sum() / mask.sum().clamp(min=1)
 
+        # Cross-entropy loss (per token)
         loss = F.cross_entropy(flat_logits, flat_labels, reduction='none')
 
+        # ✅ FIX: Calculate raw (unweighted) loss for perplexity BEFORE applying weights
+        raw_loss_for_ppl = (loss * mask).sum() / mask.sum().clamp(min=1)
+        raw_loss_for_ppl = raw_loss_for_ppl.detach()
+
+        # Apply loss weights for training
         if loss_weights is not None:
             shift_weights = loss_weights[..., 1:].contiguous()
             flat_weights = shift_weights.view(-1)
-            weighted_loss = loss * flat_weights
+            weighted_loss = loss * flat_weights * mask
             total_weight = (flat_weights * mask).sum().clamp(min=1)
         else:
             weighted_loss = loss * mask
@@ -2231,39 +2238,17 @@ class EnhancedConversationTrainer:
 
         final_loss = weighted_loss.sum() / total_weight
 
-        if torch.isnan(weighted_loss).any() or torch.isinf(weighted_loss).any():
-            print("NaN or Inf detected in loss computation")
-            if self.quantization_manager.is_quantized:
-                print("This might be related to quantization - consider adjusting precision or quantization settings")
-            return {
-                'loss': torch.tensor(0.0, device=loss.device, requires_grad=True),
-                'raw_loss': torch.tensor(0.0, device=loss.device),
-                'perplexity': torch.tensor(float('inf'), device=loss.device),
-                'valid_tokens': torch.tensor(0.0, device=loss.device),
-                'accuracy': torch.tensor(0.0, device=loss.device)
-            }
-
-        total_loss = weighted_loss.sum()
-        total_weight = mask.sum().clamp(min=1)
-        final_loss = total_loss / total_weight
-
-        # ✅ CRITICAL FIX: Use final_loss (the actual training loss) for perplexity
-        raw_loss = (loss * mask).sum() / mask.sum().clamp(min=1)
-        raw_loss = raw_loss.detach()  # This is the real loss value
-
-        clamped_loss = torch.clamp(raw_loss, min=0.0, max=15.0)
+        # ✅ Use raw_loss_for_ppl for perplexity calculation
+        clamped_loss = torch.clamp(raw_loss_for_ppl, min=0.0, max=15.0)
 
         try:
             perplexity = torch.exp(clamped_loss)
         except (OverflowError, RuntimeError):
             perplexity = torch.tensor(float('inf'), device=loss.device)
 
-        if raw_loss.item() > 15.0:
-            logging.warning(f"Loss value {raw_loss.item():.2f} exceeds clamp threshold - training may be unstable")
-
         return {
-            'loss': final_loss,
-            'raw_loss': raw_loss,  # ✅ Now matches the actual loss
+            'loss': final_loss,  # This goes to backprop
+            'raw_loss': raw_loss_for_ppl,  # This goes to perplexity
             'perplexity': perplexity,
             'valid_tokens': mask.sum().detach(),
             'accuracy': accuracy.detach()

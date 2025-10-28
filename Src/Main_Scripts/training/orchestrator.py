@@ -657,10 +657,7 @@ class AdaptiveTrainingOrchestrator:
         return copy.deepcopy(config)
     
     def _setup_trainer_scheduler(self, train_dataset):
-        """
-        Setup learning rate scheduler for the trainer.
-        This must be called AFTER datasets are loaded.
-        """
+        """Setup learning rate scheduler for the trainer - FIXED."""
         if not self.trainer:
             logging.error("Cannot setup scheduler: trainer not initialized")
             return
@@ -676,16 +673,12 @@ class AdaptiveTrainingOrchestrator:
         logging.info(f"  Steps per epoch: {steps_per_epoch}")
         logging.info(f"  Total steps: {total_steps}")
 
-        # FIX: Check if trainer has the method before calling
+        # ✅ FIX: Pass total_steps to trainer's setup method
         if hasattr(self.trainer, '_setup_scheduler'):
             self.trainer._setup_scheduler(total_steps)
             if self.trainer.scheduler:
                 logging.info(f"✅ Scheduler initialized: {type(self.trainer.scheduler).__name__}")
-            else:
-                logging.warning("⚠️  Scheduler was not created!")
-        else:
-            logging.warning("⚠️  Trainer does not have _setup_scheduler method")
-
+    
     def _set_seeds(self, seed: int):
         """Set random seeds for reproducibility."""
         torch.manual_seed(seed)
