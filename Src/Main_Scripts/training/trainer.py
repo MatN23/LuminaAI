@@ -2432,7 +2432,7 @@ class EnhancedConversationTrainer:
 
         # ✅ CRITICAL FIX: Only unscale for FP16 (scaler only exists for FP16)
         if self.use_amp and self.scaler is not None:
-            self.scaler.unscale_(self.optimizer)  # Scaler only exists for FP16 anyway
+            self.scaler.unscale_(self.optimizer)
 
         # Clip gradients
         max_grad_norm = getattr(self.config, 'max_grad_norm', 1.0)
@@ -2445,9 +2445,8 @@ class EnhancedConversationTrainer:
             print("NaN/Inf gradients detected, skipping step")
             self.optimizer.zero_grad(set_to_none=True)
 
-            # ✅ CRITICAL: Update scaler to maintain internal state
             if self.use_amp and self.scaler is not None:
-                self.scaler.update()  # This updates the loss scale counter
+                self.scaler.update()
 
             return {'grad_norm': 0.0, 'lr': 0.0}
 
@@ -2461,15 +2460,26 @@ class EnhancedConversationTrainer:
         # Zero gradients AFTER successful step
         self.optimizer.zero_grad(set_to_none=True)
 
-        # Update scheduler
+        # ✅ FIX: Update scheduler and verify LR actually changed
         if self.scheduler:
+            old_lr = self.scheduler.get_last_lr()[0]
             self.scheduler.step()
+            new_lr = self.scheduler.get_last_lr()[0]
 
-        # Get current learning rate
-        current_lr = self.scheduler.get_last_lr()[0] if self.scheduler else self.config.learning_rate
+            # Debug logging to verify scheduler is working
+            if self.global_step % 100 == 0:
+                if old_lr == new_lr:
+                    logging.debug(f"Step {self.global_step}: Scheduler LR unchanged ({old_lr:.2e})")
+                else:
+                    logging.info(f"Step {self.global_step}: Scheduler updated LR: {old_lr:.2e} → {new_lr:.2e}")
+
+            current_lr = new_lr
+        else:
+            current_lr = self.config.learning_rate
+            logging.debug(f"Step {self.global_step}: No scheduler, using base LR: {current_lr:.2e}")
 
         return {'grad_norm': grad_norm.item(), 'lr': current_lr}
-
+    
     @torch.no_grad()
     def evaluate(self, eval_dataset, max_batches: int = 100) -> Dict[str, float]:
         """Enhanced evaluation with proper perplexity calculation and precision support."""
@@ -2855,7 +2865,20 @@ class EnhancedConversationTrainer:
         if not self.use_deepspeed:
             gradient_accumulation_steps = getattr(self.config, 'gradient_accumulation_steps', 1)
             total_steps = len(train_dataloader) * self.config.num_epochs // gradient_accumulation_steps
-            total_steps = 200  # ← Set your desired number here!
+            # REMOVED: total_steps = 200  # Don't override!
+
+            print(f"\n{'='*80}")
+            print(f"SCHEDULER SETUP CALCULATION")
+            print(f"{'='*80}")
+            print(f"Dataset size: {len(train_dataset):,}")
+            print(f"Batch size: {self.config.batch_size}")
+            print(f"Gradient accumulation: {gradient_accumulation_steps}")
+            print(f"Epochs: {self.config.num_epochs}")
+            print(f"Batches per epoch: {len(train_dataloader)}")
+            print(f"Steps per epoch: {len(train_dataloader) // gradient_accumulation_steps}")
+            print(f"TOTAL TRAINING STEPS: {total_steps}")
+            print(f"{'='*80}\n")
+
             self._setup_scheduler(total_steps)
         
         self._log_training_config(len(train_dataloader))

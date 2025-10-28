@@ -1963,7 +1963,6 @@ def main():
         print(f"  Total Training Steps: {(len(train_dataset) // (config.batch_size * config.gradient_accumulation_steps)) * config.num_epochs}")
         
         # Step 14: Start training
-        # Step 14: Start training
         print_banner("STEP 14: STARTING ADAPTIVE TRAINING")
         print(f"Training begins at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"Experiment directory: {experiment_dir}")
@@ -2012,7 +2011,6 @@ def main():
             traceback.print_exc()
             return 1
         
-        # ✅ START TIMING (YOU WERE MISSING THIS!)
         training_start_time = time.time()
         
         # Run adaptive training with OOM protection

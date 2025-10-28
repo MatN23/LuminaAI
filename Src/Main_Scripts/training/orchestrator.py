@@ -679,6 +679,12 @@ class AdaptiveTrainingOrchestrator:
             if self.trainer.scheduler:
                 logging.info(f"✅ Scheduler initialized: {type(self.trainer.scheduler).__name__}")
 
+                # ✅ CRITICAL: Store scheduler reference in orchestrator too
+                self.scheduler = self.trainer.scheduler
+                logging.info("✅ Scheduler reference stored in orchestrator")
+        else:
+            logging.warning("Trainer does not have _setup_scheduler method")
+
     def _set_seeds(self, seed: int):
         """Set random seeds for reproducibility."""
         torch.manual_seed(seed)
@@ -777,6 +783,12 @@ class AdaptiveTrainingOrchestrator:
             for anomaly in anomalies:
                 logging.warning(f"Training anomaly detected: {anomaly}")
                 self._handle_training_anomaly(anomaly)
+
+        if self.global_step % 100 == 0:
+            scheduler_status = self.get_scheduler_status()
+            logging.info(f"📊 Scheduler Status at step {self.global_step}:")
+            for key, value in scheduler_status.items():
+                logging.info(f"   {key}: {value}")
         
         # Analyze loss dynamics
         if len(self.training_metrics_history) >= 10:
@@ -829,13 +841,29 @@ class AdaptiveTrainingOrchestrator:
                 self._execute_adaptive_decision(decision)
     
     def _apply_learning_rate_adjustment(self, adjustment):
-        """Apply learning rate adjustment."""
+        """Apply learning rate adjustment - FIXED to respect scheduler."""
         if not self.trainer:
             return
-            
+
+        if hasattr(self.trainer, 'scheduler') and self.trainer.scheduler is not None:
+            current_scheduler_lr = self.trainer.scheduler.get_last_lr()[0]
+
+            # Only intervene if adjustment is significant (>20% change)
+            new_lr = current_scheduler_lr * adjustment['factor']
+            change_ratio = abs(new_lr - current_scheduler_lr) / current_scheduler_lr
+
+            if change_ratio < 0.2:
+                logging.info(f"Skipping minor LR adjustment ({change_ratio:.1%}) - letting scheduler control LR")
+                return
+
+            logging.warning(f"⚠️ Overriding scheduler LR due to significant adaptive adjustment")
+            logging.warning(f"   Scheduler LR: {current_scheduler_lr:.2e}")
+            logging.warning(f"   Adjusted LR: {new_lr:.2e}")
+            logging.warning(f"   Change: {change_ratio:.1%}")
+
         current_lr = getattr(self.trainer, 'current_lr', self.config.learning_rate)
         new_lr = current_lr * adjustment['factor']
-        
+
         decision = AdaptiveDecision(
             decision_type='learning_rate_adjustment',
             parameters={'old_lr': current_lr, 'new_lr': new_lr, 'factor': adjustment['factor']},
@@ -844,9 +872,9 @@ class AdaptiveTrainingOrchestrator:
             expected_improvement=0.1,
             timestamp=datetime.now()
         )
-        
+
         self._execute_adaptive_decision(decision)
-        
+
         # Update trainer's learning rate if possible
         if hasattr(self.trainer, 'adjust_learning_rate'):
             self.trainer.adjust_learning_rate(new_lr)
@@ -1318,6 +1346,55 @@ class AdaptiveTrainingOrchestrator:
             )
             if decision.confidence > 0.8:
                 self._execute_adaptive_decision(decision)
+
+    def get_scheduler_status(self) -> Dict[str, Any]:
+        """
+        Get comprehensive scheduler status for debugging.
+        
+        Returns:
+            Dictionary with scheduler state information
+        """
+        if not self.trainer or not hasattr(self.trainer, 'scheduler'):
+            return {
+                'status': 'No trainer or scheduler',
+                'has_trainer': self.trainer is not None,
+                'trainer_type': type(self.trainer).__name__ if self.trainer else None
+            }
+        
+        scheduler = self.trainer.scheduler
+        if scheduler is None:
+            return {
+                'status': 'Scheduler is None',
+                'trainer_has_scheduler_attr': True,
+                'scheduler_value': None
+            }
+        
+        try:
+            status = {
+                'status': 'Active',
+                'scheduler_type': type(scheduler).__name__,
+                'current_lr': scheduler.get_last_lr()[0] if hasattr(scheduler, 'get_last_lr') else 'Unknown',
+                'base_lrs': scheduler.base_lrs if hasattr(scheduler, 'base_lrs') else 'Unknown',
+                'last_epoch': scheduler.last_epoch if hasattr(scheduler, 'last_epoch') else 'Unknown',
+                'global_step': self.global_step,
+                'trainer_current_lr': getattr(self.trainer, 'current_lr', 'Unknown'),
+                'config_lr': self.config.learning_rate,
+            }
+            
+            # Add scheduler-specific info
+            if hasattr(scheduler, 'T_max'):
+                status['cosine_T_max'] = scheduler.T_max
+            if hasattr(scheduler, 'eta_min'):
+                status['cosine_eta_min'] = scheduler.eta_min
+                
+            return status
+            
+        except Exception as e:
+            return {
+                'status': 'Error reading scheduler',
+                'error': str(e),
+                'scheduler_type': type(scheduler).__name__
+            }
     
     def _consider_architecture_change(self, suggestion):
         """Consider and potentially apply architecture changes."""
