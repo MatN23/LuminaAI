@@ -678,7 +678,7 @@ class AdaptiveTrainingOrchestrator:
             self.trainer._setup_scheduler(total_steps)
             if self.trainer.scheduler:
                 logging.info(f"✅ Scheduler initialized: {type(self.trainer.scheduler).__name__}")
-    
+
     def _set_seeds(self, seed: int):
         """Set random seeds for reproducibility."""
         torch.manual_seed(seed)
@@ -1034,9 +1034,37 @@ class AdaptiveTrainingOrchestrator:
             logging.info(f"✅ Train dataset: {len(train_dataset)} samples")
             logging.info(f"✅ Eval dataset: {len(eval_dataset)} samples")
 
-            # CRITICAL FIX: Setup scheduler AFTER datasets are loaded
+            # ✅ MOVE THE SCHEDULER SETUP HERE (before training)
             logging.info("Setting up learning rate scheduler...")
-            self._setup_trainer_scheduler(train_dataset)
+
+            if type(self.trainer).__name__ == 'AdaptiveTrainer':
+                logging.warning("Using fallback trainer - manual scheduler setup required")
+                # Calculate total steps manually
+                gradient_accumulation_steps = getattr(self.config, 'gradient_accumulation_steps', 1)
+                batches_per_epoch = len(train_dataset) // self.config.batch_size
+                steps_per_epoch = batches_per_epoch // gradient_accumulation_steps
+                total_steps = steps_per_epoch * self.config.num_epochs
+
+                # Create scheduler manually for fallback trainer
+                from torch.optim.lr_scheduler import LambdaLR
+                import math
+
+                warmup_ratio = getattr(self.config, 'warmup_ratio', 0.1)
+                warmup_steps = int(total_steps * warmup_ratio)
+
+                def lr_lambda(current_step: int):
+                    if current_step < warmup_steps:
+                        return float(current_step) / float(max(1, warmup_steps))
+                    else:
+                        progress = (current_step - warmup_steps) / max(1, (total_steps - warmup_steps))
+                        min_lr_ratio = self.config.min_lr / self.config.learning_rate
+                        return max(min_lr_ratio, 0.5 * (1.0 + math.cos(math.pi * progress)))
+
+                self.trainer.scheduler = LambdaLR(self.trainer.optimizer, lr_lambda)
+                logging.info(f"✅ Manual scheduler created: warmup={warmup_steps}, total={total_steps}")
+            else:
+                # Real trainer - use its built-in setup
+                self._setup_trainer_scheduler(train_dataset)
 
             # Pre-training analysis
             logging.info("Performing pre-training analysis...")
@@ -1076,6 +1104,7 @@ class AdaptiveTrainingOrchestrator:
             raise
         finally:
             self.is_training = False
+    
     
     def _analyze_dataset_characteristics(self, dataset):
         """Analyze dataset to inform adaptive strategies."""
@@ -1385,7 +1414,23 @@ class AdaptiveTrainingOrchestrator:
             def _setup_scheduler(self, total_steps):
                 """Setup scheduler (placeholder)."""
                 logging.info(f"Fallback trainer: scheduler setup called with {total_steps} steps")
-                self.scheduler = None  # Placeholder
+
+                # ✅ FIX: Actually create a scheduler instead of leaving it None
+                from torch.optim.lr_scheduler import LambdaLR
+                import math
+
+                warmup_ratio = getattr(self.config, 'warmup_ratio', 0.1)
+                warmup_steps = int(total_steps * warmup_ratio)
+
+                def lr_lambda(current_step: int):
+                    if current_step < warmup_steps:
+                        return float(current_step) / float(max(1, warmup_steps))
+                    else:
+                        progress = (current_step - warmup_steps) / max(1, (total_steps - warmup_steps))
+                        return max(0.0, 1.0 - progress)
+
+                self.scheduler = LambdaLR(self.optimizer, lr_lambda)
+                logging.info(f"✅ Fallback scheduler initialized: warmup={warmup_steps}, total={total_steps}")
             
             def train(self, train_dataset, eval_dataset=None):
                 logging.info("Using adaptive fallback trainer")

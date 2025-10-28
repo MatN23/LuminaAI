@@ -2201,10 +2201,7 @@ class EnhancedConversationTrainer:
         
         return self.precision_manager.get_autocast_context(for_inference=for_inference)
     
-    def compute_loss(self, logits: torch.Tensor, labels: torch.Tensor, 
-                    loss_weights: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
-        """Compute weighted loss with MoE auxiliary losses and accuracy metrics."""
-
+    def compute_loss(self, logits, labels, loss_weights):
         shift_logits = logits[..., :-1, :].contiguous()
         shift_labels = labels[..., 1:].contiguous()
 
@@ -2213,7 +2210,7 @@ class EnhancedConversationTrainer:
 
         mask = (flat_labels != getattr(self.tokenizer, 'pad_token_id', 0)).float()
 
-        # Calculate accuracy
+        # Accuracy
         with torch.no_grad():
             predictions = torch.argmax(flat_logits, dim=-1)
             correct_predictions = (predictions == flat_labels).float() * mask
@@ -2222,7 +2219,7 @@ class EnhancedConversationTrainer:
         # Cross-entropy loss (per token)
         loss = F.cross_entropy(flat_logits, flat_labels, reduction='none')
 
-        # ✅ FIX: Calculate raw (unweighted) loss for perplexity BEFORE applying weights
+        # ✅ FIX: Calculate raw (unweighted) loss BEFORE applying weights
         raw_loss_for_ppl = (loss * mask).sum() / mask.sum().clamp(min=1)
         raw_loss_for_ppl = raw_loss_for_ppl.detach()
 
@@ -2238,7 +2235,7 @@ class EnhancedConversationTrainer:
 
         final_loss = weighted_loss.sum() / total_weight
 
-        # ✅ Use raw_loss_for_ppl for perplexity calculation
+        # ✅ Use raw_loss_for_ppl for perplexity
         clamped_loss = torch.clamp(raw_loss_for_ppl, min=0.0, max=15.0)
 
         try:
@@ -2247,9 +2244,9 @@ class EnhancedConversationTrainer:
             perplexity = torch.tensor(float('inf'), device=loss.device)
 
         return {
-            'loss': final_loss,  # This goes to backprop
-            'raw_loss': raw_loss_for_ppl,  # This goes to perplexity
-            'perplexity': perplexity,
+            'loss': final_loss,  # Training loss (weighted)
+            'raw_loss': raw_loss_for_ppl,  # ✅ Actual unweighted loss for perplexity
+            'perplexity': perplexity,  # ✅ Now correct!
             'valid_tokens': mask.sum().detach(),
             'accuracy': accuracy.detach()
         }
