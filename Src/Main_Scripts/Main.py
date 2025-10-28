@@ -1408,8 +1408,8 @@ def main():
         'use_moe': True,
         'use_mod': True,
         'num_epochs': 20,
-        'learning_rate': 1e-6,
-        'min_lr': 1e-4,
+        'learning_rate': 1e-4,
+        'min_lr': 1e-6,
         'lr_scheduler': "constant", # cosine, constant, or linear
         'warmup_ratio': 0.0001,
         'batch_size': 20,
