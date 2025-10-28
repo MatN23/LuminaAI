@@ -1408,12 +1408,17 @@ def main():
         'use_moe': True,
         'use_mod': True,
         'num_epochs': 20,
+        
         'learning_rate': 1e-4,
         'min_lr': 1e-6,
+        
+        'use_lr_scheduler': True,
         'lr_scheduler': "constant", # cosine, constant, or linear
         'warmup_ratio': 0.0001,
+        
         'batch_size': 20,
         'gradient_accumulation_steps': 8,
+        
         'precision': "fp32",
         'inference_precision': "fp16",
         
@@ -1430,6 +1435,14 @@ def main():
         'num_workers': 0,
         'save_total_limit': 5,
         'weight_decay': 0.01,
+    }
+
+    adaptive_lr_params = {
+        'enable_adaptive_lr': True,           # Master switch for adaptive LR adjustments
+        'allow_scheduler_override': True,     # Allow orchestrator to override scheduler
+        'min_override_threshold': 0.2,        # Only override if change > 20%
+        'emergency_override_enabled': True,   # Always allow emergency LR reductions
+        'log_lr_decisions': True,             # Log all LR decision making
     }
     
     # Data configuration

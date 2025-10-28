@@ -291,7 +291,8 @@ class AdaptiveHyperparameterOptimizer:
             return {
                 'action': 'increase',
                 'factor': 1.5,
-                'reasoning': f'Loss plateau: std={np.std(very_recent):.4f}'
+                'reasoning': f'Loss plateau: std={np.std(very_recent):.4f}',
+                'emergency': False,
             }
 
         # 2. DIVERGENCE - If loss increasing
@@ -302,7 +303,8 @@ class AdaptiveHyperparameterOptimizer:
             return {
                 'action': 'decrease',
                 'factor': 0.5,
-                'reasoning': f'Loss increasing: {older_mean:.3f} → {recent_mean:.3f}'
+                'reasoning': f'Loss increasing: {older_mean:.3f} → {recent_mean:.3f}',
+                'emergency': False
             }
 
         # 3. GOOD PROGRESS - If steadily decreasing
@@ -319,7 +321,8 @@ class AdaptiveHyperparameterOptimizer:
             return {
                 'action': 'decrease',
                 'factor': 0.7,
-                'reasoning': 'High gradient norms detected, reducing LR for stability'
+                'reasoning': 'High gradient norms detected, reducing LR for stability',
+                'emergency': False
             }
         
         return None
@@ -817,56 +820,83 @@ class AdaptiveTrainingOrchestrator:
     def _handle_training_anomaly(self, anomaly):
         """Handle detected training anomalies."""
         if anomaly['type'] == 'gradient_explosion':
-            decision = AdaptiveDecision(
-                decision_type='emergency_lr_reduction',
-                parameters={'factor': 0.1, 'reason': 'gradient_explosion'},
-                confidence=0.95,
-                reasoning='Gradient explosion detected, emergency LR reduction',
-                expected_improvement=0.8,
-                timestamp=datetime.now()
-            )
-            self._execute_adaptive_decision(decision)
-        
+            # ✅ Mark as emergency
+            adjustment = {
+                'factor': 0.1,
+                'reasoning': 'EMERGENCY: Gradient explosion detected',
+                'emergency': True
+            }
+            self._apply_learning_rate_adjustment(adjustment)
+
         elif anomaly['type'] == 'loss_spike':
-            decision = AdaptiveDecision(
-                decision_type='checkpoint_rollback',
-                parameters={'steps_back': 100, 'reason': 'loss_spike'},
-                confidence=0.8,
-                reasoning='Loss spike detected, considering rollback',
-                expected_improvement=0.3,
-                timestamp=datetime.now()
-            )
-            # Only execute if very confident
-            if decision.confidence > 0.9:
-                self._execute_adaptive_decision(decision)
+            # ✅ Mark as emergency if severe
+            severity = anomaly.get('severity', 'medium')
+            adjustment = {
+                'factor': 0.5 if severity == 'critical' else 0.8,
+                'reasoning': f'Loss spike detected (severity: {severity})',
+                'emergency': severity == 'critical'
+            }
+            self._apply_learning_rate_adjustment(adjustment)
     
     def _apply_learning_rate_adjustment(self, adjustment):
-        """Apply learning rate adjustment - FIXED to respect scheduler."""
+        """Apply learning rate adjustment - respects configuration."""
         if not self.trainer:
             return
 
-        if hasattr(self.trainer, 'scheduler') and self.trainer.scheduler is not None:
-            current_scheduler_lr = self.trainer.scheduler.get_last_lr()[0]
-
-            # Only intervene if adjustment is significant (>20% change)
-            new_lr = current_scheduler_lr * adjustment['factor']
-            change_ratio = abs(new_lr - current_scheduler_lr) / current_scheduler_lr
-
-            if change_ratio < 0.2:
-                logging.info(f"Skipping minor LR adjustment ({change_ratio:.1%}) - letting scheduler control LR")
-                return
-
-            logging.warning(f"⚠️ Overriding scheduler LR due to significant adaptive adjustment")
-            logging.warning(f"   Scheduler LR: {current_scheduler_lr:.2e}")
-            logging.warning(f"   Adjusted LR: {new_lr:.2e}")
-            logging.warning(f"   Change: {change_ratio:.1%}")
+        # ✅ CHECK: Is adaptive LR enabled at all?
+        if not getattr(self.config, 'enable_adaptive_lr', True):
+            if getattr(self.config, 'log_lr_decisions', False):
+                logging.info(f"⏸️  Adaptive LR disabled - skipping adjustment: {adjustment['reasoning']}")
+            return
 
         current_lr = getattr(self.trainer, 'current_lr', self.config.learning_rate)
         new_lr = current_lr * adjustment['factor']
 
+        # ✅ CHECK: Does scheduler exist?
+        has_scheduler = (hasattr(self.trainer, 'scheduler') and 
+                         self.trainer.scheduler is not None)
+
+        if has_scheduler:
+            allow_override = getattr(self.config, 'allow_scheduler_override', True)
+            emergency_enabled = getattr(self.config, 'emergency_override_enabled', True)
+            min_threshold = getattr(self.config, 'min_override_threshold', 0.2)
+
+            is_emergency = adjustment.get('emergency', False)
+            current_scheduler_lr = self.trainer.scheduler.get_last_lr()[0]
+            change_ratio = abs(new_lr - current_scheduler_lr) / current_scheduler_lr
+
+            # Decision logic (same as before)
+            if is_emergency and emergency_enabled:
+                if getattr(self.config, 'log_lr_decisions', False):
+                    logging.warning(f"🚨 EMERGENCY LR Override")
+                    logging.warning(f"   Reason: {adjustment['reasoning']}")
+                    logging.warning(f"   Scheduler LR: {current_scheduler_lr:.2e} → Emergency LR: {new_lr:.2e}")
+            elif not allow_override:
+                if getattr(self.config, 'log_lr_decisions', False):
+                    logging.info(f"⏸️  Scheduler override disabled")
+                return
+            elif change_ratio < min_threshold:
+                if getattr(self.config, 'log_lr_decisions', False):
+                    logging.info(f"⏸️  LR change too small ({change_ratio:.1%} < {min_threshold:.1%})")
+                return
+            else:
+                if getattr(self.config, 'log_lr_decisions', False):
+                    logging.warning(f"⚠️  Overriding scheduler ({change_ratio:.1%} change)")
+        else:
+            # ✅ NO SCHEDULER - Adaptive LR has full control
+            if getattr(self.config, 'log_lr_decisions', False):
+                logging.info(f"🎯 No scheduler active - applying adaptive LR directly")
+                logging.info(f"   {current_lr:.2e} → {new_lr:.2e}")
+
+        # Create and execute decision
         decision = AdaptiveDecision(
             decision_type='learning_rate_adjustment',
-            parameters={'old_lr': current_lr, 'new_lr': new_lr, 'factor': adjustment['factor']},
+            parameters={
+                'old_lr': current_lr, 
+                'new_lr': new_lr, 
+                'factor': adjustment['factor'],
+                'emergency': adjustment.get('emergency', False)
+            },
             confidence=0.7,
             reasoning=adjustment['reasoning'],
             expected_improvement=0.1,
@@ -875,11 +905,10 @@ class AdaptiveTrainingOrchestrator:
 
         self._execute_adaptive_decision(decision)
 
-        # Update trainer's learning rate if possible
+        # Update trainer's learning rate
         if hasattr(self.trainer, 'adjust_learning_rate'):
             self.trainer.adjust_learning_rate(new_lr)
-            logging.info(f"Adapted learning rate: {current_lr:.6f} -> {new_lr:.6f}")
-    
+        
     def _execute_adaptive_decision(self, decision):
         """Execute an adaptive decision."""
         self.adaptive_decisions.append(decision)

@@ -2475,8 +2475,10 @@ class EnhancedConversationTrainer:
 
             current_lr = new_lr
         else:
+            # ✅ No scheduler - use constant LR
             current_lr = self.config.learning_rate
-            logging.debug(f"Step {self.global_step}: No scheduler, using base LR: {current_lr:.2e}")
+            if self.global_step % 100 == 0:
+                logging.debug(f"Step {self.global_step}: No scheduler, using constant LR: {current_lr:.2e}")
 
         return {'grad_norm': grad_norm.item(), 'lr': current_lr}
     
@@ -3044,11 +3046,19 @@ class EnhancedConversationTrainer:
 
     
     def _setup_scheduler(self, total_steps: int):
-        """Setup learning rate scheduler with warmup - FIXED to actually create scheduler."""
+        """Setup learning rate scheduler with warmup - respects use_lr_scheduler config."""
+    
+        # ✅ CHECK: Is scheduler enabled?
+        if not getattr(self.config, 'use_lr_scheduler', True):
+            print("📊 Learning rate scheduler is DISABLED by config")
+            print("   Learning rate will remain constant at:", self.config.learning_rate)
+            self.scheduler = None
+            return
+
         print("\n" + "="*80)
         print("SETTING UP LEARNING RATE SCHEDULER")
         print("="*80)
-    
+
         warmup_ratio = getattr(self.config, 'warmup_ratio', 0.1)
         warmup_steps = int(total_steps * warmup_ratio)
         lr_scheduler = getattr(self.config, 'lr_scheduler', 'cosine')
@@ -3066,10 +3076,8 @@ class EnhancedConversationTrainer:
 
             def lr_lambda(current_step: int):
                 if current_step < warmup_steps:
-                    # Warmup: 0 -> 1.0
                     return float(current_step) / float(max(1, warmup_steps))
                 else:
-                    # Cosine decay: 1.0 -> min_lr_ratio
                     progress = (current_step - warmup_steps) / max(1, (total_steps - warmup_steps))
                     min_lr_ratio = self.config.min_lr / self.config.learning_rate
                     return max(min_lr_ratio, 0.5 * (1.0 + math.cos(math.pi * progress)))
@@ -3085,21 +3093,18 @@ class EnhancedConversationTrainer:
             print(f"✅ OneCycle scheduler initialized")
 
         elif lr_scheduler == "constant":
-            # 🔥 CRITICAL: Don't skip scheduler creation for "constant"!
             from torch.optim.lr_scheduler import LambdaLR
 
             def constant_lr_lambda(current_step: int):
-                # Warmup only, then constant
                 if current_step < warmup_steps:
                     return float(current_step) / float(max(1, warmup_steps))
                 else:
-                    return 1.0  # Constant LR after warmup
+                    return 1.0
 
             self.scheduler = LambdaLR(self.optimizer, constant_lr_lambda)
             print(f"✅ Constant scheduler initialized (with warmup)")
 
         else:
-            # Fallback: linear warmup + decay
             from torch.optim.lr_scheduler import LambdaLR
 
             def lr_lambda(current_step: int):
@@ -3110,9 +3115,8 @@ class EnhancedConversationTrainer:
                     return max(0.0, 1.0 - progress)
 
             self.scheduler = LambdaLR(self.optimizer, lr_lambda)
-            print(f"⚠️  Unknown scheduler '{lr_scheduler}', using linear warmup+decay")
+            print(f"⚠️ Unknown scheduler '{lr_scheduler}', using linear warmup+decay")
 
-        # Verify scheduler was created
         if self.scheduler is None:
             print("❌ CRITICAL: Scheduler is None after setup!")
         else:
@@ -3120,7 +3124,7 @@ class EnhancedConversationTrainer:
             print(f"✅ Initial LR from scheduler: {self.scheduler.get_last_lr()[0]:.2e}")
 
         print("="*80 + "\n")
-    
+
     def _check_early_stopping(self, eval_loss: float):
         """Check early stopping condition."""
         if eval_loss < self.best_eval_loss:

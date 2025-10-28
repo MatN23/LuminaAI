@@ -98,6 +98,7 @@ class Config:
     early_stopping_patience: Optional[int] = None
     min_lr: float = 1e-6
     lr_scheduler: str = "cosine"
+    use_lr_scheduler: bool = True
     
     # Monitoring and fault tolerance
     health_check_interval: int = 100
@@ -107,6 +108,13 @@ class Config:
     enable_wandb: bool = False
     wandb_project: Optional[str] = None
     wandb_entity: Optional[str] = None
+
+    # Adaptive Learning Rate Control
+    enable_adaptive_lr: bool = True           # Master switch for adaptive LR adjustments
+    allow_scheduler_override: bool = True     # Allow orchestrator to override scheduler
+    min_override_threshold: float = 0.2       # Only override if change > 20%
+    emergency_override_enabled: bool = True   # Always allow emergency LR reductions
+    log_lr_decisions: bool = True             # Log all LR decision making
     
     # Advanced precision settings
     auto_tune_precision: bool = True
