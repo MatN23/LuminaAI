@@ -839,54 +839,40 @@ class AdaptiveTrainingOrchestrator:
             self._apply_learning_rate_adjustment(adjustment)
     
     def _apply_learning_rate_adjustment(self, adjustment):
-        """Apply learning rate adjustment - respects configuration."""
+        """Apply learning rate adjustment - FIXED to bypass scheduler conflicts."""
         if not self.trainer:
             return
 
         # ✅ CHECK: Is adaptive LR enabled at all?
         if not getattr(self.config, 'enable_adaptive_lr', True):
             if getattr(self.config, 'log_lr_decisions', False):
-                logging.info(f"⏸️  Adaptive LR disabled - skipping adjustment: {adjustment['reasoning']}")
+                logging.info(f"⏸️ Adaptive LR disabled - skipping adjustment: {adjustment['reasoning']}")
             return
 
         current_lr = getattr(self.trainer, 'current_lr', self.config.learning_rate)
         new_lr = current_lr * adjustment['factor']
 
-        # ✅ CHECK: Does scheduler exist?
-        has_scheduler = (hasattr(self.trainer, 'scheduler') and 
-                         self.trainer.scheduler is not None)
+        is_emergency = adjustment.get('emergency', False)
 
-        if has_scheduler:
-            allow_override = getattr(self.config, 'allow_scheduler_override', True)
-            emergency_enabled = getattr(self.config, 'emergency_override_enabled', True)
-            min_threshold = getattr(self.config, 'min_override_threshold', 0.2)
-
-            is_emergency = adjustment.get('emergency', False)
-            current_scheduler_lr = self.trainer.scheduler.get_last_lr()[0]
-            change_ratio = abs(new_lr - current_scheduler_lr) / current_scheduler_lr
-
-            # Decision logic (same as before)
-            if is_emergency and emergency_enabled:
-                if getattr(self.config, 'log_lr_decisions', False):
-                    logging.warning(f"🚨 EMERGENCY LR Override")
-                    logging.warning(f"   Reason: {adjustment['reasoning']}")
-                    logging.warning(f"   Scheduler LR: {current_scheduler_lr:.2e} → Emergency LR: {new_lr:.2e}")
-            elif not allow_override:
-                if getattr(self.config, 'log_lr_decisions', False):
-                    logging.info(f"⏸️  Scheduler override disabled")
-                return
-            elif change_ratio < min_threshold:
-                if getattr(self.config, 'log_lr_decisions', False):
-                    logging.info(f"⏸️  LR change too small ({change_ratio:.1%} < {min_threshold:.1%})")
-                return
-            else:
-                if getattr(self.config, 'log_lr_decisions', False):
-                    logging.warning(f"⚠️  Overriding scheduler ({change_ratio:.1%} change)")
+        if is_emergency:
+            # Emergency changes always apply immediately
+            logging.warning(f"🚨 EMERGENCY LR Override")
+            logging.warning(f"   Reason: {adjustment['reasoning']}")
+            logging.warning(f"   Current LR: {current_lr:.2e} → New LR: {new_lr:.2e}")
         else:
-            # ✅ NO SCHEDULER - Adaptive LR has full control
+            # Check if change is significant enough
+            min_threshold = getattr(self.config, 'min_override_threshold', 0.1)  # ✅ Lowered from 0.2
+            change_ratio = abs(new_lr - current_lr) / current_lr
+
+            if change_ratio < min_threshold:
+                if getattr(self.config, 'log_lr_decisions', False):
+                    logging.info(f"⏸️ LR change too small ({change_ratio:.1%} < {min_threshold:.1%})")
+                return
+
             if getattr(self.config, 'log_lr_decisions', False):
-                logging.info(f"🎯 No scheduler active - applying adaptive LR directly")
-                logging.info(f"   {current_lr:.2e} → {new_lr:.2e}")
+                logging.info(f"📊 Adaptive LR Adjustment")
+                logging.info(f"   Reason: {adjustment['reasoning']}")
+                logging.info(f"   Current LR: {current_lr:.2e} → New LR: {new_lr:.2e} ({change_ratio:.1%} change)")
 
         # Create and execute decision
         decision = AdaptiveDecision(
@@ -895,9 +881,9 @@ class AdaptiveTrainingOrchestrator:
                 'old_lr': current_lr, 
                 'new_lr': new_lr, 
                 'factor': adjustment['factor'],
-                'emergency': adjustment.get('emergency', False)
+                'emergency': is_emergency
             },
-            confidence=0.7,
+            confidence=0.9 if is_emergency else 0.7,
             reasoning=adjustment['reasoning'],
             expected_improvement=0.1,
             timestamp=datetime.now()
@@ -905,10 +891,12 @@ class AdaptiveTrainingOrchestrator:
 
         self._execute_adaptive_decision(decision)
 
-        # Update trainer's learning rate
+        # ✅ Update trainer's learning rate
         if hasattr(self.trainer, 'adjust_learning_rate'):
-            self.trainer.adjust_learning_rate(new_lr)
-        
+            # Pass emergency flag to set appropriate grace period
+            grace_period = 20 if is_emergency else 10
+            self.trainer.adjust_learning_rate(new_lr, grace_period=grace_period)
+    
     def _execute_adaptive_decision(self, decision):
         """Execute an adaptive decision."""
         self.adaptive_decisions.append(decision)
@@ -1585,7 +1573,15 @@ class AdaptiveTrainingOrchestrator:
                 )
             
             def adjust_learning_rate(self, new_lr):
+                """Adjust learning rate and signal to skip scheduler."""
                 self.current_lr = new_lr
+                for param_group in self.optimizer.param_groups:
+                    param_group['lr'] = new_lr
+
+                # ✅ Signal that adaptive has control
+                self._adaptive_lr_override = True
+                self._adaptive_override_steps = 0
+
                 logging.info(f"Learning rate adjusted to {new_lr}")
         
         trainer = AdaptiveTrainer(self.model, self.tokenizer, self.config, self.logger)

@@ -1408,7 +1408,7 @@ def main():
         'use_moe': True,
         'use_mod': True,
         'num_epochs': 20,
-        
+
         'learning_rate': 1e-4,
         'min_lr': 1e-6,
         
@@ -2016,6 +2016,39 @@ def main():
             
             print(f"✅ Model parameters: {sum(p.numel() for p in orchestrator.model.parameters()):,}")
             print("="*80)
+
+            print("\n" + "="*80)
+            print("📊 SCHEDULER VERIFICATION")
+            print("="*80)
+    
+            if hasattr(orchestrator.trainer, 'scheduler'):
+                if orchestrator.trainer.scheduler is not None:
+                    scheduler_type = type(orchestrator.trainer.scheduler).__name__
+                    print(f"✅ Scheduler found: {scheduler_type}")
+
+                    try:
+                        initial_lr = orchestrator.trainer.scheduler.get_last_lr()[0]
+                        base_lrs = orchestrator.trainer.scheduler.base_lrs
+                        print(f"✅ Initial LR: {initial_lr:.2e}")
+                        print(f"✅ Base LRs: {[f'{lr:.2e}' for lr in base_lrs]}")
+                        print(f"✅ Config LR: {orchestrator.config.learning_rate:.2e}")
+
+                        # Verify they match
+                        if abs(initial_lr - orchestrator.config.learning_rate) > 1e-9:
+                            print(f"⚠️  WARNING: Scheduler LR doesn't match config LR!")
+                        else:
+                            print(f"✅ Scheduler LR matches config")
+
+                    except Exception as e:
+                        print(f"⚠️  Could not read scheduler state: {e}")
+                else:
+                    print("⚠️  Scheduler is None")
+                    print(f"   use_lr_scheduler: {getattr(orchestrator.config, 'use_lr_scheduler', 'not set')}")
+                    print(f"   LR will remain constant at: {orchestrator.config.learning_rate:.2e}")
+            else:
+                print("❌ Trainer has no scheduler attribute!")
+
+            print("="*80 + "\n")
             
         except Exception as e:
             print("❌ CRITICAL: Trainer initialization failed!")

@@ -2428,9 +2428,9 @@ class EnhancedConversationTrainer:
         }
     
     def _standard_optimizer_step(self) -> Dict[str, float]:
-        """Standard optimizer step with precision awareness - FIXED."""
+        """Standard optimizer step with precision awareness - FIXED for adaptive LR."""
 
-        # ✅ CRITICAL FIX: Only unscale for FP16 (scaler only exists for FP16)
+        # Only unscale for FP16 (scaler only exists for FP16)
         if self.use_amp and self.scaler is not None:
             self.scaler.unscale_(self.optimizer)
 
@@ -2442,13 +2442,13 @@ class EnhancedConversationTrainer:
 
         # Check for NaN/Inf gradients BEFORE taking step
         if torch.isnan(grad_norm) or torch.isinf(grad_norm):
-            print("NaN/Inf gradients detected, skipping step")
+            logging.warning(f"NaN/Inf gradients detected (norm: {grad_norm}), skipping step")
             self.optimizer.zero_grad(set_to_none=True)
 
             if self.use_amp and self.scaler is not None:
                 self.scaler.update()
 
-            return {'grad_norm': 0.0, 'lr': 0.0}
+            return {'grad_norm': 0.0, 'lr': self.optimizer.param_groups[0]['lr']}
 
         # Take optimizer step
         if self.use_amp and self.scaler is not None:
@@ -2460,25 +2460,50 @@ class EnhancedConversationTrainer:
         # Zero gradients AFTER successful step
         self.optimizer.zero_grad(set_to_none=True)
 
-        # ✅ FIX: Update scheduler and verify LR actually changed
+        # ✅ FIX: Improved adaptive override handling
+        adaptive_override = getattr(self, '_adaptive_lr_override', False)
+
         if self.scheduler:
-            old_lr = self.scheduler.get_last_lr()[0]
-            self.scheduler.step()
-            new_lr = self.scheduler.get_last_lr()[0]
+            if adaptive_override:
+                # Adaptive LR has temporary control - don't step scheduler
+                self._adaptive_override_steps = getattr(self, '_adaptive_override_steps', 0) + 1
+                current_lr = self.optimizer.param_groups[0]['lr']
 
-            # Debug logging to verify scheduler is working
-            if self.global_step % 100 == 0:
-                if old_lr == new_lr:
-                    logging.debug(f"Step {self.global_step}: Scheduler LR unchanged ({old_lr:.2e})")
-                else:
-                    logging.info(f"Step {self.global_step}: Scheduler updated LR: {old_lr:.2e} → {new_lr:.2e}")
+                # ✅ FIX: Use configurable grace period (default 10, not 50)
+                grace_period = getattr(self, '_adaptive_override_grace', 10)
 
-            current_lr = new_lr
+                # Release control after grace period
+                if self._adaptive_override_steps >= grace_period:
+                    self._adaptive_lr_override = False
+                    self._adaptive_override_steps = 0
+                    logging.info(f"✅ Step {self.global_step}: Released adaptive override after {grace_period} steps, resuming scheduler")
+                elif self._adaptive_override_steps == 1:
+                    logging.info(f"🎯 Step {self.global_step}: Adaptive override active for next {grace_period} steps (current LR: {current_lr:.2e})")
+
+                # ✅ FIX: Let scheduler track time even when not applying
+                # This prevents scheduler from getting confused about step count
+                if hasattr(self.scheduler, '_step_count'):
+                    self.scheduler._step_count += 1
+
+            else:
+                # Normal scheduler operation
+                old_lr = self.scheduler.get_last_lr()[0]
+                self.scheduler.step()
+                new_lr = self.scheduler.get_last_lr()[0]
+                current_lr = new_lr
+
+                # Log LR changes periodically
+                if self.global_step % 100 == 0:
+                    if abs(old_lr - new_lr) > 1e-9:
+                        logging.info(f"📊 Step {self.global_step}: Scheduler stepped: {old_lr:.2e} → {new_lr:.2e}")
+                    else:
+                        logging.debug(f"📊 Step {self.global_step}: Scheduler LR unchanged ({old_lr:.2e})")
         else:
-            # ✅ No scheduler - use constant LR
-            current_lr = self.config.learning_rate
+            # No scheduler - use current optimizer LR
+            current_lr = self.optimizer.param_groups[0]['lr']
+
             if self.global_step % 100 == 0:
-                logging.debug(f"Step {self.global_step}: No scheduler, using constant LR: {current_lr:.2e}")
+                logging.debug(f"📊 Step {self.global_step}: No scheduler, constant LR: {current_lr:.2e}")
 
         return {'grad_norm': grad_norm.item(), 'lr': current_lr}
     
