@@ -900,34 +900,46 @@ class AdaptiveTrainingOrchestrator:
     def _execute_adaptive_decision(self, decision):
         """Execute an adaptive decision."""
         self.adaptive_decisions.append(decision)
-        
+    
         logging.info(f"Executing adaptive decision: {decision.decision_type}")
         logging.info(f"Reasoning: {decision.reasoning}")
         logging.info(f"Confidence: {decision.confidence:.2f}")
-        
+
         try:
+            # ✅ FIX: Actually handle learning_rate_adjustment!
             if decision.decision_type == 'learning_rate_adjustment':
-                # Already handled in the calling function
-                pass
-            
+                new_lr = decision.parameters['new_lr']
+                is_emergency = decision.parameters.get('emergency', False)
+
+                if hasattr(self.trainer, 'adjust_learning_rate'):
+                    grace_period = 20 if is_emergency else 10
+                    self.trainer.adjust_learning_rate(
+                        new_lr, 
+                        grace_period=grace_period,
+                        emergency=is_emergency
+                    )
+                    logging.info(f"✅ LR adjusted: {new_lr:.2e} (emergency: {is_emergency})")
+                else:
+                    logging.error("Trainer missing adjust_learning_rate method!")
+
             elif decision.decision_type == 'emergency_lr_reduction':
                 if hasattr(self.trainer, 'emergency_lr_reduction'):
                     self.trainer.emergency_lr_reduction(decision.parameters['factor'])
-            
+
             elif decision.decision_type == 'checkpoint_rollback':
                 if hasattr(self.trainer, 'rollback_steps'):
                     self.trainer.rollback_steps(decision.parameters['steps_back'])
-            
+
             elif decision.decision_type == 'add_expert':
                 if hasattr(self.trainer, 'add_expert'):
                     self.trainer.add_expert()
-            
+
             elif decision.decision_type == 'prune_expert':
                 if hasattr(self.trainer, 'prune_expert'):
                     self.trainer.prune_expert(decision.parameters['expert_id'])
-            
+
             logging.info(f"Successfully executed: {decision.decision_type}")
-            
+
         except Exception as e:
             logging.error(f"Failed to execute adaptive decision {decision.decision_type}: {e}")
     

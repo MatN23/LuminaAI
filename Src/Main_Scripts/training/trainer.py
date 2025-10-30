@@ -1051,6 +1051,39 @@ class EnhancedConversationTrainer:
         # Setup training components
         self._setup_training()
 
+    def adjust_learning_rate(self, new_lr: float, grace_period: int = 10, emergency: bool = False):
+        """
+        ✅ FIXED: Adjust learning rate and signal scheduler override.
+
+        Args:
+            new_lr: New learning rate value
+            grace_period: Steps before scheduler resumes control
+            emergency: If True, this is an emergency override
+        """
+        old_lr = self.optimizer.param_groups[0]['lr']
+
+        logging.info(f"{'🚨 EMERGENCY' if emergency else '📊'} LR Adjustment: {old_lr:.2e} → {new_lr:.2e}")
+
+        # ✅ Save scheduler state BEFORE changing LR
+        if self.scheduler:
+            self._saved_scheduler_lr = self.scheduler.get_last_lr()[0]
+            self._saved_scheduler_step = getattr(self.scheduler, '_step_count', 0)
+
+        # ✅ FIX: Actually apply new LR to optimizer
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = new_lr
+
+        # ✅ FIX: Update current_lr tracking
+        self.current_lr = new_lr
+
+        # ✅ FIX: Set override flags (these were missing!)
+        self._adaptive_lr_override = True
+        self._adaptive_override_steps = 0
+        self._adaptive_override_grace = grace_period  # ← This was causing crashes!
+        self._adaptive_emergency = emergency
+
+        logging.info(f"✅ LR override active for {grace_period} steps")
+
     # ============================================================================
     # 🆕 CRITICAL FIX: ORCHESTRATOR COMMUNICATION (3 methods)
     # ============================================================================
@@ -2460,50 +2493,56 @@ class EnhancedConversationTrainer:
         # Zero gradients AFTER successful step
         self.optimizer.zero_grad(set_to_none=True)
 
-        # ✅ FIX: Improved adaptive override handling
+        # ✅ FIX: Check for adaptive override
         adaptive_override = getattr(self, '_adaptive_lr_override', False)
+        current_lr = self.optimizer.param_groups[0]['lr']
 
-        if self.scheduler:
-            if adaptive_override:
-                # Adaptive LR has temporary control - don't step scheduler
-                self._adaptive_override_steps = getattr(self, '_adaptive_override_steps', 0) + 1
-                current_lr = self.optimizer.param_groups[0]['lr']
+        if self.scheduler and not adaptive_override:
+            # Normal scheduler operation
+            old_lr = self.scheduler.get_last_lr()[0]
+            self.scheduler.step()
+            new_lr = self.scheduler.get_last_lr()[0]
+            current_lr = new_lr
 
-                # ✅ FIX: Use configurable grace period (default 10, not 50)
-                grace_period = getattr(self, '_adaptive_override_grace', 10)
+            # Log significant changes
+            if self.global_step % 100 == 0 and abs(old_lr - new_lr) > 1e-9:
+                logging.info(f"📊 Step {self.global_step}: Scheduler: {old_lr:.2e} → {new_lr:.2e}")
 
-                # Release control after grace period
-                if self._adaptive_override_steps >= grace_period:
+        elif adaptive_override:
+            # Adaptive LR has control
+            self._adaptive_override_steps = getattr(self, '_adaptive_override_steps', 0) + 1
+            grace_period = getattr(self, '_adaptive_override_grace', 10)
+            is_emergency = getattr(self, '_adaptive_emergency', False)
+
+            # Log progress
+            if self._adaptive_override_steps == 1:
+                logging.info(f"🎯 Step {self.global_step}: Adaptive override active (LR: {current_lr:.2e}, grace: {grace_period} steps)")
+
+            # Release control after grace period (unless emergency and still problematic)
+            if self._adaptive_override_steps >= grace_period:
+                if is_emergency:
+                    # Check if emergency is resolved
+                    recent_grad_norms = getattr(self, '_recent_grad_norms', [])
+                    if recent_grad_norms and max(recent_grad_norms[-5:]) < 10.0:
+                        # Crisis resolved
+                        self._adaptive_lr_override = False
+                        self._adaptive_override_steps = 0
+                        logging.info(f"✅ Step {self.global_step}: Emergency resolved, resuming scheduler")
+                    else:
+                        # Keep emergency override active
+                        logging.warning(f"⚠️ Step {self.global_step}: Emergency LR still active (gradients unstable)")
+                else:
+                    # Normal override - release control
                     self._adaptive_lr_override = False
                     self._adaptive_override_steps = 0
-                    logging.info(f"✅ Step {self.global_step}: Released adaptive override after {grace_period} steps, resuming scheduler")
-                elif self._adaptive_override_steps == 1:
-                    logging.info(f"🎯 Step {self.global_step}: Adaptive override active for next {grace_period} steps (current LR: {current_lr:.2e})")
+                    logging.info(f"✅ Step {self.global_step}: Released adaptive override, resuming scheduler")
 
-                # ✅ FIX: Let scheduler track time even when not applying
-                # This prevents scheduler from getting confused about step count
-                if hasattr(self.scheduler, '_step_count'):
-                    self.scheduler._step_count += 1
-
-            else:
-                # Normal scheduler operation
-                old_lr = self.scheduler.get_last_lr()[0]
-                self.scheduler.step()
-                new_lr = self.scheduler.get_last_lr()[0]
-                current_lr = new_lr
-
-                # Log LR changes periodically
-                if self.global_step % 100 == 0:
-                    if abs(old_lr - new_lr) > 1e-9:
-                        logging.info(f"📊 Step {self.global_step}: Scheduler stepped: {old_lr:.2e} → {new_lr:.2e}")
-                    else:
-                        logging.debug(f"📊 Step {self.global_step}: Scheduler LR unchanged ({old_lr:.2e})")
-        else:
-            # No scheduler - use current optimizer LR
-            current_lr = self.optimizer.param_groups[0]['lr']
-
-            if self.global_step % 100 == 0:
-                logging.debug(f"📊 Step {self.global_step}: No scheduler, constant LR: {current_lr:.2e}")
+        # ✅ Track gradient norms for emergency resolution
+        if not hasattr(self, '_recent_grad_norms'):
+            self._recent_grad_norms = []
+        self._recent_grad_norms.append(grad_norm.item())
+        if len(self._recent_grad_norms) > 20:
+            self._recent_grad_norms.pop(0)
 
         return {'grad_norm': grad_norm.item(), 'lr': current_lr}
     
