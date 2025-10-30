@@ -284,6 +284,31 @@ def wrap_orchestrator_with_oom_protection(orchestrator, train_dataset, eval_data
             
             # Run adaptive training
             orchestrator.run_adaptive_training()
+
+            # Verify scheduler is working
+            print("\n" + "="*80)
+            print("🔍 SCHEDULER VERIFICATION")
+            print("="*80)
+
+            if hasattr(orchestrator.trainer, 'scheduler') and orchestrator.trainer.scheduler:
+                scheduler = orchestrator.trainer.scheduler
+                print(f"✅ Scheduler exists: {type(scheduler).__name__}")
+                print(f"✅ Current LR: {scheduler.get_last_lr()[0]:.2e}")
+                print(f"✅ Base LRs: {scheduler.base_lrs}")
+
+                # Test scheduler step
+                initial_lr = scheduler.get_last_lr()[0]
+                scheduler.step()
+                after_lr = scheduler.get_last_lr()[0]
+
+                if abs(initial_lr - after_lr) > 1e-10:
+                    print(f"✅ Scheduler is WORKING: {initial_lr:.2e} → {after_lr:.2e}")
+                else:
+                    print(f"⚠️ Scheduler not changing LR (might be in warmup)")
+            else:
+                print("❌ CRITICAL: No scheduler found!")
+
+            print("="*80 + "\n")
             
             # Success!
             print(f"\n{'='*80}")
@@ -1413,7 +1438,7 @@ def main():
         'min_lr': 1e-6,
         
         'use_lr_scheduler': True,
-        'lr_scheduler': "constant", # cosine, constant, or linear
+        'lr_scheduler': "cosine", # cosine, constant, or linear
         'warmup_ratio': 0.0001,
         
         'batch_size': 20,

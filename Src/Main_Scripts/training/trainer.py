@@ -1079,7 +1079,7 @@ class EnhancedConversationTrainer:
         # ✅ FIX: Set override flags (these were missing!)
         self._adaptive_lr_override = True
         self._adaptive_override_steps = 0
-        self._adaptive_override_grace = grace_period  # ← This was causing crashes!
+        self._adaptive_override_grace = grace_period
         self._adaptive_emergency = emergency
 
         logging.info(f"✅ LR override active for {grace_period} steps")
@@ -2461,7 +2461,7 @@ class EnhancedConversationTrainer:
         }
     
     def _standard_optimizer_step(self) -> Dict[str, float]:
-        """Standard optimizer step with precision awareness - FIXED for adaptive LR."""
+        """Standard optimizer step with adaptive LR override support - FIXED."""
 
         # Only unscale for FP16 (scaler only exists for FP16)
         if self.use_amp and self.scaler is not None:
@@ -2477,10 +2477,8 @@ class EnhancedConversationTrainer:
         if torch.isnan(grad_norm) or torch.isinf(grad_norm):
             logging.warning(f"NaN/Inf gradients detected (norm: {grad_norm}), skipping step")
             self.optimizer.zero_grad(set_to_none=True)
-
             if self.use_amp and self.scaler is not None:
                 self.scaler.update()
-
             return {'grad_norm': 0.0, 'lr': self.optimizer.param_groups[0]['lr']}
 
         # Take optimizer step
@@ -2518,7 +2516,7 @@ class EnhancedConversationTrainer:
             if self._adaptive_override_steps == 1:
                 logging.info(f"🎯 Step {self.global_step}: Adaptive override active (LR: {current_lr:.2e}, grace: {grace_period} steps)")
 
-            # Release control after grace period (unless emergency and still problematic)
+            # Release control after grace period (unless emergency)
             if self._adaptive_override_steps >= grace_period:
                 if is_emergency:
                     # Check if emergency is resolved
@@ -2529,8 +2527,7 @@ class EnhancedConversationTrainer:
                         self._adaptive_override_steps = 0
                         logging.info(f"✅ Step {self.global_step}: Emergency resolved, resuming scheduler")
                     else:
-                        # Keep emergency override active
-                        logging.warning(f"⚠️ Step {self.global_step}: Emergency LR still active (gradients unstable)")
+                        logging.warning(f"⚠️ Step {self.global_step}: Emergency LR still active")
                 else:
                     # Normal override - release control
                     self._adaptive_lr_override = False
@@ -2545,7 +2542,7 @@ class EnhancedConversationTrainer:
             self._recent_grad_norms.pop(0)
 
         return {'grad_norm': grad_norm.item(), 'lr': current_lr}
-    
+
     @torch.no_grad()
     def evaluate(self, eval_dataset, max_batches: int = 100) -> Dict[str, float]:
         """Enhanced evaluation with proper perplexity calculation and precision support."""
@@ -3110,8 +3107,8 @@ class EnhancedConversationTrainer:
 
     
     def _setup_scheduler(self, total_steps: int):
-        """Setup learning rate scheduler with warmup - respects use_lr_scheduler config."""
-    
+        """Setup learning rate scheduler with warmup - ACTUALLY creates and assigns scheduler."""
+
         # ✅ CHECK: Is scheduler enabled?
         if not getattr(self.config, 'use_lr_scheduler', True):
             print("📊 Learning rate scheduler is DISABLED by config")
@@ -3169,6 +3166,7 @@ class EnhancedConversationTrainer:
             print(f"✅ Constant scheduler initialized (with warmup)")
 
         else:
+            # ✅ CRITICAL FIX: Create fallback scheduler instead of leaving None
             from torch.optim.lr_scheduler import LambdaLR
 
             def lr_lambda(current_step: int):
@@ -3181,6 +3179,7 @@ class EnhancedConversationTrainer:
             self.scheduler = LambdaLR(self.optimizer, lr_lambda)
             print(f"⚠️ Unknown scheduler '{lr_scheduler}', using linear warmup+decay")
 
+        # ✅ CRITICAL VALIDATION
         if self.scheduler is None:
             print("❌ CRITICAL: Scheduler is None after setup!")
         else:

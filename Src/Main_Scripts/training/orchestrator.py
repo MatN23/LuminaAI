@@ -660,7 +660,7 @@ class AdaptiveTrainingOrchestrator:
         return copy.deepcopy(config)
     
     def _setup_trainer_scheduler(self, train_dataset):
-        """Setup learning rate scheduler for the trainer - FIXED."""
+        """Setup learning rate scheduler for the trainer - FIXED with validation."""
         if not self.trainer:
             logging.error("Cannot setup scheduler: trainer not initialized")
             return
@@ -679,12 +679,15 @@ class AdaptiveTrainingOrchestrator:
         # ✅ FIX: Pass total_steps to trainer's setup method
         if hasattr(self.trainer, '_setup_scheduler'):
             self.trainer._setup_scheduler(total_steps)
+
+            # ✅ CRITICAL: Validate scheduler was created
             if self.trainer.scheduler:
                 logging.info(f"✅ Scheduler initialized: {type(self.trainer.scheduler).__name__}")
-
-                # ✅ CRITICAL: Store scheduler reference in orchestrator too
+                # ✅ Store scheduler reference in orchestrator too
                 self.scheduler = self.trainer.scheduler
                 logging.info("✅ Scheduler reference stored in orchestrator")
+            else:
+                logging.error("❌ CRITICAL: Scheduler is None after setup!")
         else:
             logging.warning("Trainer does not have _setup_scheduler method")
 
