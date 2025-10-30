@@ -600,6 +600,7 @@ class AdaptiveTrainingOrchestrator:
     """Enhanced orchestrator with adaptive intelligence and self-improvement."""
     
     def __init__(self, config):
+        self.global_step = 0
         self.config = config
         self.base_config = self._deep_copy_config(config)
         
@@ -660,7 +661,7 @@ class AdaptiveTrainingOrchestrator:
         return copy.deepcopy(config)
     
     def _setup_trainer_scheduler(self, train_dataset):
-        """Setup learning rate scheduler for the trainer - FIXED with validation."""
+        """Setup learning rate scheduler for the trainer - FIXED."""
         if not self.trainer:
             logging.error("Cannot setup scheduler: trainer not initialized")
             return
@@ -675,6 +676,12 @@ class AdaptiveTrainingOrchestrator:
         logging.info(f"  Batches per epoch: {batches_per_epoch}")
         logging.info(f"  Steps per epoch: {steps_per_epoch}")
         logging.info(f"  Total steps: {total_steps}")
+
+        # ✅ FIX: Check if scheduler should be enabled at all
+        if not getattr(self.config, 'use_lr_scheduler', False):
+            logging.info("📊 Learning rate scheduler is DISABLED by config")
+            logging.info("   Learning rate will remain constant at: {self.config.learning_rate}")
+            return
 
         # ✅ FIX: Pass total_steps to trainer's setup method
         if hasattr(self.trainer, '_setup_scheduler'):

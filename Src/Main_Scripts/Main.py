@@ -1437,9 +1437,9 @@ def main():
         'learning_rate': 1e-4,
         'min_lr': 1e-6,
         
-        'use_lr_scheduler': True,
+        'use_lr_scheduler': False,
         'lr_scheduler': "cosine", # cosine, constant, or linear
-        'warmup_ratio': 0.0001,
+        'warmup_ratio': 0.005,
         
         'batch_size': 20,
         'gradient_accumulation_steps': 8,
@@ -1674,7 +1674,8 @@ def main():
             **deepspeed_params, 
             **quantization_params,
             **monitoring_params,
-            **advanced_features
+            **advanced_features,
+            **adaptive_lr_params,
         }
         
         print_section("Applying Parameter Overrides")
@@ -1690,6 +1691,11 @@ def main():
                     override_count += 1
         
         print(f"Applied {override_count} configuration overrides")
+
+        print("\nApplying Adaptive LR parameters...")
+        for key, value in adaptive_lr_params.items():
+            setattr(config, key, value)
+        print(f"  {key}: {value}")
 
         # Apply Chinchilla scaling parameters
         print("\nApplying Chinchilla scaling parameters...")

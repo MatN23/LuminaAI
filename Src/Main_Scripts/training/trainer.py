@@ -2785,6 +2785,8 @@ class EnhancedConversationTrainer:
             epoch_summary += f" | Quantization: {self.quantization_manager.quantization_info['bits']}-bit"
         
         print(epoch_summary)
+
+        self._handle_partial_accumulation()
         
         return {
             'avg_loss': avg_loss,
