@@ -25,7 +25,10 @@ tensorboard>=2.14.0
 scipy>=1.11.0
 torchvision>=0.16.0
 torchaudio>=2.1.0
-wandb
 optimum-quanto
 PyJWT
 pytest
+
+# Dataset Accelerator dependencies
+pybind11>=2.11.0
+cmake>=3.18.0

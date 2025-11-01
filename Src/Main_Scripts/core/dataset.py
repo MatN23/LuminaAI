@@ -1,15 +1,6 @@
 # Copyright (c) 2025 MatN23. All rights reserved.
 # Licensed under the Custom License below.
 
-"""
-LuminaAI Dataset with C++/CUDA Acceleration
-Drop-in replacement for dataset.py with transparent speedups
-
-This file is API-compatible with the original dataset.py.
-Simply replace 'from core.dataset import ...' with 'from core.dataset_accelerated import ...'
-Or rename this file to dataset.py to automatically enable acceleration.
-"""
-
 import json
 import logging
 import numpy as np
@@ -23,37 +14,16 @@ import torch
 from torch.utils.data import Dataset, DataLoader, IterableDataset
 import random
 
-# Try to import acceleration backend
-try:
-    from dataset_accelerator import (
-        FastFileReader,
-        StreamingIterator as AcceleratedStreamingIterator,
-        fast_shuffle,
-        parallel_shuffle,
-        fast_chunk_documents,
-        prepare_batch as accelerated_prepare_batch,
-        get_backend_info,
-        ACCELERATOR_AVAILABLE,
-        CUDA_BACKEND,
-    )
-    
-    if ACCELERATOR_AVAILABLE:
-        logging.info("✓ Dataset acceleration enabled")
-        if CUDA_BACKEND:
-            logging.info("  Using CUDA backend for GPU acceleration")
-        else:
-            logging.info("  Using C++ backend for CPU multi-threading")
-except ImportError as e:
-    logging.debug(f"Dataset accelerator not available: {e}")
-    ACCELERATOR_AVAILABLE = False
-    CUDA_BACKEND = False
-
 
 class BaseTrainingDataset(Dataset):
     """
     Dataset for base/pre-training on raw text (like The Pile, C4, etc.).
     
-    ACCELERATED: Uses C++/CUDA for file loading and chunking when available.
+    This dataset:
+    - Loads raw text files or JSONL with 'text' field
+    - Tokenizes without conversation structure
+    - Creates fixed-length chunks for efficient training
+    - Supports document continuation across chunks
     """
     
     def __init__(self, data_path: str, tokenizer, config, split: str = "train"):
@@ -69,8 +39,6 @@ class BaseTrainingDataset(Dataset):
             'total_chunks': 0,
             'total_tokens': 0,
             'documents_processed': 0,
-            'acceleration_used': ACCELERATOR_AVAILABLE,
-            'backend': 'CUDA' if CUDA_BACKEND else ('C++' if ACCELERATOR_AVAILABLE else 'Python'),
         }
         
         # Load and chunk documents
@@ -78,8 +46,6 @@ class BaseTrainingDataset(Dataset):
         
         logging.info(f"Base Training Dataset {split}: {len(self.chunks):,} chunks from {data_path}")
         logging.info(f"Total tokens: {self.stats['total_tokens']:,}, Documents: {self.stats['documents_processed']:,}")
-        if ACCELERATOR_AVAILABLE:
-            logging.info(f"Acceleration: {self.stats['backend']} backend")
     
     def _load_and_chunk_documents(self) -> List[List[int]]:
         """Load documents and create fixed-length token chunks."""
@@ -97,95 +63,66 @@ class BaseTrainingDataset(Dataset):
         is_jsonl = file_ext == '.jsonl'
         is_txt = file_ext in ['.txt', '.text']
         
-        # ACCELERATED: Use FastFileReader if available
-        if ACCELERATOR_AVAILABLE:
-            try:
-                reader = FastFileReader(str(self.data_path))
-                lines = reader.read_lines_parallel()
-                logging.info(f"✓ Loaded {len(lines):,} lines using accelerated reader")
-            except Exception as e:
-                logging.warning(f"Accelerated reader failed: {e}, falling back to standard I/O")
-                lines = self._read_file_standard()
-        else:
-            lines = self._read_file_standard()
-        
-        # Process lines
-        texts = []
-        for line_no, line in enumerate(lines, 1):
-            try:
-                # Extract text based on format
-                if is_jsonl:
-                    data = json.loads(line.strip())
-                    text = data.get('text', '')
-                elif is_txt:
-                    text = line.strip()
-                else:
-                    text = line.strip()
+        with open(self.data_path, 'r', encoding='utf-8') as f:
+            for line_no, line in enumerate(f, 1):
+                try:
+                    # Extract text based on format
+                    if is_jsonl:
+                        # JSONL format: {"text": "content"}
+                        data = json.loads(line.strip())
+                        text = data.get('text', '')
+                    elif is_txt:
+                        # Plain text: each line is content
+                        # Empty lines can separate documents
+                        text = line.strip()
+                    else:
+                        # Unknown format, treat as plain text
+                        text = line.strip()
+                    
+                    if not text:
+                        continue
+                    
+                    self.stats['total_loaded'] += 1
+                    
+                    # Tokenize
+                    tokens = self.tokenizer.tokenizer.encode(text)
+                    if not tokens:
+                        continue
+                    
+                    self.stats['documents_processed'] += 1
+                    self.stats['total_tokens'] += len(tokens)
+                    
+                    # Add tokens to buffer
+                    current_tokens.extend(tokens)
+                    
+                    # Create chunks when we have enough tokens
+                    while len(current_tokens) >= self.seq_length + 1:  # +1 for labels
+                        chunk = current_tokens[:self.seq_length + 1]
+                        chunks.append(chunk)
+                        current_tokens = current_tokens[self.seq_length:]  # Sliding window
+                        self.stats['total_chunks'] += 1
+                    
+                    # Progress logging
+                    if line_no % 10000 == 0:
+                        logging.info(f"Processed {line_no:,} lines, {len(chunks):,} chunks created")
                 
-                if not text:
+                except json.JSONDecodeError as e:
+                    if is_jsonl:
+                        logging.warning(f"JSON decode error at line {line_no}: {e}")
                     continue
-                
-                self.stats['total_loaded'] += 1
-                texts.append(text)
-                
-                # Progress logging
-                if line_no % 10000 == 0:
-                    logging.info(f"Processed {line_no:,} lines")
-            
-            except json.JSONDecodeError as e:
-                if is_jsonl:
-                    logging.warning(f"JSON decode error at line {line_no}: {e}")
-                continue
-            except Exception as e:
-                logging.warning(f"Error processing line {line_no}: {e}")
-                continue
+                except Exception as e:
+                    logging.warning(f"Error processing line {line_no}: {e}")
+                    continue
         
-        # ACCELERATED: Use fast chunking if available
-        if ACCELERATOR_AVAILABLE and len(texts) > 0:
-            try:
-                chunk_result = fast_chunk_documents(texts, self.seq_length, overlap=True)
-                chunks = chunk_result['chunks']
-                self.stats['total_tokens'] = chunk_result['total_tokens']
-                self.stats['documents_processed'] = chunk_result['documents_processed']
-                self.stats['total_chunks'] = len(chunks)
-                logging.info(f"✓ Created {len(chunks):,} chunks using accelerated chunking")
-                return chunks
-            except Exception as e:
-                logging.warning(f"Accelerated chunking failed: {e}, using standard method")
-        
-        # Fallback to standard chunking
-        for text in texts:
-            tokens = self.tokenizer.tokenizer.encode(text)
-            if not tokens:
-                continue
-            
-            self.stats['documents_processed'] += 1
-            self.stats['total_tokens'] += len(tokens)
-            current_tokens.extend(tokens)
-            
-            while len(current_tokens) >= self.seq_length + 1:
-                chunk = current_tokens[:self.seq_length + 1]
-                chunks.append(chunk)
-                current_tokens = current_tokens[self.seq_length:]
-                self.stats['total_chunks'] += 1
-        
-        # Handle remaining tokens
+        # Handle remaining tokens (pad if needed)
         if current_tokens:
             if len(current_tokens) < self.seq_length + 1:
+                # Pad to sequence length
                 current_tokens.extend([0] * (self.seq_length + 1 - len(current_tokens)))
             chunks.append(current_tokens[:self.seq_length + 1])
             self.stats['total_chunks'] += 1
         
         return chunks
-    
-    def _read_file_standard(self) -> List[str]:
-        """Standard file reading fallback"""
-        lines = []
-        with open(self.data_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                if line.strip():
-                    lines.append(line)
-        return lines
     
     def __len__(self) -> int:
         return len(self.chunks)
@@ -226,7 +163,7 @@ class StreamingBaseTrainingDataset(IterableDataset):
     """
     Streaming version of base training dataset for very large datasets.
     
-    ACCELERATED: Uses C++/CUDA streaming iterator when available.
+    Memory-efficient for huge pre-training corpora.
     """
     
     def __init__(self, 
@@ -246,68 +183,22 @@ class StreamingBaseTrainingDataset(IterableDataset):
         self.stats = {
             'total_processed': 0,
             'total_chunks': 0,
-            'documents_processed': 0,
-            'acceleration_used': ACCELERATOR_AVAILABLE,
+            'documents_processed': 0
         }
         
         # Determine file format
         self.is_jsonl = self.data_path.suffix == '.jsonl'
         
         logging.info(f"StreamingBaseTrainingDataset {split}: {self.data_path}")
-        if ACCELERATOR_AVAILABLE:
-            logging.info(f"Using accelerated streaming iterator")
     
     def __iter__(self) -> Iterator[Dict[str, torch.Tensor]]:
         """Stream tokenized chunks."""
-        # ACCELERATED: Try to use accelerated streaming
-        if ACCELERATOR_AVAILABLE:
-            try:
-                return self._iter_accelerated()
-            except Exception as e:
-                logging.warning(f"Accelerated streaming failed: {e}, using standard method")
-        
-        return self._iter_standard()
-    
-    def _iter_accelerated(self) -> Iterator[Dict[str, torch.Tensor]]:
-        """Accelerated streaming using C++/CUDA backend"""
-        iterator = AcceleratedStreamingIterator(
-            str(self.data_path),
-            self.seq_length,
-            self.buffer_size
-        )
-        
-        while iterator.has_next():
-            chunk = iterator.next_chunk()
-            
-            if len(chunk) < self.seq_length + 1:
-                continue
-            
-            tokens_tensor = torch.tensor(chunk[:self.seq_length + 1], dtype=torch.long)
-            input_ids = tokens_tensor[:-1]
-            labels = tokens_tensor[1:]
-            attention_mask = torch.ones_like(input_ids, dtype=torch.float)
-            loss_weights = torch.ones_like(input_ids, dtype=torch.float)
-            
-            padding_mask = (input_ids == 0)
-            attention_mask[padding_mask] = 0.0
-            loss_weights[padding_mask] = 0.0
-            
-            self.stats['total_chunks'] += 1
-            
-            yield {
-                'input_ids': input_ids,
-                'labels': labels,
-                'attention_mask': attention_mask,
-                'loss_weights': loss_weights
-            }
-    
-    def _iter_standard(self) -> Iterator[Dict[str, torch.Tensor]]:
-        """Standard streaming fallback"""
         current_tokens = []
         
         with open(self.data_path, 'r', encoding='utf-8') as f:
             for line_no, line in enumerate(f, 1):
                 try:
+                    # Extract text
                     if self.is_jsonl:
                         data = json.loads(line.strip())
                         text = data.get('text', '')
@@ -319,6 +210,7 @@ class StreamingBaseTrainingDataset(IterableDataset):
                     
                     self.stats['total_processed'] += 1
                     
+                    # Tokenize
                     tokens = self.tokenizer.tokenizer.encode(text)
                     if not tokens:
                         continue
@@ -326,16 +218,19 @@ class StreamingBaseTrainingDataset(IterableDataset):
                     self.stats['documents_processed'] += 1
                     current_tokens.extend(tokens)
                     
+                    # Yield chunks as they become ready
                     while len(current_tokens) >= self.seq_length + 1:
                         chunk = current_tokens[:self.seq_length + 1]
                         current_tokens = current_tokens[self.seq_length:]
                         
+                        # Create tensors
                         tokens_tensor = torch.tensor(chunk, dtype=torch.long)
                         input_ids = tokens_tensor[:-1]
                         labels = tokens_tensor[1:]
                         attention_mask = torch.ones_like(input_ids, dtype=torch.float)
                         loss_weights = torch.ones_like(input_ids, dtype=torch.float)
                         
+                        # Mask padding
                         padding_mask = (input_ids == 0)
                         attention_mask[padding_mask] = 0.0
                         loss_weights[padding_mask] = 0.0
@@ -349,6 +244,7 @@ class StreamingBaseTrainingDataset(IterableDataset):
                             'loss_weights': loss_weights
                         }
                     
+                    # Progress logging
                     if line_no % 50000 == 0:
                         logging.info(f"Streaming: processed {line_no:,} lines, "
                                    f"{self.stats['total_chunks']:,} chunks yielded")
@@ -356,6 +252,28 @@ class StreamingBaseTrainingDataset(IterableDataset):
                 except Exception as e:
                     logging.debug(f"Error processing line {line_no}: {e}")
                     continue
+        
+        # Yield remaining tokens if any
+        if len(current_tokens) >= 10:  # Minimum viable chunk
+            if len(current_tokens) < self.seq_length + 1:
+                current_tokens.extend([0] * (self.seq_length + 1 - len(current_tokens)))
+            
+            tokens_tensor = torch.tensor(current_tokens[:self.seq_length + 1], dtype=torch.long)
+            input_ids = tokens_tensor[:-1]
+            labels = tokens_tensor[1:]
+            attention_mask = torch.ones_like(input_ids, dtype=torch.float)
+            loss_weights = torch.ones_like(input_ids, dtype=torch.float)
+            
+            padding_mask = (input_ids == 0)
+            attention_mask[padding_mask] = 0.0
+            loss_weights[padding_mask] = 0.0
+            
+            yield {
+                'input_ids': input_ids,
+                'labels': labels,
+                'attention_mask': attention_mask,
+                'loss_weights': loss_weights
+            }
 
 
 class ConversationDataset(Dataset):
@@ -561,83 +479,281 @@ class ConversationDataset(Dataset):
         return self.stats.copy()
 
 
+# Keep all the other dataset classes (StreamingConversationDataset, ShardedConversationDataset, MultiDatasetManager)
+# [Previous implementations remain unchanged...]
+
+
 class HybridDatasetManager:
-    """Manages both base training and instruction tuning datasets."""
+    """
+    Manages both base training and instruction tuning datasets.
     
-    def __init__(self, 
-                 base_dataset: Optional[Dataset] = None,
-                 instruction_dataset: Optional[Dataset] = None,
-                 base_ratio: float = 0.7):
-        self.base_dataset = base_dataset
-        self.instruction_dataset = instruction_dataset
-        self.base_ratio = base_ratio
+    Supports:
+    - Pure base training (The Pile, C4, etc.)
+    - Pure instruction tuning (OASST, conversations)
+    - Hybrid: base training then instruction tuning
+    - Interleaved: mix of both during training
+    - Multiple datasets for each type
+    """
+    
+    def __init__(self, config):
+        self.config = config
         
-        self.total_samples = 0
-        if base_dataset is not None:
-            self.total_samples += len(base_dataset)  # type: ignore
-        if instruction_dataset is not None:
-            self.total_samples += len(instruction_dataset)  # type: ignore
-    
-    def __len__(self) -> int:
-        return self.total_samples
-    
-    def sample(self) -> Dict[str, torch.Tensor]:
-        """Sample from either dataset based on ratio."""
-        if random.random() < self.base_ratio and self.base_dataset is not None:
-            idx = random.randint(0, len(self.base_dataset) - 1)  # type: ignore
-            return self.base_dataset[idx]
-        elif self.instruction_dataset is not None:
-            idx = random.randint(0, len(self.instruction_dataset) - 1)  # type: ignore
-            return self.instruction_dataset[idx]
+        # Get base training paths (multiple files supported)
+        base_paths = getattr(config, 'base_training_paths', None)
+        if base_paths is None:
+            base_paths = getattr(config, 'base_training_path', None)
+        
+        # Convert to list if string
+        if isinstance(base_paths, str):
+            self.base_training_paths = [base_paths] if base_paths else []
         else:
-            # Fallback
-            dataset = self.base_dataset or self.instruction_dataset
-            if dataset is not None:
-                idx = random.randint(0, len(dataset) - 1)  # type: ignore
-                return dataset[idx]
-            # Return empty if no dataset available
-            return {
-                'input_ids': torch.zeros(512, dtype=torch.long),
-                'labels': torch.zeros(512, dtype=torch.long),
-                'attention_mask': torch.zeros(512, dtype=torch.float),
-                'loss_weights': torch.zeros(512, dtype=torch.float)
-            }
+            self.base_training_paths = list(base_paths) if base_paths else []
+        
+        # Get fine-tuning/instruction paths (multiple files supported)
+        ft_paths = getattr(config, 'finetuning_paths', None)
+        if ft_paths is None:
+            ft_paths = getattr(config, 'train_data_path', None)
+        
+        # Convert to list if string
+        if isinstance(ft_paths, str):
+            self.finetuning_paths = [ft_paths] if ft_paths else []
+        else:
+            self.finetuning_paths = list(ft_paths) if ft_paths else []
+        
+        # Eval paths
+        base_eval = getattr(config, 'base_eval_paths', None)
+        if base_eval is None:
+            base_eval = getattr(config, 'base_eval_path', None)
+        
+        if isinstance(base_eval, str):
+            self.base_eval_paths = [base_eval] if base_eval else []
+        else:
+            self.base_eval_paths = list(base_eval) if base_eval else []
+        
+        ft_eval = getattr(config, 'finetuning_eval_paths', None)
+        if ft_eval is None:
+            ft_eval = getattr(config, 'eval_data_path', None)
+        
+        if isinstance(ft_eval, str):
+            self.finetuning_eval_paths = [ft_eval] if ft_eval else []
+        else:
+            self.finetuning_eval_paths = list(ft_eval) if ft_eval else []
+        
+        self.training_mode = self._detect_training_mode()
+        
+        logging.info(f"HybridDatasetManager: {self.training_mode} mode")
+        if self.base_training_paths:
+            logging.info(f"  Base training: {len(self.base_training_paths)} dataset(s)")
+        if self.finetuning_paths:
+            logging.info(f"  Fine-tuning: {len(self.finetuning_paths)} dataset(s)")
+    
+    def _detect_training_mode(self) -> str:
+        """Detect which training mode to use."""
+        # Check if any base training files exist
+        has_base = any(Path(p).exists() for p in self.base_training_paths)
+        
+        # Check if any fine-tuning files exist
+        has_finetuning = any(Path(p).exists() for p in self.finetuning_paths)
+        
+        if has_base and has_finetuning:
+            # Check config preference
+            mode = getattr(self.config, 'training_mode', 'hybrid')
+            if mode not in ['base_only', 'finetuning_only', 'instruction_only', 'hybrid', 'interleaved']:
+                logging.warning(f"Unknown training_mode '{mode}', defaulting to 'hybrid'")
+                return 'hybrid'
+            
+            # Support legacy 'instruction_only' naming
+            if mode == 'instruction_only':
+                return 'finetuning_only'
+            
+            return mode
+        elif has_base:
+            return 'base_only'
+        elif has_finetuning:
+            return 'finetuning_only'
+        else:
+            raise ValueError("No training data found! Set base_training_paths or finetuning_paths")
+    
+    def get_datasets(self, tokenizer):
+        """Get appropriate datasets based on training mode."""
+        if self.training_mode == 'base_only':
+            return self._get_base_training_datasets(tokenizer)
+        elif self.training_mode in ['finetuning_only', 'instruction_only']:
+            return self._get_finetuning_datasets(tokenizer)
+        elif self.training_mode == 'hybrid':
+            return self._get_hybrid_datasets(tokenizer)
+        elif self.training_mode == 'interleaved':
+            return self._get_interleaved_datasets(tokenizer)
+    
+    def _combine_datasets(self, dataset_class, paths, tokenizer, split_name):
+        """Combine multiple dataset files into one."""
+        if len(paths) == 1:
+            return dataset_class(paths[0], tokenizer, self.config, split_name)
+
+        # Create temporary combined file
+        cache_dir = Path(getattr(self.config, 'data_cache_dir', 'data/cache'))
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        # FIXED: Determine file extension from source files
+        first_path = Path(paths[0])
+        source_ext = first_path.suffix.lower()
+
+        # Use appropriate extension for combined file
+        if source_ext in ['.txt', '.text']:
+            combined_ext = '.txt'
+        else:
+            combined_ext = '.jsonl'
+
+        combined_path = cache_dir / f"combined_{split_name}_{hash(tuple(paths))}{combined_ext}"
+
+        if not combined_path.exists():
+            logging.info(f"Combining {len(paths)} {split_name} files...")
+            with open(combined_path, 'w', encoding='utf-8') as out_f:
+                total_lines = 0
+                for path in paths:
+                    if not Path(path).exists():
+                        logging.warning(f"File not found, skipping: {path}")
+                        continue
+                        
+                    with open(path, 'r', encoding='utf-8') as in_f:
+                        for line in in_f:
+                            out_f.write(line)
+                            total_lines += 1
+
+                logging.info(f"Combined {total_lines:,} lines from {len(paths)} files")
+
+        return dataset_class(str(combined_path), tokenizer, self.config, split_name)
+        
+    def _get_base_training_datasets(self, tokenizer):
+        """Get base training datasets."""
+        logging.info("Setting up base/pre-training datasets")
+        
+        # Check total file size to determine if streaming is needed
+        total_size_gb = sum(
+            Path(p).stat().st_size / (1024**3) 
+            for p in self.base_training_paths 
+            if Path(p).exists()
+        )
+        
+        use_streaming = total_size_gb > getattr(self.config, 'streaming_threshold_gb', 10.0)
+        
+        if use_streaming:
+            logging.info(f"Using streaming for {total_size_gb:.1f}GB of base training data")
+            # For streaming, use first file (or combine if needed)
+            train_dataset = StreamingBaseTrainingDataset(
+                self.base_training_paths[0], tokenizer, self.config, "train"
+            )
+        else:
+            # Combine all base training files
+            train_dataset = self._combine_datasets(
+                BaseTrainingDataset, self.base_training_paths, tokenizer, "base_train"
+            )
+        
+        # Eval dataset
+        if self.base_eval_paths:
+            eval_dataset = self._combine_datasets(
+                BaseTrainingDataset, self.base_eval_paths, tokenizer, "base_eval"
+            )
+        else:
+            eval_dataset = train_dataset
+        
+        return train_dataset, eval_dataset
+    
+    def _get_finetuning_datasets(self, tokenizer):
+        """Get fine-tuning/instruction datasets."""
+        logging.info("Setting up fine-tuning datasets")
+        
+        # Combine all fine-tuning files
+        train_dataset = self._combine_datasets(
+            ConversationDataset, self.finetuning_paths, tokenizer, "ft_train"
+        )
+        
+        # Eval dataset
+        if self.finetuning_eval_paths:
+            eval_dataset = self._combine_datasets(
+                ConversationDataset, self.finetuning_eval_paths, tokenizer, "ft_eval"
+            )
+        else:
+            eval_dataset = train_dataset
+        
+        return train_dataset, eval_dataset
+    
+    def _get_hybrid_datasets(self, tokenizer):
+        """Get hybrid datasets - sequential training."""
+        logging.info("Setting up hybrid training (base → fine-tuning)")
+        
+        # For hybrid mode, return base training first
+        # The training orchestrator should handle switching to fine-tuning
+        base_train, base_eval = self._get_base_training_datasets(tokenizer)
+        
+        # Store fine-tuning datasets for later phase
+        self.config._finetuning_datasets_ready = True
+        self.config._finetuning_paths = self.finetuning_paths
+        self.config._finetuning_eval_paths = self.finetuning_eval_paths
+        
+        return base_train, base_eval
+    
+    def _get_interleaved_datasets(self, tokenizer):
+        """Get interleaved datasets - mixed training."""
+        logging.info("Setting up interleaved training (base + fine-tuning mixed)")
+        
+        # Create combined base dataset
+        base_dataset = self._combine_datasets(
+            BaseTrainingDataset, self.base_training_paths, tokenizer, "base_train"
+        )
+        
+        # Create combined fine-tuning dataset
+        finetuning_dataset = self._combine_datasets(
+            ConversationDataset, self.finetuning_paths, tokenizer, "ft_train"
+        )
+        
+        # Combine with InterleavedDataset
+        mix_ratio = getattr(self.config, 'base_finetuning_ratio', 0.5)
+        train_dataset = InterleavedDataset(base_dataset, finetuning_dataset, mix_ratio)
+        
+        # Eval dataset (use fine-tuning eval)
+        if self.finetuning_eval_paths:
+            eval_dataset = self._combine_datasets(
+                ConversationDataset, self.finetuning_eval_paths, tokenizer, "ft_eval"
+            )
+        else:
+            eval_dataset = finetuning_dataset
+        
+        return train_dataset, eval_dataset
 
 
 class InterleavedDataset(Dataset):
-    """Interleaves base training and fine-tuning samples."""
+    """
+    Interleaves base training and fine-tuning samples.
     
-    def __init__(self,
-                 base_dataset: Optional[Dataset] = None,
-                 instruction_dataset: Optional[Dataset] = None,
-                 base_ratio: float = 0.7):
+    Useful for maintaining both capabilities during training.
+    """
+    
+    def __init__(self, base_dataset, finetuning_dataset, base_ratio: float = 0.5):
         self.base_dataset = base_dataset
-        self.instruction_dataset = instruction_dataset
+        self.finetuning_dataset = finetuning_dataset
         self.base_ratio = base_ratio
         
-        # Create interleaved indices
-        self.indices = self._create_interleaved_indices()
+        # Create index mapping
+        total_samples = len(base_dataset) + len(finetuning_dataset)
+        self.indices = self._create_interleaved_indices(total_samples)
+        
+        logging.info(f"InterleavedDataset: {len(self)} samples "
+                    f"({base_ratio:.1%} base, {1-base_ratio:.1%} fine-tuning)")
     
-    def _create_interleaved_indices(self) -> List[tuple]:
-        """Create list of (dataset_type, index) tuples."""
+    def _create_interleaved_indices(self, total_samples: int) -> List[tuple]:
+        """Create interleaved indices."""
         indices = []
         
-        base_len = len(self.base_dataset) if self.base_dataset is not None else 0  # type: ignore
-        inst_len = len(self.instruction_dataset) if self.instruction_dataset is not None else 0  # type: ignore
+        base_count = int(total_samples * self.base_ratio)
+        ft_count = total_samples - base_count
         
-        total_len = base_len + inst_len
-        num_base = int(total_len * self.base_ratio)
-        num_inst = total_len - num_base
+        # Create indices
+        for i in range(min(len(self.base_dataset), base_count)):
+            indices.append(('base', i))
         
-        # Add base indices
-        if base_len > 0:
-            for i in range(min(num_base, base_len)):
-                indices.append(('base', i % base_len))
-        
-        # Add instruction indices
-        if inst_len > 0:
-            for i in range(min(num_inst, inst_len)):
-                indices.append(('instruction', i % inst_len))
+        for i in range(min(len(self.finetuning_dataset), ft_count)):
+            indices.append(('finetuning', i))
         
         # Shuffle
         random.shuffle(indices)
@@ -648,31 +764,26 @@ class InterleavedDataset(Dataset):
         return len(self.indices)
     
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
-        dataset_type, data_idx = self.indices[idx]
+        """Get sample from appropriate dataset."""
+        dataset_type, dataset_idx = self.indices[idx]
         
-        if dataset_type == 'base' and self.base_dataset is not None:
-            return self.base_dataset[data_idx]  # type: ignore
-        elif dataset_type == 'instruction' and self.instruction_dataset is not None:
-            return self.instruction_dataset[data_idx]  # type: ignore
+        if dataset_type == 'base':
+            return self.base_dataset[dataset_idx]
         else:
-            # Fallback to empty sample
-            return {
-                'input_ids': torch.zeros(512, dtype=torch.long),
-                'labels': torch.zeros(512, dtype=torch.long),
-                'attention_mask': torch.zeros(512, dtype=torch.float),
-                'loss_weights': torch.zeros(512, dtype=torch.float)
-            }
+            return self.finetuning_dataset[dataset_idx]
 
+
+# Add this to the END of your dataset.py file (after all class definitions)
 
 def create_dataloader(dataset: Union[Dataset, IterableDataset], 
                      config, 
                      shuffle: bool = True) -> DataLoader:
     """Create optimized dataloader with error handling."""
     try:
-        # Check if dataset is streaming
+        # FIXED: Check using isinstance with actual class objects
         is_streaming = isinstance(dataset, IterableDataset)
         
-        # Also check for custom streaming classes by name
+        # Also check for our custom streaming classes by name (safer)
         is_custom_streaming = (
             hasattr(dataset, '__class__') and 
             'Streaming' in dataset.__class__.__name__
@@ -699,7 +810,7 @@ def create_dataloader(dataset: Union[Dataset, IterableDataset],
             )
     except Exception as e:
         logging.warning(f"Failed to create optimized dataloader: {e}")
-        # Safer fallback
+        # SAFER FALLBACK - just create basic dataloader
         return DataLoader(
             dataset,
             batch_size=config.batch_size,
@@ -710,68 +821,22 @@ def create_dataloader(dataset: Union[Dataset, IterableDataset],
 
 
 def setup_datasets(config, tokenizer):
-    """Main entry point for setting up datasets."""
-    train_dataset = None
-    eval_dataset = None
+    """
+    Main entry point for setting up datasets.
     
-    # Setup base training dataset if path provided
-    if hasattr(config, 'base_train_data') and config.base_train_data:
-        if hasattr(config, 'use_streaming') and config.use_streaming:
-            train_dataset = StreamingBaseTrainingDataset(
-                config.base_train_data,
-                tokenizer,
-                config,
-                split='train'
-            )
-        else:
-            train_dataset = BaseTrainingDataset(
-                config.base_train_data,
-                tokenizer,
-                config,
-                split='train'
-            )
-    
-    # Setup instruction tuning dataset if path provided
-    if hasattr(config, 'instruction_data') and config.instruction_data:
-        instruction_dataset = ConversationDataset(
-            config.instruction_data,
-            tokenizer,
-            config,
-            split='train'
-        )
-        
-        # If we also have base training, create hybrid dataset
-        if train_dataset:
-            base_ratio = getattr(config, 'base_ratio', 0.7)
-            train_dataset = InterleavedDataset(
-                train_dataset,
-                instruction_dataset,
-                base_ratio=base_ratio
-            )
-        else:
-            train_dataset = instruction_dataset
-    
-    # Setup eval dataset if path provided
-    if hasattr(config, 'eval_data') and config.eval_data:
-        eval_dataset = ConversationDataset(
-            config.eval_data,
-            tokenizer,
-            config,
-            split='eval'
-        )
-    
-    return train_dataset, eval_dataset
+    Automatically detects training mode and returns appropriate datasets.
+    """
+    manager = HybridDatasetManager(config)
+    return manager.get_datasets(tokenizer)
 
 
-# Export everything
+# Make sure these are exported
 __all__ = [
     'BaseTrainingDataset',
-    'StreamingBaseTrainingDataset',
+    'StreamingBaseTrainingDataset', 
     'ConversationDataset',
     'HybridDatasetManager',
     'InterleavedDataset',
     'create_dataloader',
-    'setup_datasets',
-    'ACCELERATOR_AVAILABLE',
-    'CUDA_BACKEND',
+    'setup_datasets'
 ]
