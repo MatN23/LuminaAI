@@ -10,7 +10,8 @@ from functools import lru_cache
 from dataclasses import dataclass
 from enum import Enum
 import tiktoken
-
+import time
+from typing import List, Tuple, Union
 
 class TokenizationMode(Enum):
     """Tokenization modes for different use cases."""
