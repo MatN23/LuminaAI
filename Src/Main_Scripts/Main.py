@@ -1231,8 +1231,24 @@ def load_checkpoint_for_continuation(checkpoint_path: str, orchestrator) -> Dict
     print(f"\nLoading from: {checkpoint_file}")
     print(f"File size: {checkpoint_file.stat().st_size / 1e6:.2f} MB")
     
-    # Load checkpoint to CPU first
-    checkpoint = torch.load(checkpoint_file, map_location='cpu')
+    try:
+        # Try with weights_only=False for older checkpoints
+        print("🔄 Attempting to load with weights_only=False...")
+        checkpoint = torch.load(checkpoint_file, map_location='cpu', weights_only=False)
+        print("✅ Loaded checkpoint with weights_only=False")
+    except Exception as e:
+        print(f"⚠️  Could not load checkpoint with weights_only=False: {e}")
+        print("🔄 Attempting to load with safe globals...")
+        try:
+            # Try with safe globals
+            import torch.serialization
+            torch.serialization.add_safe_globals(['config.config_manager.Config'])
+            checkpoint = torch.load(checkpoint_file, map_location='cpu')
+            print("✅ Loaded checkpoint with safe globals")
+        except Exception as e2:
+            print(f"❌ Could not load checkpoint: {e2}")
+            print("Starting training from scratch...")
+            raise
     
     # CRITICAL FIX: Direct state restoration
     print("\n🔄 RESTORING TRAINING STATE:")
@@ -1241,18 +1257,28 @@ def load_checkpoint_for_continuation(checkpoint_path: str, orchestrator) -> Dict
     if 'model_state_dict' in checkpoint:
         orchestrator.model.load_state_dict(checkpoint['model_state_dict'])
         print("✅ Model state restored")
+    else:
+        print("❌ No model_state_dict found in checkpoint")
     
     # Restore optimizer state
     if 'optimizer_state_dict' in checkpoint and hasattr(orchestrator, 'trainer'):
         if orchestrator.trainer and hasattr(orchestrator.trainer, 'optimizer'):
             orchestrator.trainer.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             print("✅ Optimizer state restored")
+        else:
+            print("⚠️  Optimizer found but trainer not ready")
+    else:
+        print("⚠️  No optimizer_state_dict found in checkpoint")
     
     # Restore scheduler state
     if 'scheduler_state_dict' in checkpoint and hasattr(orchestrator, 'trainer'):
         if orchestrator.trainer and hasattr(orchestrator.trainer, 'scheduler') and orchestrator.trainer.scheduler:
             orchestrator.trainer.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
             print("✅ Scheduler state restored")
+        else:
+            print("⚠️  Scheduler found but trainer scheduler not ready")
+    else:
+        print("⚠️  No scheduler_state_dict found in checkpoint")
     
     # Restore training progress
     info = {
@@ -1567,7 +1593,7 @@ def main():
     }
     # Add these to your monitoring_params or create a new checkpoint_params section:
     checkpoint_params = {
-        'resume_from_checkpoint': 'experiments/Advanced_Training_20251101_192603/checkpoints/checkpoint_final_597.pt',
+        'resume_from_checkpoint': 'checkpoints/checkpoint_final_597.pt',  # ✅ SPECIFIC CHECKPOINT
         'resume_training': True,        
         'reset_optimizer': False,       
         'reset_scheduler': False,       
@@ -2136,9 +2162,10 @@ def main():
         if checkpoint_params.get('resume_training', False):
             print("🧪 Testing resume functionality...")
 
-            # Force a manual resume
+            # Force a manual resume with proper error handling
             try:
-                checkpoint = torch.load(checkpoint_params['resume_from_checkpoint'], map_location='cpu')
+                print("🔄 Attempting to load checkpoint manually...")
+                checkpoint = torch.load(checkpoint_params['resume_from_checkpoint'], map_location='cpu', weights_only=False)
 
                 print(f"📁 Checkpoint contents:")
                 for key in checkpoint.keys():
@@ -2149,10 +2176,15 @@ def main():
                 if 'epoch' in checkpoint:
                     orchestrator.start_epoch = checkpoint['epoch'] + 1
                     print(f"🎯 Will continue from epoch: {orchestrator.start_epoch}")
+                else:
+                    print("⚠️  No epoch found in checkpoint")
+
+                print("✅ Manual resume test PASSED")
 
             except Exception as e:
-                print(f"❌ Resume test failed: {e}")    
-
+                print(f"❌ Resume test failed: {e}")
+                print("⚠️  Will attempt proper loading in checkpoint resumption step...")  
+    
         print_banner("STEP 14: STARTING ADAPTIVE TRAINING")
         print(f"Training begins at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"Experiment directory: {experiment_dir}")
