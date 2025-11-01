@@ -1051,6 +1051,42 @@ class EnhancedConversationTrainer:
         # Setup training components
         self._setup_training()
 
+    def _handle_partial_accumulation(self):
+        """
+        Handle any remaining gradient accumulation at the end of an epoch.
+
+        This ensures that gradients from partially accumulated batches are
+        processed correctly when the epoch ends before a full accumulation cycle.
+        """
+        gradient_accumulation_steps = getattr(self.config, 'gradient_accumulation_steps', 1)
+
+        # If we're using gradient accumulation and have partial accumulation,
+        # we need to handle the remaining gradients
+        if gradient_accumulation_steps > 1:
+            try:
+                # Check if we have any accumulated gradients
+                has_accumulated_grads = False
+                for param in self.model.parameters():
+                    if param.grad is not None and torch.any(param.grad != 0):
+                        has_accumulated_grads = True
+                        break
+                        
+                if has_accumulated_grads:
+                    logging.info(f"Processing partial gradient accumulation at end of epoch")
+
+                    # Take an optimizer step with the partial accumulation
+                    opt_metrics = self.optimizer_step()
+                    self.global_step += 1
+
+                    logging.info(f"Partial accumulation step completed: "
+                               f"GradNorm: {opt_metrics.get('grad_norm', 0):.4f}, "
+                               f"LR: {opt_metrics.get('lr', 0):.2e}")
+
+            except Exception as e:
+                logging.warning(f"Error handling partial accumulation: {e}")
+                # Clear gradients to avoid issues in next epoch
+                self.optimizer.zero_grad(set_to_none=True)
+
     def adjust_learning_rate(self, new_lr: float, grace_period: int = 10, emergency: bool = False):
         """
         ✅ FIXED: Adjust learning rate and signal scheduler override.
@@ -2786,7 +2822,7 @@ class EnhancedConversationTrainer:
         
         print(epoch_summary)
 
-        self._handle_partial_accumulation()
+        # self._handle_partial_accumulation()
         
         return {
             'avg_loss': avg_loss,
