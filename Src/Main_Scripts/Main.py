@@ -1593,7 +1593,7 @@ def main():
     }
     # Add these to your monitoring_params or create a new checkpoint_params section:
     checkpoint_params = {
-        'resume_from_checkpoint': 'checkpoints/checkpoint_final_597.pt',  # ✅ SPECIFIC CHECKPOINT
+        'resume_from_checkpoint': 'checkpoint_final_597.pt',  # ✅ SPECIFIC CHECKPOINT
         'resume_training': True,        
         'reset_optimizer': False,       
         'reset_scheduler': False,       
@@ -2005,108 +2005,92 @@ def main():
             print("  - training.checkpoint")
             return 1
         
-        # Step 10.5: Checkpoint Resumption - COMPLETE VERSION
+        # Step 10.5: Checkpoint Resumption - WORKING VERSION
         print_banner("STEP 10.5: CHECKPOINT RESUMPTION")
 
         if checkpoint_params.get('resume_training', False) and checkpoint_params.get('resume_from_checkpoint'):
             checkpoint_path = checkpoint_params['resume_from_checkpoint']
-            print(f"Attempting to resume from checkpoint: {checkpoint_path}")
+            print(f"🔄 Loading checkpoint: {checkpoint_path}")
 
             try:
-                # Load the checkpoint using the FIXED function
-                checkpoint_info = load_checkpoint_for_continuation(checkpoint_path, orchestrator)
+                # Simple direct loading - no complex functions
+                checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
 
-                # Update training state
-                start_epoch = checkpoint_info['start_epoch']
-                global_step = checkpoint_info['global_step']
-                best_loss = checkpoint_info['best_loss']
+                print("✅ Checkpoint loaded successfully!")
+                print(f"📋 Checkpoint info:")
+                print(f"   - Epoch: {checkpoint.get('epoch', 'unknown')}")
+                print(f"   - Global step: {checkpoint.get('global_step', 'unknown')}")
+                print(f"   - Loss: {checkpoint.get('loss', 'unknown')}")
 
-                print(f"✓ Successfully loaded checkpoint:")
-                print(f"  - Starting from epoch: {start_epoch}")
-                print(f"  - Global step: {global_step}")
-                print(f"  - Previous best loss: {best_loss:.4f}")
+                # Load model state
+                if 'model_state_dict' in checkpoint:
+                    model.load_state_dict(checkpoint['model_state_dict'])
+                    print("✅ Model weights loaded")
 
-                # Update orchestrator state
-                if hasattr(orchestrator, 'start_epoch'):
-                    orchestrator.start_epoch = start_epoch
-                if hasattr(orchestrator, 'global_step'):
-                    orchestrator.global_step = global_step
-                if hasattr(orchestrator, 'best_loss'):
-                    orchestrator.best_loss = best_loss
+                # Load optimizer state if available and not reset
+                if not checkpoint_params.get('reset_optimizer', False) and 'optimizer_state_dict' in checkpoint:
+                    if hasattr(orchestrator.trainer, 'optimizer'):
+                        orchestrator.trainer.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                        print("✅ Optimizer state loaded")
 
-                # Update config for reporting
-                config.start_epoch = start_epoch
-                config.global_step = global_step
-                config.best_loss = best_loss
+                # Load scheduler state if available and not reset
+                if not checkpoint_params.get('reset_scheduler', False) and 'scheduler_state_dict' in checkpoint:
+                    if hasattr(orchestrator.trainer, 'scheduler') and orchestrator.trainer.scheduler:
+                        orchestrator.trainer.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+                        print("✅ Scheduler state loaded")
 
-            except FileNotFoundError:
-                print(f"⚠️ Checkpoint file not found: {checkpoint_path}")
-                print("Starting training from scratch...")
-                checkpoint_params['resume_training'] = False
+                # Set training state
+                start_epoch = checkpoint.get('epoch', 0) + 1
+                global_step = checkpoint.get('global_step', 0)
+                best_loss = checkpoint.get('best_loss', float('inf'))
+
+                # Update orchestrator directly
+                orchestrator.start_epoch = start_epoch
+                orchestrator.global_step = global_step
+                orchestrator.best_loss = best_loss
+
+                print(f"🎯 Training will continue from:")
+                print(f"   - Epoch: {start_epoch}")
+                print(f"   - Global step: {global_step}")
+                print(f"   - Best loss: {best_loss:.4f}")
+
             except Exception as e:
-                print(f"⚠️ Error loading checkpoint: {e}")
+                print(f"❌ Error loading checkpoint: {e}")
                 print("Starting training from scratch...")
                 checkpoint_params['resume_training'] = False
         else:
-            print("Starting fresh training session (no checkpoint resumption)")
+            print("Starting fresh training session")
 
-        # ADD THE DIAGNOSTICS HERE (your current code)
-        print_banner("STEP 10.5: CHECKPOINT RESUMPTION VERIFICATION")
+        print_banner("CHECKPOINT DETAILED INSPECTION")
 
-        if checkpoint_params.get('resume_training', False) and checkpoint_params.get('resume_from_checkpoint'):
-            print("🔍 VERIFYING CHECKPOINT RESUMPTION")
+        try:
+            checkpoint = torch.load('checkpoint_final_597.pt', map_location='cpu')
 
-            # 1. Check if orchestrator actually loaded the state
-            if hasattr(orchestrator, 'start_epoch'):
-                print(f"✅ Orchestrator start_epoch: {orchestrator.start_epoch}")
-            else:
-                print("❌ Orchestrator has no start_epoch attribute")
-
-            if hasattr(orchestrator, 'global_step'):
-                print(f"✅ Orchestrator global_step: {orchestrator.global_step}")
-            else:
-                print("❌ Orchestrator has no global_step attribute")
-
-            # 2. Check if trainer has the correct state
-            if hasattr(orchestrator, 'trainer') and orchestrator.trainer:
-                trainer = orchestrator.trainer
-
-                # Check optimizer state
-                if hasattr(trainer, 'optimizer'):
-                    print(f"✅ Optimizer exists")
-                    # Check if optimizer has state (should be loaded from checkpoint)
-                    for param_group in trainer.optimizer.param_groups:
-                        print(f"   LR: {param_group['lr']}")
+            print("📋 FULL CHECKPOINT CONTENTS:")
+            for key, value in checkpoint.items():
+                if isinstance(value, (int, float, str, bool)):
+                    print(f"   {key}: {value}")
+                elif hasattr(value, 'shape'):
+                    print(f"   {key}: tensor with shape {value.shape}")
                 else:
-                    print("❌ No optimizer found")
+                    print(f"   {key}: {type(value)}")
 
-                # Check scheduler state
-                if hasattr(trainer, 'scheduler') and trainer.scheduler:
-                    print(f"✅ Scheduler exists: {type(trainer.scheduler).__name__}")
-                    try:
-                        current_lr = trainer.scheduler.get_last_lr()[0]
-                        print(f"   Current LR: {current_lr:.2e}")
-                    except:
-                        print("   Could not read scheduler LR")
-                else:
-                    print("❌ No scheduler found")
+            # Check for training metrics
+            if 'training_metrics' in checkpoint:
+                print("📊 TRAINING METRICS:")
+                for metric, val in checkpoint['training_metrics'].items():
+                    print(f"   {metric}: {val}")
 
-            # 3. Force resume if needed
-            print("\n🔄 FORCING RESUME LOGIC...")
-            try:
-                # Manually set the training state
-                config.resume_from_checkpoint = checkpoint_params['resume_from_checkpoint']
-                config.resume_training = True
+            # Check if there are multiple epoch numbers
+            epoch_keys = [k for k in checkpoint.keys() if 'epoch' in k.lower()]
+            if epoch_keys:
+                print("📅 EPOCH-RELATED KEYS:")
+                for key in epoch_keys:
+                    print(f"   {key}: {checkpoint[key]}")
 
-                # Re-initialize training with resume flag
-                orchestrator.initialize_training()
-                print("✅ Re-initialized training with resume flag")
+        except Exception as e:
+            print(f"❌ Inspection failed: {e}")
 
-            except Exception as e:
-                print(f"❌ Re-initialization failed: {e}")
-
-        print("="*80)
-        
         # Step 11: Setup signal handlers
         print_banner("STEP 11: SETTING UP SIGNAL HANDLERS")
         setup_signal_handlers(orchestrator)
@@ -2184,7 +2168,7 @@ def main():
             except Exception as e:
                 print(f"❌ Resume test failed: {e}")
                 print("⚠️  Will attempt proper loading in checkpoint resumption step...")  
-    
+
         print_banner("STEP 14: STARTING ADAPTIVE TRAINING")
         print(f"Training begins at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"Experiment directory: {experiment_dir}")
