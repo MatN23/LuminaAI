@@ -1437,7 +1437,7 @@ def main():
         'learning_rate': 1e-4,
         'min_lr': 1e-6,
         
-        'use_lr_scheduler': False,
+        'use_lr_scheduler': True,
         'lr_scheduler': "cosine", # cosine, constant, or linear
         'warmup_ratio': 0.005,
         
@@ -1672,10 +1672,12 @@ def main():
             **training_params, 
             **data_params, 
             **deepspeed_params, 
+            **checkpoint_params,
             **quantization_params,
             **monitoring_params,
             **advanced_features,
             **adaptive_lr_params,
+            **chinchilla_params,
         }
         
         print_section("Applying Parameter Overrides")
