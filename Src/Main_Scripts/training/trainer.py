@@ -2747,7 +2747,6 @@ class EnhancedConversationTrainer:
             'total_accuracy': 0.0,
             'num_batches': 0,
             'grad_norm_sum': 0.0,
-            # 🆕 NEW: Track best metrics instead of just totals
             'best_loss': float('inf'),
             'best_raw_loss': float('inf'),
             'best_accuracy': 0.0,
@@ -2806,7 +2805,6 @@ class EnhancedConversationTrainer:
                 self.global_step += 1
 
                 if accumulation_metrics['loss'] > 0:
-                    # Standard totals for averaging
                     epoch_metrics['total_loss'] += accumulation_metrics['loss']
                     epoch_metrics['total_raw_loss'] += accumulation_metrics['raw_loss']
                     epoch_metrics['total_tokens'] += accumulation_metrics['tokens']
@@ -2815,42 +2813,71 @@ class EnhancedConversationTrainer:
                     if 'grad_norm' in opt_metrics and opt_metrics['grad_norm'] is not None:
                         epoch_metrics['grad_norm_sum'] += opt_metrics['grad_norm']
 
-                    # 🆕 NEW: Track best metrics
                     if accumulation_metrics['loss'] < epoch_metrics['best_loss']:
                         epoch_metrics['best_loss'] = accumulation_metrics['loss']
                         epoch_metrics['best_raw_loss'] = accumulation_metrics['raw_loss']
                         epoch_metrics['best_accuracy'] = accumulation_metrics['accuracy']
                         epoch_metrics['best_step'] = self.global_step
 
-                step_time = time.time() - step_start_time
-                tokens_per_sec = accumulation_metrics['tokens'] / step_time if step_time > 0 else 0
+                    # 🆕 CHINCHILLA SCALER UPDATE - RIGHT AFTER OPTIMIZER STEP
+                    if hasattr(self, 'chinchilla_scaler'):
+                        self.chinchilla_scaler.update_metrics(
+                            step=self.global_step,
+                            epoch=epoch + (batch_idx / len(train_dataloader)),
+                            loss=accumulation_metrics['loss'],
+                            grad_norm=opt_metrics.get('grad_norm', 0.0),
+                            learning_rate=opt_metrics.get('lr', self.config.learning_rate),
+                            batch_tokens=accumulation_metrics['tokens']
+                        )
+                        
+                        # Check for early stopping every 100 steps
+                        if self.global_step % 500 == 0:
+                            status = self.chinchilla_scaler.get_status_report()
+                            print(f"\n{'='*60}")
+                            print(f"📊 CHINCHILLA STATUS - Step {self.global_step}")
+                            print(f"{'='*60}")
+                            print(f"  Current epochs: {status['chinchilla']['current_optimal_epochs']}")
+                            print(f"  Token progress: {status['chinchilla']['progress']:.1f}%")
+                            print(f"  Convergence: {status['training']['convergence_score']:.2%}")
+                            print(f"  Training phase: {status['training']['training_phase']}")
+                            print(f"{'='*60}\n")
 
-                log_frequency = getattr(self.config, 'log_every_n_steps', 50)
-                time_since_last_log = time.time() - last_log_time
+                        # Check for early stopping every 100 steps
+                        if self.global_step % 100 == 0:
+                            should_stop, reason = self.chinchilla_scaler.should_stop_early()
+                            if should_stop:
+                                print(f"\n🛑 CHINCHILLA EARLY STOPPING: {reason}")
+                                self.should_stop = True
+                                break
 
-                should_log = (
-                    self.global_step % log_frequency == 0 or
-                    time_since_last_log > 600
-                )
+                    step_time = time.time() - step_start_time
+                    tokens_per_sec = accumulation_metrics['tokens'] / step_time if step_time > 0 else 0
 
-                if should_log:
-                    self._log_training_step(
-                        epoch, batch_idx, len(train_dataloader),
-                        accumulation_metrics, opt_metrics, tokens_per_sec
+                    log_frequency = getattr(self.config, 'log_every_n_steps', 50)
+                    time_since_last_log = time.time() - last_log_time
+
+                    should_log = (
+                        self.global_step % log_frequency == 0 or
+                        time_since_last_log > 600
                     )
-                    last_log_time = time.time()
 
-                if self.global_step % 100 == 0:
-                    self._log_memory_usage(f"Step {self.global_step}")
+                    if should_log:
+                        self._log_training_step(
+                            epoch, batch_idx, len(train_dataloader),
+                            accumulation_metrics, opt_metrics, tokens_per_sec
+                        )
+                        last_log_time = time.time()
 
-                if self.quantization_manager.is_quantized and self.global_step % 100 == 0:
-                    self._log_quantization_diagnostics()
+                    if self.global_step % 100 == 0:
+                        self._log_memory_usage(f"Step {self.global_step}")
 
-                accumulation_metrics = {'loss': 0.0, 'raw_loss': 0.0, 'tokens': 0, 'accuracy': 0.0}
+                    if self.quantization_manager.is_quantized and self.global_step % 100 == 0:
+                        self._log_quantization_diagnostics()
+
+                    accumulation_metrics = {'loss': 0.0, 'raw_loss': 0.0, 'tokens': 0, 'accuracy': 0.0}
 
         epoch_time = time.time() - epoch_start_time
 
-        # Calculate averages AND best metrics
         if epoch_metrics['num_batches'] > 0:
             avg_loss = epoch_metrics['total_loss'] / epoch_metrics['num_batches']
             avg_raw_loss = epoch_metrics['total_raw_loss'] / epoch_metrics['num_batches']
@@ -2858,13 +2885,11 @@ class EnhancedConversationTrainer:
             avg_grad_norm = epoch_metrics['grad_norm_sum'] / epoch_metrics['num_batches']
             avg_tokens_per_sec = epoch_metrics['total_tokens'] / epoch_time
 
-            # 🆕 CHANGED: Use best metrics instead of averages for display
             best_loss = epoch_metrics['best_loss']
             best_raw_loss = epoch_metrics['best_raw_loss']
             best_accuracy = epoch_metrics['best_accuracy']
             best_step = epoch_metrics['best_step']
 
-            # Calculate perplexity from best raw loss
             clamped_best_loss = min(best_raw_loss, 15.0)
             best_perplexity = math.exp(clamped_best_loss)
         else:
@@ -2874,7 +2899,6 @@ class EnhancedConversationTrainer:
             best_step = 0
             best_perplexity = float('inf')
         
-        # 🆕 CHANGED: Display best metrics instead of averages
         epoch_summary = (f"Epoch {epoch+1} completed in {epoch_time:.2f}s | "
                         f"Best Loss: {best_loss:.6f} (step {best_step}) | "
                         f"Best PPL: {best_perplexity:.2f} | "
@@ -2886,19 +2910,15 @@ class EnhancedConversationTrainer:
             epoch_summary += f" | Quantization: {self.quantization_manager.quantization_info['bits']}-bit"
 
         print(epoch_summary)
-
-        # Also print comparison with averages for context
         print(f"  (Avg Loss: {avg_loss:.6f}, Avg Accuracy: {avg_accuracy:.1%})")
 
-        # 🆕 CHANGED: Return best metrics instead of averages
         return {
-            'avg_loss': best_loss,  # Renamed but using best value
-            'avg_raw_loss': best_raw_loss,  # Renamed but using best value
-            'avg_accuracy': best_accuracy,  # Renamed but using best value
-            'avg_grad_norm': avg_grad_norm,  # Keep average for grad norm
+            'avg_loss': best_loss,
+            'avg_raw_loss': best_raw_loss,
+            'avg_accuracy': best_accuracy,
+            'avg_grad_norm': avg_grad_norm,
             'epoch_time': epoch_time,
             'throughput': avg_tokens_per_sec,
-            # 🆕 NEW: Also return actual averages for reference
             'actual_avg_loss': avg_loss,
             'actual_avg_accuracy': avg_accuracy,
             'best_step': best_step,
@@ -3037,7 +3057,6 @@ class EnhancedConversationTrainer:
         if not self.use_deepspeed:
             gradient_accumulation_steps = getattr(self.config, 'gradient_accumulation_steps', 1)
             total_steps = len(train_dataloader) * self.config.num_epochs // gradient_accumulation_steps
-            # REMOVED: total_steps = 200  # Don't override!
 
             print(f"\n{'='*80}")
             print(f"SCHEDULER SETUP CALCULATION")
@@ -3070,6 +3089,23 @@ class EnhancedConversationTrainer:
                 print(f"{'='*60}")
                 
                 epoch_metrics = self.train_epoch(train_dataloader, epoch)
+                
+                # 🆕 CHECK FOR EARLY STOPPING RIGHT AFTER train_epoch()
+                if self.should_stop:
+                    print(f"\n{'='*80}")
+                    print(f"🛑 TRAINING STOPPED EARLY")
+                    print(f"{'='*80}")
+                    if hasattr(self, 'chinchilla_scaler') and self.chinchilla_scaler:
+                        status = self.chinchilla_scaler.get_status_report()
+                        early_stop_info = status.get('early_stopping', {})
+                        print(f"Reason: {early_stop_info.get('reason', 'Unknown')}")
+                        print(f"Stopped at epoch {epoch + 1}/{self.config.num_epochs}")
+                        print(f"Convergence score: {status['training']['convergence_score']:.2%}")
+                        print(f"Token coverage: {status['chinchilla']['progress']:.1f}%")
+                    else:
+                        print(f"Stopped at epoch {epoch + 1}/{self.config.num_epochs}")
+                    print(f"{'='*80}\n")
+                    break
                 
                 if eval_dataset is not None:
                     print("Running evaluation...")
@@ -3158,8 +3194,8 @@ class EnhancedConversationTrainer:
             final_precision_info = self.precision_manager.get_precision_info()
             print(f"\nFinal Precision Summary:")
             print(f"  Training: {final_precision_info['training']['precision']}")
-            print(f"  Inference: {final_precision_info['inference']['precision']}")
-    
+            print(f"  Inference: {final_precision_info['inference']['precision']}")    
+            
     def _save_deepspeed_checkpoint(self, epoch: int, final: bool = False) -> Optional[str]:
         """Save DeepSpeed checkpoint with quantization and precision state."""
         try:

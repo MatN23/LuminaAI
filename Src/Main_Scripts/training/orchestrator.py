@@ -910,49 +910,92 @@ class AdaptiveTrainingOrchestrator:
     def _execute_adaptive_decision(self, decision):
         """Execute an adaptive decision."""
         self.adaptive_decisions.append(decision)
-    
+
         logging.info(f"Executing adaptive decision: {decision.decision_type}")
         logging.info(f"Reasoning: {decision.reasoning}")
         logging.info(f"Confidence: {decision.confidence:.2f}")
 
         try:
-            # ✅ FIX: Actually handle learning_rate_adjustment!
+            # ✅ FIX: Don't handle learning_rate_adjustment here
+            # It's already handled by _apply_learning_rate_adjustment()
             if decision.decision_type == 'learning_rate_adjustment':
-                new_lr = decision.parameters['new_lr']
-                is_emergency = decision.parameters.get('emergency', False)
+                # Already executed by caller, just log it
+                logging.info(f"✅ LR adjustment tracked (handled by caller)")
 
+            elif decision.decision_type == 'corrective_lr_reduction':
+                # Handle corrective LR reductions
                 if hasattr(self.trainer, 'adjust_learning_rate'):
-                    grace_period = 20 if is_emergency else 10
-                    self.trainer.adjust_learning_rate(
-                        new_lr, 
-                        grace_period=grace_period,
-                        emergency=is_emergency
-                    )
-                    logging.info(f"✅ LR adjusted: {new_lr:.2e} (emergency: {is_emergency})")
-                else:
-                    logging.error("Trainer missing adjust_learning_rate method!")
+                    factor = decision.parameters.get('factor', 0.8)
+                    current_lr = getattr(self.trainer, 'current_lr', self.config.learning_rate)
+                    new_lr = current_lr * factor
+                    self.trainer.adjust_learning_rate(new_lr, grace_period=10, emergency=False)
+                    logging.info(f"✅ Corrective LR reduction applied: {new_lr:.2e}")
+
+            elif decision.decision_type == 'optimization_lr_increase':
+                # Handle optimization LR increases
+                if hasattr(self.trainer, 'adjust_learning_rate'):
+                    factor = decision.parameters.get('factor', 1.1)
+                    current_lr = getattr(self.trainer, 'current_lr', self.config.learning_rate)
+                    new_lr = current_lr * factor
+                    self.trainer.adjust_learning_rate(new_lr, grace_period=10, emergency=False)
+                    logging.info(f"✅ Optimization LR increase applied: {new_lr:.2e}")
 
             elif decision.decision_type == 'emergency_lr_reduction':
                 if hasattr(self.trainer, 'emergency_lr_reduction'):
                     self.trainer.emergency_lr_reduction(decision.parameters['factor'])
+                    logging.info(f"✅ Emergency LR reduction executed")
+                else:
+                    logging.warning("Trainer doesn't have emergency_lr_reduction method")
+
+            elif decision.decision_type == 'plateau_intervention':
+                action = decision.parameters.get('action', 'increase_lr_or_change_architecture')
+                if 'increase_lr' in action and hasattr(self.trainer, 'adjust_learning_rate'):
+                    current_lr = getattr(self.trainer, 'current_lr', self.config.learning_rate)
+                    new_lr = current_lr * 1.5
+                    self.trainer.adjust_learning_rate(new_lr, grace_period=15, emergency=False)
+                    logging.info(f"✅ Plateau intervention: LR increased to {new_lr:.2e}")
+
+            elif decision.decision_type == 'divergence_prevention':
+                if hasattr(self.trainer, 'emergency_lr_reduction'):
+                    factor = decision.parameters.get('factor', 0.5)
+                    self.trainer.emergency_lr_reduction(factor)
+                    logging.info(f"✅ Divergence prevention: Emergency LR reduction by {factor}x")
 
             elif decision.decision_type == 'checkpoint_rollback':
                 if hasattr(self.trainer, 'rollback_steps'):
-                    self.trainer.rollback_steps(decision.parameters['steps_back'])
+                    steps_back = decision.parameters.get('steps_back', 100)
+                    self.trainer.rollback_steps(steps_back)
+                    logging.info(f"✅ Rolled back {steps_back} steps")
+                else:
+                    logging.warning("Trainer doesn't have rollback_steps method")
 
             elif decision.decision_type == 'add_expert':
                 if hasattr(self.trainer, 'add_expert'):
-                    self.trainer.add_expert()
+                    layer_idx = decision.parameters.get('layer_idx', None)
+                    self.trainer.add_expert(layer_idx)
+                    logging.info(f"✅ Added expert to layer {layer_idx}")
+                else:
+                    logging.warning("Trainer doesn't have add_expert method")
 
             elif decision.decision_type == 'prune_expert':
                 if hasattr(self.trainer, 'prune_expert'):
-                    self.trainer.prune_expert(decision.parameters['expert_id'])
+                    layer_idx = decision.parameters.get('layer_idx', 0)
+                    expert_id = decision.parameters.get('expert_id', 0)
+                    self.trainer.prune_expert(layer_idx, expert_id)
+                    logging.info(f"✅ Pruned expert {expert_id} from layer {layer_idx}")
+                else:
+                    logging.warning("Trainer doesn't have prune_expert method")
 
-            logging.info(f"Successfully executed: {decision.decision_type}")
+            else:
+                logging.warning(f"Unknown decision type: {decision.decision_type}")
+
+            logging.info(f"Successfully processed: {decision.decision_type}")
 
         except Exception as e:
             logging.error(f"Failed to execute adaptive decision {decision.decision_type}: {e}")
-    
+            import traceback
+            logging.error(traceback.format_exc())
+        
     def initialize_training(self):
         """Initialize training with adaptive intelligence."""
         logging.info("Initializing adaptive training system...")
@@ -1147,6 +1190,35 @@ class AdaptiveTrainingOrchestrator:
             logging.info("="*80)
             logging.info("TRAINING LOOP COMPLETED")
             logging.info("="*80)
+
+            # ============================================================
+            # CHINCHILLA SCALER CHECK
+            # ============================================================
+            if hasattr(self.trainer, 'chinchilla_scaler') and self.trainer.chinchilla_scaler:
+                logging.info("\n" + "="*80)
+                logging.info("📊 CHINCHILLA SCALER FINAL REPORT")
+                logging.info("="*80)
+
+                scaler = self.trainer.chinchilla_scaler
+                scaler.print_status()
+
+                # Get final report
+                final_report = scaler.get_status_report()
+                logging.info(f"\nFinal Training Phase: {final_report['training']['training_phase']}")
+                logging.info(f"Convergence Score: {final_report['training']['convergence_score']:.2%}")
+                logging.info(f"Token Coverage: {final_report['chinchilla']['progress']:.1f}%")
+
+                # Check if early stopping was recommended
+                should_stop, reason = scaler.should_stop_early()
+                if should_stop:
+                    logging.info(f"\n⚠️  Early stopping was recommended: {reason}")
+
+                # Save scaler state
+                scaler_path = self.experiment_dir / "chinchilla_scaler_final_state.json"
+                scaler.save_state(str(scaler_path))
+                logging.info(f"\n✅ Scaler state saved: {scaler_path}")
+                logging.info("="*80 + "\n")
+            # ============================================================
 
             # Post-training analysis
             end_time = datetime.now()

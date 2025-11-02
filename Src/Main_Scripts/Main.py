@@ -52,6 +52,14 @@ except ImportError as e:
     UTILS_AVAILABLE = False
     print(f"⚠ Utils modules not available: {e}")
 
+try:
+    from training.chinchilla_scaler import EnhancedChinchillaScaler
+    CHINCHILLA_SCALER_AVAILABLE = True
+    print("✓ Chinchilla scaler available")
+except ImportError:
+    CHINCHILLA_SCALER_AVAILABLE = False
+    print("⚠ Chinchilla scaler not available")
+
 # DeepSpeed imports
 try:
     import deepspeed
@@ -1935,13 +1943,8 @@ def main():
 
         # Step 9.5: Auto-adjust epochs using Chinchilla scaling
         if getattr(config, 'auto_epoch_scaling', False):
-            print_banner("STEP 9.5: CHINCHILLA EPOCH SCALING")
-            print(f"Before Chinchilla: {config.num_epochs} epochs")
-            config = auto_adjust_epochs_chinchilla(config, model, train_dataset)
-            print(f"After Chinchilla: {config.num_epochs} epochs")
-        else:
-            print_banner("STEP 9.5: CHINCHILLA SCALING (DISABLED)")
-            print(f"auto_epoch_scaling is False - using manual epochs: {config.num_epochs}")
+            if not CHINCHILLA_SCALER_AVAILABLE:
+                print("⚠️ Chinchilla scaler not available, using basic scaling")
         
         # Step 10: Initialize training system
         print_banner("STEP 10: INITIALIZING TRAINING SYSTEM")
@@ -1991,6 +1994,14 @@ def main():
                 print("✅ Trainer verification passed")
                 print(f"✅ Trainer class: {orchestrator.trainer.__class__.__module__}.{trainer_type}")
                 print("="*80 + "\n")
+
+                if getattr(config, 'auto_epoch_scaling', False):
+                    print_banner("ENHANCED CHINCHILLA SCALER INTEGRATION")
+                    scaler = EnhancedChinchillaScaler(config, model, train_dataset)
+                    config.num_epochs = scaler.get_optimal_epochs()
+                    orchestrator.trainer.chinchilla_scaler = scaler
+                    print(f"✅ Chinchilla scaler attached to trainer")
+                    print("="*80 + "\n")
             except Exception as e:
                 print(f"\nERROR: Failed to initialize orchestrator: {e}")
                 import traceback
