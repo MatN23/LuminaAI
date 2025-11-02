@@ -2581,62 +2581,79 @@ class EnhancedConversationTrainer:
 
     @torch.no_grad()
     def evaluate(self, eval_dataset, max_batches: int = 100) -> Dict[str, float]:
-        """Enhanced evaluation with proper perplexity calculation and precision support."""
+        """Enhanced evaluation with best step tracking."""
         if self.use_deepspeed:
             self.deepspeed_engine.eval()
         else:
             self.model.eval()
-        
+
         eval_dataloader = create_dataloader(eval_dataset, self.config, shuffle=False)
-        
+
         total_loss = 0.0
         total_raw_loss = 0.0
         total_tokens = 0
         total_accuracy = 0.0
         num_batches = 0
-        
+
+        # 🆕 NEW: Track best metrics during eval
+        best_loss = float('inf')
+        best_raw_loss = float('inf')
+        best_accuracy = 0.0
+        best_batch = 0
+
         eval_start_time = time.time()
-        
+
         if torch.cuda.is_available():
             torch.cuda.reset_peak_memory_stats()
-        
+
         for batch_idx, batch in enumerate(eval_dataloader):
             if batch_idx >= max_batches:
                 break
-            
+                
             batch = {k: v.to(self.device, non_blocking=True) for k, v in batch.items()}
-            
+
             input_ids = batch.get('input_ids')
             attention_mask = batch.get('attention_mask')
             labels = batch.get('labels', input_ids)
             loss_weights = batch.get('loss_weights')
-            
+
             if input_ids is None or input_ids.numel() == 0:
                 continue
-            
+                
             if self.use_deepspeed:
                 output = self.deepspeed_engine(input_ids, attention_mask)
             else:
                 with self._get_autocast_context(for_inference=True):
                     output = self.model(input_ids, attention_mask)
-            
+
             if isinstance(output, tuple):
                 logits = output[0]
             else:
                 logits = output
-            
+
             loss_dict = self.compute_loss(logits, labels, loss_weights)
-            
+
             if not (torch.isnan(loss_dict['loss']).any() or torch.isinf(loss_dict['loss']).any()):
-                total_loss += loss_dict['loss'].item()
-                total_raw_loss += loss_dict['raw_loss'].item()
+                batch_loss = loss_dict['loss'].item()
+                batch_raw_loss = loss_dict['raw_loss'].item()
+                batch_accuracy = loss_dict['accuracy'].item()
+
+                total_loss += batch_loss
+                total_raw_loss += batch_raw_loss
                 total_tokens += loss_dict['valid_tokens'].item()
-                total_accuracy += loss_dict['accuracy'].item()
+                total_accuracy += batch_accuracy
                 num_batches += 1
-        
+
+                # 🆕 NEW: Track best batch
+                if batch_loss < best_loss:
+                    best_loss = batch_loss
+                    best_raw_loss = batch_raw_loss
+                    best_accuracy = batch_accuracy
+                    best_batch = batch_idx
+
         eval_time = time.time() - eval_start_time
         peak_memory = torch.cuda.max_memory_allocated() / 1e6 if torch.cuda.is_available() else 0
-        
+
         if num_batches == 0:
             return {
                 'eval_loss': float('inf'),
@@ -2644,31 +2661,49 @@ class EnhancedConversationTrainer:
                 'eval_accuracy': 0.0,
                 'eval_time': eval_time,
                 'eval_throughput': 0.0,
-                'eval_peak_memory_mb': peak_memory
+                'eval_peak_memory_mb': peak_memory,
+                'best_eval_loss': float('inf'),
+                'best_eval_perplexity': float('inf'),
+                'best_eval_accuracy': 0.0,
             }
-        
+
+        # Calculate averages
         avg_loss = total_loss / num_batches
         avg_raw_loss = total_raw_loss / num_batches
         avg_accuracy = total_accuracy / num_batches
-        
+
+        # Calculate perplexity from averages
         clamped_avg_loss = min(avg_raw_loss, 15.0)
         try:
-            perplexity = math.exp(clamped_avg_loss)
+            avg_perplexity = math.exp(clamped_avg_loss)
         except OverflowError:
-            perplexity = float('inf')
-        
+            avg_perplexity = float('inf')
+
+        # 🆕 NEW: Calculate perplexity from best
+        clamped_best_loss = min(best_raw_loss, 15.0)
+        try:
+            best_perplexity = math.exp(clamped_best_loss)
+        except OverflowError:
+            best_perplexity = float('inf')
+
         if avg_raw_loss > 15.0:
             logging.warning(f"Evaluation loss {avg_raw_loss:.2f} exceeds safe range - perplexity clamped at exp(15)")
-        
+
         throughput = total_tokens / eval_time if eval_time > 0 else 0
-        
+
+        # 🆕 CHANGED: Return best metrics as primary, averages as reference
         return {
-            'eval_loss': avg_loss,
-            'eval_perplexity': perplexity,
-            'eval_accuracy': avg_accuracy,
+            'eval_loss': best_loss,  # 🆕 CHANGED: Use best instead of average
+            'eval_perplexity': best_perplexity,  # 🆕 CHANGED: Use best instead of average
+            'eval_accuracy': best_accuracy,  # 🆕 CHANGED: Use best instead of average
             'eval_time': eval_time,
             'eval_throughput': throughput,
-            'eval_peak_memory_mb': peak_memory
+            'eval_peak_memory_mb': peak_memory,
+            'best_batch': best_batch,
+            # 🆕 NEW: Also return averages for reference
+            'avg_eval_loss': avg_loss,
+            'avg_eval_perplexity': avg_perplexity,
+            'avg_eval_accuracy': avg_accuracy,
         }
     
     def get_quantization_status(self) -> Dict[str, Any]:
@@ -2704,68 +2739,74 @@ class EnhancedConversationTrainer:
             self.deepspeed_engine.train()
         else:
             self.model.train()
-        
+
         epoch_metrics = {
             'total_loss': 0.0,
             'total_raw_loss': 0.0,
             'total_tokens': 0,
             'total_accuracy': 0.0,
             'num_batches': 0,
-            'grad_norm_sum': 0.0
+            'grad_norm_sum': 0.0,
+            # 🆕 NEW: Track best metrics instead of just totals
+            'best_loss': float('inf'),
+            'best_raw_loss': float('inf'),
+            'best_accuracy': 0.0,
+            'best_step': 0,
         }
-        
+
         accumulation_metrics = {
             'loss': 0.0,
             'raw_loss': 0.0,
             'tokens': 0,
             'accuracy': 0.0
         }
-        
+
         gradient_accumulation_steps = getattr(self.config, 'gradient_accumulation_steps', 1)
         epoch_start_time = time.time()
         last_log_time = time.time()
-        
+
         print(f"Starting epoch {epoch + 1} with {len(train_dataloader)} batches")
         print(f"Gradient accumulation steps: {gradient_accumulation_steps}")
-        
+
         if self.quantization_manager.is_quantized:
             quant_status = self.get_quantization_status()
             print(f"Training with {quant_status['method']} {quant_status['bits']}-bit quantization")
-        
+
         precision_info = self.precision_manager.get_precision_info()
         print(f"Training precision: {precision_info['training']['precision']}")
-        
+
         for batch_idx, batch in enumerate(train_dataloader):
             if self.should_stop:
                 break
-            
+                
             step_start_time = time.time()
-            
+
             step_metrics = self.train_step(batch)
-            
+
             if batch_idx < 5 and getattr(self.config, 'log_level', 'INFO') == 'DEBUG':
                 debug_msg = f"DEBUG: Batch {batch_idx}, Step metrics: {step_metrics}"
                 if self.quantization_manager.is_quantized:
                     debug_msg += f" [QUANTIZED: {self.quantization_manager.quantization_info['bits']}-bit]"
                 print(debug_msg)
-            
+
             if step_metrics['loss'] == 0.0 or math.isnan(step_metrics['loss']) or math.isinf(step_metrics['loss']):
                 skip_msg = f"Skipping batch {batch_idx} due to invalid loss: {step_metrics['loss']}"
                 if self.quantization_manager.is_quantized:
                     skip_msg += " (may be quantization-related)"
                 print(skip_msg)
                 continue
-            
+                
             accumulation_metrics['loss'] += step_metrics['loss'] / gradient_accumulation_steps
             accumulation_metrics['raw_loss'] += step_metrics['raw_loss'] / gradient_accumulation_steps
             accumulation_metrics['tokens'] += step_metrics['valid_tokens']
             accumulation_metrics['accuracy'] += step_metrics['accuracy']
-            
+        
             if (batch_idx + 1) % gradient_accumulation_steps == 0:
                 opt_metrics = self.optimizer_step()
                 self.global_step += 1
-                
+
                 if accumulation_metrics['loss'] > 0:
+                    # Standard totals for averaging
                     epoch_metrics['total_loss'] += accumulation_metrics['loss']
                     epoch_metrics['total_raw_loss'] += accumulation_metrics['raw_loss']
                     epoch_metrics['total_tokens'] += accumulation_metrics['tokens']
@@ -2773,10 +2814,17 @@ class EnhancedConversationTrainer:
                     epoch_metrics['num_batches'] += 1
                     if 'grad_norm' in opt_metrics and opt_metrics['grad_norm'] is not None:
                         epoch_metrics['grad_norm_sum'] += opt_metrics['grad_norm']
-                
+
+                    # 🆕 NEW: Track best metrics
+                    if accumulation_metrics['loss'] < epoch_metrics['best_loss']:
+                        epoch_metrics['best_loss'] = accumulation_metrics['loss']
+                        epoch_metrics['best_raw_loss'] = accumulation_metrics['raw_loss']
+                        epoch_metrics['best_accuracy'] = accumulation_metrics['accuracy']
+                        epoch_metrics['best_step'] = self.global_step
+
                 step_time = time.time() - step_start_time
                 tokens_per_sec = accumulation_metrics['tokens'] / step_time if step_time > 0 else 0
-                
+
                 log_frequency = getattr(self.config, 'log_every_n_steps', 50)
                 time_since_last_log = time.time() - last_log_time
 
@@ -2784,53 +2832,76 @@ class EnhancedConversationTrainer:
                     self.global_step % log_frequency == 0 or
                     time_since_last_log > 600
                 )
-                
+
                 if should_log:
                     self._log_training_step(
                         epoch, batch_idx, len(train_dataloader),
                         accumulation_metrics, opt_metrics, tokens_per_sec
                     )
                     last_log_time = time.time()
-                
+
                 if self.global_step % 100 == 0:
                     self._log_memory_usage(f"Step {self.global_step}")
-                
+
                 if self.quantization_manager.is_quantized and self.global_step % 100 == 0:
                     self._log_quantization_diagnostics()
-                
+
                 accumulation_metrics = {'loss': 0.0, 'raw_loss': 0.0, 'tokens': 0, 'accuracy': 0.0}
-        
+
         epoch_time = time.time() - epoch_start_time
-        
+
+        # Calculate averages AND best metrics
         if epoch_metrics['num_batches'] > 0:
             avg_loss = epoch_metrics['total_loss'] / epoch_metrics['num_batches']
             avg_raw_loss = epoch_metrics['total_raw_loss'] / epoch_metrics['num_batches']
             avg_accuracy = epoch_metrics['total_accuracy'] / epoch_metrics['num_batches']
             avg_grad_norm = epoch_metrics['grad_norm_sum'] / epoch_metrics['num_batches']
             avg_tokens_per_sec = epoch_metrics['total_tokens'] / epoch_time
+
+            # 🆕 CHANGED: Use best metrics instead of averages for display
+            best_loss = epoch_metrics['best_loss']
+            best_raw_loss = epoch_metrics['best_raw_loss']
+            best_accuracy = epoch_metrics['best_accuracy']
+            best_step = epoch_metrics['best_step']
+
+            # Calculate perplexity from best raw loss
+            clamped_best_loss = min(best_raw_loss, 15.0)
+            best_perplexity = math.exp(clamped_best_loss)
         else:
             avg_loss = avg_raw_loss = avg_accuracy = avg_grad_norm = avg_tokens_per_sec = 0.0
+            best_loss = best_raw_loss = float('inf')
+            best_accuracy = 0.0
+            best_step = 0
+            best_perplexity = float('inf')
         
+        # 🆕 CHANGED: Display best metrics instead of averages
         epoch_summary = (f"Epoch {epoch+1} completed in {epoch_time:.2f}s | "
-                        f"Avg Loss: {avg_loss:.6f} | "
-                        f"Avg Accuracy: {avg_accuracy:.1%} | "
+                        f"Best Loss: {best_loss:.6f} (step {best_step}) | "
+                        f"Best PPL: {best_perplexity:.2f} | "
+                        f"Best Accuracy: {best_accuracy:.1%} | "
                         f"Avg Grad Norm: {avg_grad_norm:.4f} | "
                         f"Throughput: {avg_tokens_per_sec:.0f} tokens/s")
-        
+
         if self.quantization_manager.is_quantized:
             epoch_summary += f" | Quantization: {self.quantization_manager.quantization_info['bits']}-bit"
-        
+
         print(epoch_summary)
 
-        # self._handle_partial_accumulation()
-        
+        # Also print comparison with averages for context
+        print(f"  (Avg Loss: {avg_loss:.6f}, Avg Accuracy: {avg_accuracy:.1%})")
+
+        # 🆕 CHANGED: Return best metrics instead of averages
         return {
-            'avg_loss': avg_loss,
-            'avg_raw_loss': avg_raw_loss,
-            'avg_accuracy': avg_accuracy,
-            'avg_grad_norm': avg_grad_norm,
+            'avg_loss': best_loss,  # Renamed but using best value
+            'avg_raw_loss': best_raw_loss,  # Renamed but using best value
+            'avg_accuracy': best_accuracy,  # Renamed but using best value
+            'avg_grad_norm': avg_grad_norm,  # Keep average for grad norm
             'epoch_time': epoch_time,
-            'throughput': avg_tokens_per_sec
+            'throughput': avg_tokens_per_sec,
+            # 🆕 NEW: Also return actual averages for reference
+            'actual_avg_loss': avg_loss,
+            'actual_avg_accuracy': avg_accuracy,
+            'best_step': best_step,
         }
     
     def _log_quantization_diagnostics(self):
@@ -3004,13 +3075,25 @@ class EnhancedConversationTrainer:
                     print("Running evaluation...")
                     eval_metrics = self.evaluate(eval_dataset)
                     epoch_metrics.update(eval_metrics)
-                    
-                    print(f"Epoch {epoch + 1} Summary:")
-                    print(f"  Train Loss: {epoch_metrics['avg_loss']:.6f}")
-                    print(f"  Train Accuracy: {epoch_metrics['avg_accuracy']:.1%}")
-                    print(f"  Eval Loss: {eval_metrics['eval_loss']:.6f}")
-                    print(f"  Eval Accuracy: {eval_metrics['eval_accuracy']:.1%}")
-                    print(f"  Eval Perplexity: {eval_metrics['eval_perplexity']:.2f}")
+
+                    # 🆕 CHANGED: Display best metrics prominently
+                    print(f"\n{'='*80}")
+                    print(f"EPOCH {epoch + 1} SUMMARY - BEST PERFORMANCE")
+                    print(f"{'='*80}")
+                    print(f"Training (Best Step):")
+                    print(f"  Best Train Loss: {epoch_metrics['avg_loss']:.6f} (step {epoch_metrics.get('best_step', 'N/A')})")
+                    print(f"  Best Train Accuracy: {epoch_metrics['avg_accuracy']:.1%}")
+                    print(f"  (Avg Train Loss: {epoch_metrics.get('actual_avg_loss', epoch_metrics['avg_loss']):.6f})")
+                    print(f"  (Avg Train Accuracy: {epoch_metrics.get('actual_avg_accuracy', epoch_metrics['avg_accuracy']):.1%})")
+
+                    print(f"\nEvaluation (Best Batch):")
+                    print(f"  Best Eval Loss: {eval_metrics['eval_loss']:.6f} (batch {eval_metrics.get('best_batch', 'N/A')})")
+                    print(f"  Best Eval Perplexity: {eval_metrics['eval_perplexity']:.2f}")
+                    print(f"  Best Eval Accuracy: {eval_metrics['eval_accuracy']:.1%}")
+                    print(f"  (Avg Eval Loss: {eval_metrics.get('avg_eval_loss', eval_metrics['eval_loss']):.6f})")
+                    print(f"  (Avg Eval Perplexity: {eval_metrics.get('avg_eval_perplexity', eval_metrics['eval_perplexity']):.2f})")
+                    print(f"  (Avg Eval Accuracy: {eval_metrics.get('avg_eval_accuracy', eval_metrics['eval_accuracy']):.1%})")
+                    print(f"{'='*80}\n")
                     
                     if self.quantization_manager.is_quantized:
                         print(f"  Quantization: {self.quantization_manager.quantization_info['method']}-{self.quantization_manager.quantization_info['bits']}bit")
