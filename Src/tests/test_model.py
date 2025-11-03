@@ -1,6 +1,6 @@
 import pytest
 import torch
-from model import (
+from Main_Scripts.core.model import (
     RMSNorm, RotaryEmbedding, apply_rotary_pos_emb,
     SwiGLUExpert, MoEFFNLayer, DenseGroupedQueryAttention,
     DeepSeekTransformer, DeepSeekConfig

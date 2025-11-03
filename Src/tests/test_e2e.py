@@ -14,9 +14,9 @@ class TestEndToEnd:
     ):
         """Test minimal training run end-to-end."""
         try:
-            from model import DeepSeekTransformer, DeepSeekConfig
-            from trainer import EnhancedConversationTrainer
-            from dataset import FastConversationDataset, create_dataloader
+            from Main_Scripts.core.model import DeepSeekTransformer, DeepSeekConfig
+            from Main_Scripts.training.trainer import EnhancedConversationTrainer
+            from Main_Scripts.core.dataset import FastConversationDataset, create_dataloader
             
             # Create model
             model_config = DeepSeekConfig(

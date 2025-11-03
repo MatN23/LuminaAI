@@ -8,7 +8,7 @@ class TestTrainerInitialization:
     
     def test_trainer_creation(self, small_model, mock_tokenizer, mock_config, mock_logger):
         """Test trainer can be initialized."""
-        from trainer import EnhancedConversationTrainer
+        from Main_Scripts.training.trainer import EnhancedConversationTrainer
         
         trainer = EnhancedConversationTrainer(
             small_model, mock_tokenizer, mock_config, mock_logger
@@ -20,7 +20,7 @@ class TestTrainerInitialization:
     
     def test_precision_manager(self, small_model, mock_tokenizer, mock_config, mock_logger):
         """Test precision manager is initialized."""
-        from trainer import EnhancedConversationTrainer
+        from Main_Scripts.training.trainer import EnhancedConversationTrainer
         
         trainer = EnhancedConversationTrainer(
             small_model, mock_tokenizer, mock_config, mock_logger
@@ -35,7 +35,7 @@ class TestLossComputation:
     
     def test_compute_loss(self, small_model, mock_tokenizer, mock_config, mock_logger):
         """Test loss computation."""
-        from trainer import EnhancedConversationTrainer
+        from Main_Scripts.training.trainer import EnhancedConversationTrainer
         
         trainer = EnhancedConversationTrainer(
             small_model, mock_tokenizer, mock_config, mock_logger
@@ -59,7 +59,7 @@ class TestLossComputation:
     
     def test_loss_with_padding(self, small_model, mock_tokenizer, mock_config, mock_logger):
         """Test loss computation with padded tokens."""
-        from trainer import EnhancedConversationTrainer
+        from Main_Scripts.training.trainer import EnhancedConversationTrainer
         
         trainer = EnhancedConversationTrainer(
             small_model, mock_tokenizer, mock_config, mock_logger
@@ -85,8 +85,7 @@ class TestTrainingStep:
     
     def test_train_step(self, small_model, mock_tokenizer, mock_config, mock_logger):
         """Test single training step."""
-        from trainer import EnhancedConversationTrainer
-        
+        from Main_Scripts.training.trainer import EnhancedConversationTrainer        
         trainer = EnhancedConversationTrainer(
             small_model, mock_tokenizer, mock_config, mock_logger
         )
@@ -111,7 +110,7 @@ class TestAdaptiveFeatures:
     
     def test_adjust_learning_rate(self, small_model, mock_tokenizer, mock_config, mock_logger):
         """Test learning rate adjustment."""
-        from trainer import EnhancedConversationTrainer
+        from Main_Scripts.training.trainer import EnhancedConversationTrainer
         
         trainer = EnhancedConversationTrainer(
             small_model, mock_tokenizer, mock_config, mock_logger
@@ -126,7 +125,7 @@ class TestAdaptiveFeatures:
     
     def test_adjust_batch_size(self, small_model, mock_tokenizer, mock_config, mock_logger):
         """Test batch size adjustment."""
-        from trainer import EnhancedConversationTrainer
+        from Main_Scripts.training.trainer import EnhancedConversationTrainer
         
         trainer = EnhancedConversationTrainer(
             small_model, mock_tokenizer, mock_config, mock_logger

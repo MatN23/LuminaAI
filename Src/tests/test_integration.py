@@ -41,8 +41,8 @@ class TestDatasetTrainerIntegration:
     ):
         """Test training with real dataloader."""
         try:
-            from dataset import FastConversationDataset, create_dataloader
-            from trainer import EnhancedConversationTrainer
+            from Main_Scripts.coredataset import FastConversationDataset, create_dataloader
+            from Main_Scripts.training.trainer import EnhancedConversationTrainer
             
             dataset = FastConversationDataset(
                 sample_conversation_data,

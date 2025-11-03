@@ -9,7 +9,7 @@ class TestOrchestratorInitialization:
     def test_orchestrator_creation(self, mock_config):
         """Test orchestrator can be initialized."""
         try:
-            from orchestrator import AdaptiveTrainingOrchestrator
+            from Main_Scripts.training.orchestrator import AdaptiveTrainingOrchestrator
             
             orchestrator = AdaptiveTrainingOrchestrator(mock_config)
             
@@ -28,7 +28,7 @@ class TestMetaLearner:
     def test_meta_learner_creation(self):
         """Test meta learner can be created."""
         try:
-            from orchestrator import MetaLearningEngine
+            from Main_Scripts.training.orchestrator import MetaLearningEngine
             
             meta_learner = MetaLearningEngine()
             

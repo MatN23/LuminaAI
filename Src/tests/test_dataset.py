@@ -9,7 +9,7 @@ class TestConversationDataset:
     def test_dataset_loading(self, sample_conversation_data, mock_tokenizer, mock_config):
         """Test conversation dataset can be loaded."""
         try:
-            from dataset import FastConversationDataset
+            from Main_Scripts.core.dataset import FastConversationDataset
             
             dataset = FastConversationDataset(
                 sample_conversation_data,
@@ -31,7 +31,7 @@ class TestConversationDataset:
     def test_dataloader_creation(self, sample_conversation_data, mock_tokenizer, mock_config):
         """Test dataloader can be created."""
         try:
-            from dataset import FastConversationDataset, create_dataloader
+            from Main_Scripts.core.dataset import FastConversationDataset
             
             dataset = FastConversationDataset(
                 sample_conversation_data,
@@ -58,7 +58,7 @@ class TestBaseTrainingDataset:
     def test_base_dataset_loading(self, sample_base_training_data, mock_tokenizer, mock_config):
         """Test base training dataset can be loaded."""
         try:
-            from dataset import FastBaseTrainingDataset
+            from Main_Scripts.core.dataset import FastConversationDataset
             
             dataset = FastBaseTrainingDataset(
                 sample_base_training_data,

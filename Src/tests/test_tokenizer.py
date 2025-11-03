@@ -8,7 +8,7 @@ class TestConversationTokenizer:
     def test_initialization(self):
         """Test tokenizer can be initialized."""
         try:
-            from tokenizer import ConversationTokenizer
+            from Main_Scripts.core.tokenizer import ConversationTokenizer
             
             tokenizer = ConversationTokenizer(model_name="gpt2")
             
