@@ -1,0 +1,76 @@
+import pytest
+import torch
+
+
+class TestConversationDataset:
+    """Test conversation dataset."""
+    
+    @pytest.mark.skipif(True, reason="Requires HuggingFace datasets")
+    def test_dataset_loading(self, sample_conversation_data, mock_tokenizer, mock_config):
+        """Test conversation dataset can be loaded."""
+        try:
+            from dataset import FastConversationDataset
+            
+            dataset = FastConversationDataset(
+                sample_conversation_data,
+                mock_tokenizer,
+                mock_config
+            )
+            
+            assert len(dataset) > 0
+            
+            sample = dataset[0]
+            assert 'input_ids' in sample
+            assert 'labels' in sample
+            assert 'attention_mask' in sample
+            
+        except ImportError:
+            pytest.skip("Dataset module not available")
+    
+    @pytest.mark.skipif(True, reason="Requires HuggingFace datasets")
+    def test_dataloader_creation(self, sample_conversation_data, mock_tokenizer, mock_config):
+        """Test dataloader can be created."""
+        try:
+            from dataset import FastConversationDataset, create_dataloader
+            
+            dataset = FastConversationDataset(
+                sample_conversation_data,
+                mock_tokenizer,
+                mock_config
+            )
+            
+            dataloader = create_dataloader(dataset, mock_config, shuffle=True)
+            
+            assert len(dataloader) > 0
+            
+            batch = next(iter(dataloader))
+            assert 'input_ids' in batch
+            assert batch['input_ids'].shape[0] <= mock_config.batch_size
+            
+        except ImportError:
+            pytest.skip("Dataset module not available")
+
+
+class TestBaseTrainingDataset:
+    """Test base training dataset."""
+    
+    @pytest.mark.skipif(True, reason="Requires HuggingFace datasets")
+    def test_base_dataset_loading(self, sample_base_training_data, mock_tokenizer, mock_config):
+        """Test base training dataset can be loaded."""
+        try:
+            from dataset import FastBaseTrainingDataset
+            
+            dataset = FastBaseTrainingDataset(
+                sample_base_training_data,
+                mock_tokenizer,
+                mock_config
+            )
+            
+            assert len(dataset) > 0
+            
+            sample = dataset[0]
+            assert 'input_ids' in sample
+            assert 'labels' in sample
+            
+        except ImportError:
+            pytest.skip("Dataset module not available")
