@@ -1641,6 +1641,24 @@ def main():
         'auto_epoch_scaling': True,      # Enable/disable auto-scaling
         'min_auto_epochs': 1,            # Minimum epochs (safety)
         'max_auto_epochs': 50,           # Maximum epochs (safety)
+
+        # 🆕 ADD THESE REQUIRED PARAMETERS:
+        'chinchilla_multiplier': 20,     # Tokens per parameter (20 is standard)
+
+        # Enhanced feature toggles
+        'enable_loss_landscape': True,
+        'enable_compute_efficiency': True, 
+        'enable_adaptive_curriculum': True,
+        'enable_early_stopping': True,
+
+        # Threshold parameters
+        'plateau_patience': 5,           # Epochs to wait before plateau detection
+        'efficiency_decline_threshold': 0.3,  # When to flag efficiency drops
+        'convergence_threshold': 0.85,   # When to consider model converged
+
+        # Optional advanced features
+        'enable_memory_aware_scaling': False,
+        'quality_aware_adjustment': False,
     }
     
     # =================================================
