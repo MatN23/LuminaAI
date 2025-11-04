@@ -866,7 +866,7 @@ If you use LuminaAI in your research, please cite:
   title = {LuminaAI: Advanced Transformer Training with Adaptive Intelligence},
   author = {MatN23},
   year = {2025},
-  url = {https://github.com/yourusername/luminaai},
+  url = {https://github.com/matn23/luminaai},
   note = {AI-driven training optimization with MoE, MoD, and Chinchilla scaling}
 }
 ```
@@ -876,12 +876,6 @@ If you use LuminaAI in your research, please cite:
 ## License
 
 This project is licensed under a Custom License. See [LICENSE](LICENSE) file for details.
-
----
-
-## Contributing
-
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ---
 
@@ -902,8 +896,6 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for gui
 - **Documentation**: [docs/](docs/)
 - **Adaptive Training Guide**: [docs/adaptive_training.md](docs/adaptive_training.md)
 - **MoE/MoD Tutorial**: [docs/sparse_architectures.md](docs/sparse_architectures.md)
-- **Issues**: [issues/](issues/)
-- **Discussions**: [discussions/](discussions/)
 
 ---
 
