@@ -1657,8 +1657,8 @@ def main():
         'convergence_threshold': 0.85,   # When to consider model converged
 
         # Optional advanced features
-        'enable_memory_aware_scaling': False,
-        'quality_aware_adjustment': False,
+        'enable_memory_aware_scaling': True,
+        'quality_aware_adjustment': True,
     }
     
     # =================================================
