@@ -2,260 +2,40 @@
 
 <div align="center">
 
-**Next-Generation Transformer Training with AI-Driven Adaptive Intelligence**
+**Production-Ready Transformer Training with Autonomous Optimization**
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg)](https://pytorch.org/)
 [![License](https://img.shields.io/badge/License-Custom-green.svg)](LICENSE)
 
-*A production-ready system featuring autonomous training optimization, real-time intelligence, and state-of-the-art architecture support*
+*Autonomous training system with MoE/MoD architectures and intelligent optimization*
 
-[Features](#key-features) • [Architecture](#architecture) • [Quick Start](#quick-start) • [Advanced Features](#advanced-features)
+[Quick Start](#quick-start) • [Architecture](#architecture) • [Configuration](#configuration) • [Adaptive Training](#adaptive-training)
 
 </div>
 
 ---
 
-## Overview
+## What is LuminaAI?
 
-LuminaAI is a comprehensive deep learning training system that combines cutting-edge transformer architectures with **autonomous AI-driven training optimization**. At its core is the **Adaptive Training Orchestrator** - an intelligent system that continuously monitors, analyzes, and optimizes training in real-time, making hundreds of micro-decisions to ensure optimal convergence and resource utilization.
+LuminaAI is a production-ready deep learning training framework that combines modern transformer architectures with autonomous optimization. Think of it as your training co-pilot that makes intelligent decisions in real-time.
 
-The system supports both traditional dense architectures and advanced sparse architectures including **Mixture-of-Experts (MoE)** and **Mixture-of-Depths (MoD)**, with full support for **hybrid architectures** that combine both techniques.
+**Core Philosophy:**
+- **Autonomous**: The system optimizes itself during training (learning rates, batch sizes, architecture)
+- **Production-Ready**: Comprehensive error handling, checkpointing, and recovery mechanisms
+- **Flexible**: Supports dense models, MoE, MoD, and hybrid architectures
+- **Observable**: Extensive metrics and real-time monitoring
 
-### Why LuminaAI?
-
-- **Autonomous Intelligence**: Self-optimizing training with AI-driven decision making
-- **Production-Ready**: Comprehensive error handling, checkpointing, and monitoring
-- **Efficient**: Advanced optimizations with minimal memory overhead
-- **Flexible**: Support for multiple training paradigms (base, fine-tuning, hybrid)
-- **Observable**: Extensive metrics, profiling, and real-time health monitoring
-- **Scalable**: From single GPU to multi-node distributed training
-- **Advanced**: MoE, MoD, Flash Attention, GQA, and hybrid architectures
-- **Chinchilla Scaling**: Automatic epoch optimization based on compute-optimal principles
-
----
-
-## Key Features
-
-### Adaptive Training Orchestrator
-
-**The brain of LuminaAI** - an autonomous training intelligence system that revolutionizes the training process:
-
-#### Real-Time Adaptive Decision Making
-The orchestrator makes intelligent decisions during training:
-
-- **Automatic Hyperparameter Tuning**: Adjusts learning rate, batch size, and regularization on-the-fly
-- **Architecture Evolution**: Dynamically adds/removes MoE experts based on utilization
-- **Emergency Recovery**: Detects and recovers from training instabilities automatically
-- **Resource Optimization**: Balances compute, memory, and throughput in real-time
-- **Checkpoint Rollback**: Time-travel to previous checkpoints when issues detected
-
-#### Enhanced Chinchilla Scaler
-
-**Automatic Epoch Optimization** - No more guessing optimal training duration:
-
-- **Compute-Optimal Training**: Automatically calculates optimal epochs based on model size and dataset
-- **Multi-Signal Convergence Detection**: 
-  - Loss landscape analysis (plateau detection, divergence monitoring)
-  - Compute efficiency tracking (loss reduction per FLOP)
-  - Gradient variance monitoring
-  - Convergence score calculation
-- **Adaptive Early Stopping**: Stops training when:
-  - Model converges (>85% convergence score)
-  - Compute efficiency collapses (>30% decline)
-  - Training diverges or plateaus for extended periods
-- **Real-Time Recommendations**: Dynamic epoch adjustment based on training progress
-- **Chinchilla Formula**: Follows N_opt ≈ 20 × P (20 tokens per parameter)
-
-**Example Output:**
-```
-ENHANCED CHINCHILLA SCALER INITIALIZED
-Model Parameters: 1.2B (1.200B)
-Dataset Tokens: 24.5B (24.500B)
-Chinchilla Optimal: 24.0B tokens
-Base optimal epochs: 5
-Token Budget Coverage: 102.1%
-
-CHINCHILLA STATUS - Step 5000
-Current epochs: 4 (adjusted from 5)
-Token progress: 83.4%
-Convergence: 87% (High)
-Training phase: convergence
-Compute efficiency: Stable
-```
-
-#### Advanced Analytics & Monitoring
-- **Anomaly Detection**: Identifies loss spikes, gradient explosions, and expert imbalance
-- **Health Scoring**: Continuous assessment of training health with predictive alerts
-- **Performance Profiling**: Layer-by-layer analysis of bottlenecks
-- **Convergence Analysis**: Real-time loss dynamics and plateau detection
-
-#### 18 New Adaptive Methods
-
-**MoE Architecture (3 methods):**
-- `add_expert()` - Dynamically add experts mid-training
-- `prune_expert()` - Remove underutilized experts
-- `_initialize_new_expert()` - Smart knowledge distillation
-
-**MoE Routing (4 methods):**
-- `adjust_capacity_factor()` - Change token routing capacity
-- `adjust_routing_temperature()` - Adjust routing concentration
-- `enable_expert_dropout()` - Prevent expert collapse
-- `get_expert_statistics()` - Comprehensive usage metrics
-
-**MoD Routing (2 methods):**
-- `adjust_mod_capacity()` - Change compute ratio
-- `get_mod_statistics()` - Efficiency metrics
-
-**Batch Size Adaptation (2 methods):**
-- `adjust_batch_size()` - Dynamic batch size changes
-- `_recreate_dataloader()` - Rebuild with new settings
-
-**Orchestrator Communication (3 methods):**
-- `get_current_metrics()` - Real-time training state
-- `_extract_moe_routing_stats()` - Expert utilization
-- `_calculate_throughput()` - Tokens/second measurement
-
-**Emergency Recovery (2 methods):**
-- `emergency_lr_reduction()` - 10x LR cut for gradient explosion
-- `rollback_steps()` - Checkpoint-based time travel
-
-**Advanced Optimizer (2 methods):**
-- `adjust_weight_decay()` - Dynamic regularization
-- `_update_optimizer_param_groups()` - Live optimizer updates
-
----
-
-### Architecture Capabilities
-
-#### Mixture of Experts (MoE)
-- Sparse activation for massive parameter efficiency
-- 8-64 expert configurations with top-k routing
-- Advanced load balancing to prevent expert collapse
-- 40-60% less active parameters for same capacity
-- Flexible MoE patterns: all layers, interleaved, sandwich
-- **Adaptive expert management**: Add/remove experts during training
-
-#### Mixture of Depths (MoD)
-- Dynamic token-level compute allocation
-- Learn which tokens need full computation vs skip connections
-- 30-50% FLOPs reduction with minimal quality loss
-- Adaptive capacity factors for different use cases
-- **Real-time capacity adjustment** based on training phase
-
-#### Hybrid MoE + MoD
-- **Combine MoE and MoD in the same model**
-- MoE layers for expert routing on complex layers
-- MoD routing on dense layers for token efficiency
-- Maximum parameter AND compute efficiency
-
-#### Dense Models with Advanced Features
-- Grouped Query Attention (GQA) for efficient KV caching
-- Rotary Position Embeddings (RoPE) for better length generalization
-- SwiGLU activation for improved performance
-- RMS Normalization for training stability
-
----
-
-### Training & Optimization
-
-#### Multi-Device Support
-- **NVIDIA CUDA**: Full feature support with DeepSpeed integration
-- **Apple Silicon (MPS)**: Native M1/M2/M3/M4 support with automatic optimizations
-- **CPU**: Fallback for development and debugging
-
-#### Comprehensive Precision Support
-
-**Floating Point Precisions:**
-- `fp32` - Standard training, maximum stability
-- `fp16` - Mixed precision for memory efficiency (CUDA)
-- `bf16` - Best for modern GPUs (Ampere+), FP32 range with FP16 memory
-- `tf32` - Automatic speedup on Ampere+ GPUs
-- `fp8_e4m3` / `fp8_e5m2` - Cutting-edge H100+ GPUs (experimental)
-
-**Integer Precisions:**
-- `int8` - Quantized inference with BitsAndBytes
-- `int4` - Maximum memory savings with GPTQ/AWQ
-- `int2` - Experimental ultra-low memory
-
-**Mixed Precision Modes:**
-- `mixed_fp16` - FP16 compute with FP32 accumulation
-- `mixed_bf16` - BF16 compute with FP32 accumulation
-- `mixed_fp8` - FP8 compute for H100+ (experimental)
-
-#### Quantization Support
-
-**Methods Available:**
-- **BitsAndBytes (bnb)**: 4-bit and 8-bit quantization
-- **AutoGPTQ**: Advanced 4-bit quantization
-- **Optimum Quanto**: Flexible quantization framework
-
-**Configuration:**
-```python
-# 8-bit quantization
-config.quantization_method = 'bnb'
-config.quantization_bits = 8
-
-# 4-bit quantization
-config.quantization_method = 'bnb'
-config.quantization_bits = 4
-```
-
-#### DeepSpeed Integration
-- ZeRO optimization stages 1-3 for memory efficiency
-- CPU/NVMe offloading for training massive models
-- Gradient compression for multi-GPU communication
-- Automatic mixed precision training (FP16/BF16)
-- **Adaptive ZeRO stage selection** based on available memory
-- **Optimized MoE configuration** with expert parallelism
-
-#### Advanced Training Features
-- **Adaptive gradient checkpointing** for optimal memory/speed tradeoff
-- **Dynamic learning rate scheduling** with anomaly-aware adjustments
-- **Automatic batch size tuning** with OOM recovery
-- **Smart early stopping** with patience configuration
-- **Continuous checkpointing** with best model tracking and rollback support
-
----
-
-### Data Processing
-
-#### Multi-Dataset Support
-- **Base/Pre-training**: Raw text (The Pile, C4, etc.) - supports `.txt` and `.jsonl`
-- **Fine-tuning**: Conversational data (OASST, custom) - `.jsonl` only
-- **Multi-file support**: Combine multiple datasets automatically
-- **Streaming support**: For datasets >10GB
-
-#### Training Modes
-- **Base Only**: Pre-training on raw text
-- **Fine-tuning Only**: Instruction tuning on conversations
-- **Hybrid**: Sequential (base → fine-tuning)
-- **Interleaved**: Mixed base and fine-tuning with adaptive ratios
-
-#### Smart Data Loading
-- Automatic format detection (JSONL, TXT)
-- Chunking for efficient base training
-- Conversation validation and preprocessing
-- Configurable data caching
-- Dynamic batching and prefetching
-- **Adaptive data sampling** based on training phase
+**Key Capabilities:**
+- **Adaptive Training Orchestrator**: AI-driven training optimization that adjusts hyperparameters on-the-fly
+- **Chinchilla Scaling**: Automatic epoch calculation based on compute-optimal principles
+- **Sparse Architectures**: MoE (Mixture of Experts) and MoD (Mixture of Depths) with dynamic management
+- **Emergency Recovery**: Automatic detection and recovery from training instabilities
+- **Multi-Device**: Full support for CUDA, Apple Silicon (MPS), and CPU
 
 ---
 
 ## Quick Start
-
-### Prerequisites
-
-```bash
-# System Requirements
-Python 3.8+
-PyTorch 2.0+
-CUDA 11.7+ (for GPU) or MPS (Apple Silicon)
-
-# Storage
-- 10GB+ free disk space for checkpoints
-- 50GB+ recommended for large models
-```
 
 ### Installation
 
@@ -264,384 +44,512 @@ CUDA 11.7+ (for GPU) or MPS (Apple Silicon)
 git clone https://github.com/yourusername/luminaai.git
 cd luminaai
 
-# Install dependencies
+# Install PyTorch (CUDA)
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+
+# Install dependencies
 pip install -r requirements.txt
 
-# Optional: Install DeepSpeed (not supported on MPS)
+# Optional: DeepSpeed for distributed training
 pip install deepspeed
 
-# Optional: Install Flash Attention
+# Optional: Flash Attention for efficiency
 pip install flash-attn --no-build-isolation
 ```
 
-### Basic Training Example
+### Minimal Training Example
 
 ```python
-# Main.py - Basic configuration
+# Main.py - Basic fine-tuning setup
 
-# 1. Choose model size
-config_choice = 'b1'  # 1B active parameters
+# 1. Select model size
+config_choice = 'b1'  # 1B active parameters (8B total with MoE)
 
-# 2. Configure adaptive training
-use_adaptive_training = True  # Enable AI-driven optimization
+# 2. Enable adaptive training (recommended)
+use_adaptive_training = True
 
-# 3. Training parameters
+# 3. Configure training
 training_params = {
     'num_epochs': 3,
     'batch_size': 8,
     'learning_rate': 1e-4,
-    'precision': 'auto',  # Auto-detects best precision for hardware
+    'precision': 'auto',  # Automatically selects best precision
 }
 
-# 4. Specify data
+# 4. Specify dataset
 data_params = {
     'training_mode': 'finetuning_only',
-    'finetuning_paths': [
-        'data/train.jsonl',
-    ],
-    'finetuning_eval_paths': [
-        'data/eval.jsonl',
-    ],
+    'finetuning_paths': ['data/train.jsonl'],
+    'finetuning_eval_paths': ['data/eval.jsonl'],
 }
 
-# Run training - The Orchestrator handles the rest
-# python Main.py
+# Run: python Main.py
+# The orchestrator handles optimization automatically
 ```
 
-### Hardware-Specific Setup
+**What happens automatically:**
+- Detects your hardware (GPU/MPS/CPU) and optimizes accordingly
+- Monitors training health (loss spikes, gradient explosions)
+- Adjusts learning rate based on convergence patterns
+- Manages expert utilization for MoE models
+- Recovers from OOM errors by reducing batch size
+- Calculates optimal training duration via Chinchilla scaling
 
-#### NVIDIA GPU
+---
+
+## Architecture
+
+### Supported Model Types
+
+#### 1. Dense Transformers (Standard)
+Traditional transformer architecture with modern optimizations:
+- **Grouped Query Attention (GQA)**: Reduces KV cache memory
+- **Rotary Position Embeddings (RoPE)**: Better length generalization
+- **SwiGLU Activation**: Improved performance over standard FFN
+- **RMSNorm**: Training stability
 
 ```python
-# Optimal configuration for GPU
+# Dense model configuration
+config = Config(
+    hidden_size=1024,
+    num_layers=24,
+    num_heads=16,
+    num_kv_heads=4,  # GQA: 4 KV heads for 16 Q heads
+    use_moe=False,
+    use_mod=False,
+)
+```
+
+#### 2. Mixture of Experts (MoE)
+Sparse activation for parameter efficiency:
+- **8-64 experts** per layer with top-k routing
+- **40-60% fewer active parameters** while maintaining capacity
+- **Load balancing** to prevent expert collapse
+- **Dynamic expert management**: Add/remove experts during training
+
+```python
+# MoE configuration
+config = Config(
+    use_moe=True,
+    num_experts=8,
+    moe_top_k=2,  # Activate top-2 experts per token
+    capacity_factor=1.25,  # Token routing capacity
+    load_balancing_weight=0.01,  # Balance expert usage
+)
+```
+
+**How MoE Works:**
+1. Each token is routed to top-k experts (typically k=2)
+2. Only activated experts process the token (sparse computation)
+3. Load balancing ensures all experts are utilized
+4. Result: 8B total parameters, ~1B active per token
+
+#### 3. Mixture of Depths (MoD)
+Dynamic compute allocation per token:
+- **30-50% FLOPs reduction** with minimal quality loss
+- **Learn which tokens need full computation** vs skip connections
+- **Adaptive capacity**: Adjust compute ratio during training
+
+```python
+# MoD configuration
+config = Config(
+    use_mod=True,
+    mod_capacity_factor=0.5,  # 50% of tokens get full computation
+)
+```
+
+**How MoD Works:**
+1. Each layer learns to route tokens through full computation or skip
+2. Important tokens (rare words, complex syntax) get full processing
+3. Simple tokens (common words, filler) use residual skip
+4. Result: Faster training and inference with maintained quality
+
+#### 4. Hybrid (MoE + MoD)
+Combine both for maximum efficiency:
+- **MoE on complex layers** for expert routing
+- **MoD on dense layers** for token efficiency
+- **Parameter AND compute efficiency** simultaneously
+
+```python
+# Hybrid configuration
+config = Config(
+    use_moe=True,
+    num_experts=8,
+    moe_top_k=2,
+    use_mod=True,
+    mod_capacity_factor=0.5,
+)
+```
+
+### Pre-configured Model Sizes
+
+| Preset | Active Params | Total Params | Architecture | Recommended Hardware | Training Speed |
+|--------|--------------|--------------|--------------|---------------------|----------------|
+| `debug` | ~500K | ~4M | 8x MoE | Any | Fast (testing) |
+| `debug_200m` | ~200M | ~6B | 32x MoD | T4/MPS/CPU | Fast (arch testing) |
+| `b1` | ~1B | ~8B | 8x MoE | RTX 3090, M1 Max | ~1000 tok/s |
+| `b7` | ~7B | ~56B | 8x MoE | A100 40GB, M2 Ultra | ~500 tok/s |
+| `b14` | ~14B | ~112B | 8x MoE | A100 80GB | ~250 tok/s |
+| `b30` | ~30B | ~240B | 8x MoE | Multi-A100 | ~100 tok/s |
+| `b50` | ~50B | ~400B | 8x MoE | Multi-H100 | ~50 tok/s |
+
+**Note:** Throughput is approximate and depends on sequence length, batch size, and hardware.
+
+---
+
+## Configuration
+
+### Training Modes
+
+```python
+# 1. Base/Pre-training only (raw text)
+data_params = {
+    'training_mode': 'base_only',
+    'base_paths': ['data/raw_text.txt'],
+    'base_eval_paths': ['data/eval_text.txt'],
+}
+
+# 2. Fine-tuning only (conversations)
+data_params = {
+    'training_mode': 'finetuning_only',
+    'finetuning_paths': ['data/conversations.jsonl'],
+}
+
+# 3. Hybrid (base then fine-tuning)
+data_params = {
+    'training_mode': 'hybrid_sequential',
+    'base_paths': ['data/raw_text.txt'],
+    'finetuning_paths': ['data/conversations.jsonl'],
+}
+
+# 4. Interleaved (mixed batches)
+data_params = {
+    'training_mode': 'hybrid_interleaved',
+    'base_paths': ['data/raw_text.txt'],
+    'finetuning_paths': ['data/conversations.jsonl'],
+    'base_ratio': 0.7,  # 70% base, 30% fine-tuning
+}
+```
+
+### Precision Options
+
+```python
 training_params = {
-    'precision': 'mixed_bf16',  # BF16 for Ampere+, FP16 for older
-    'use_flash_attention': True,
-    'use_deepspeed': True,
-    'compile': True,
+    # Automatic (recommended)
+    'precision': 'auto',  # Selects best for hardware
+    
+    # Manual options
+    'precision': 'fp32',       # Full precision (slow, stable)
+    'precision': 'fp16',       # Half precision (2x faster, less stable)
+    'precision': 'bf16',       # Brain float (best for Ampere+)
+    'precision': 'mixed_fp16', # Mixed precision FP16
+    'precision': 'mixed_bf16', # Mixed precision BF16 (recommended)
+    
+    # Advanced (experimental)
+    'precision': 'fp8_e4m3',   # H100+ only
+    'precision': 'int8',       # Quantized (inference)
+}
+```
+
+**Precision Guide:**
+- **CUDA (Ampere+)**: Use `mixed_bf16` (A100, RTX 3090+)
+- **CUDA (Older)**: Use `mixed_fp16` (V100, RTX 2080)
+- **Apple Silicon**: Use `fp16` (auto-detected)
+- **CPU**: Use `fp32`
+
+### Hardware-Specific Optimization
+
+#### NVIDIA GPU (CUDA)
+
+```python
+training_params = {
+    'precision': 'mixed_bf16',
+    'use_flash_attention': True,    # 2-4x faster attention
+    'use_deepspeed': True,          # Multi-GPU optimization
+    'zero_stage': 2,                # Memory optimization
+    'compile': True,                # PyTorch 2.0 compilation
 }
 ```
 
 #### Apple Silicon (M1/M2/M3/M4)
 
 ```python
-# MPS-optimized configuration (auto-applied)
+# Auto-applied optimizations (no configuration needed)
+# System detects MPS and applies:
+# - precision='fp16'
+# - use_flash_attention=False
+# - use_deepspeed=False
+# - num_workers=0
+
+# Override if needed
 training_params = {
-    'precision': 'fp16',
-    'batch_size': 4,
-    'use_flash_attention': False,  # Not supported on MPS
-    'use_deepspeed': False,  # Not supported on MPS
-}
-# System automatically applies these optimizations
-```
-
----
-
-## Model Configurations
-
-### Available Presets
-
-LuminaAI includes pre-configured model sizes optimized for different hardware and use cases. Each configuration is designed with the Adaptive Orchestrator in mind:
-
-| Preset | Active Params | Total Params | Architecture | Use Case | Hardware | Adaptive Recommendations |
-|--------|--------------|--------------|--------------|----------|----------|--------------------------|
-| `debug` | ~500K | ~4M | 8x MoE | Development & Testing | Any | Minimal adaptive features, fast iteration |
-| `debug_200m` | ~200M | ~6B | 32x MoD | Architecture Testing | T4/MPS/CPU | Test adaptive routing, MoD optimization |
-| `b1` | ~1B | ~8B | 8x MoE | Small-Scale Experiments | RTX 3090, M1 Max, A10 | Full adaptive features, rapid convergence |
-| `b7` | ~7B | ~56B | 8x MoE | General Purpose | A100 40GB, M2 Ultra, RTX 4090 | Meta-learning enabled, expert management |
-| `b14` | ~14B | ~112B | 8x MoE | High Performance | A100 80GB, Multi-A10 | Advanced recovery, memory optimization |
-| `b30` | ~30B | ~240B | 8x MoE | Advanced Research | Multi-A100, H100 | Full orchestrator suite, multi-node adaptive |
-| `b50` | ~50B | ~400B | 8x MoE | Enterprise Scale | Multi-H100 | Distributed adaptive intelligence |
-| `b100` | ~100B | ~800B | 8x MoE | Cutting Edge | Large H100 Cluster | Cluster-wide optimization |
-| `b200` | ~200B | ~1.6T | 8x MoE | Frontier Research | Massive H100 Cluster | Advanced meta-learning across nodes |
-| `b300` | ~300B | ~2.4T | 8x MoE | Ultra-Scale | Ultra-Large Cluster | Global adaptive optimization |
-
-### Configuration Examples
-
-#### Small Efficient Model (1B) with Adaptive Training
-
-```python
-config_choice = 'b1'
-
-# Enable adaptive orchestrator for autonomous optimization
-use_adaptive_training = True
-
-training_params = {
-    'batch_size': 8,
-    'gradient_accumulation_steps': 4,
-    'use_moe': True,
-    'use_mod': False,  # Pure MoE
-}
-
-# The orchestrator will automatically:
-# - Adjust learning rate based on loss curves
-# - Monitor and balance expert utilization
-# - Detect and recover from anomalies
-# - Optimize batch size for your hardware
-```
-
-#### Medium Model with Hybrid Architecture (7B)
-
-```python
-config_choice = 'b7'
-
-use_adaptive_training = True  # Strongly recommended for complex architectures
-
-training_params = {
-    'batch_size': 16,
-    'gradient_accumulation_steps': 8,
-    'use_moe': True,
-    'use_mod': True,  # HYBRID MODE
-    'num_experts': 8,
-    'moe_top_k': 2,
-    'mod_capacity_factor': 0.5,
-}
-
-# Adaptive features for hybrid models:
-# - Dynamic expert addition/removal
-# - MoD capacity adjustment
-# - Routing temperature optimization
-# - Cross-architecture balancing
-```
-
-#### Large Model with Chinchilla Scaling (14B)
-
-```python
-config_choice = 'b14'
-
-use_adaptive_training = True  # Essential for stable large-scale training
-
-training_params = {
-    'use_deepspeed': True,
-    'zero_stage': 3,
-    'cpu_offload': True,
-    'gradient_checkpointing': True,
-    'precision': 'mixed_bf16',
-}
-
-# Chinchilla scaler parameters
-chinchilla_params = {
-    'auto_epoch_scaling': True,       # Enable automatic epoch optimization
-    'chinchilla_multiplier': 20,      # Tokens per parameter
-    'min_auto_epochs': 1,             # Safety minimum
-    'max_auto_epochs': 50,            # Safety maximum
-    'enable_loss_landscape': True,    # Loss plateau/divergence detection
-    'enable_compute_efficiency': True,# Track loss reduction per FLOP
-    'enable_early_stopping': True,    # Stop when converged
-}
-
-# The orchestrator provides:
-# - Automatic OOM recovery with batch size reduction
-# - Gradient explosion detection and emergency LR cuts
-# - Memory pressure monitoring with preemptive actions
-# - Convergence prediction and adaptive early stopping
-# - Optimal training duration based on model size
-```
-
-### Custom Configuration
-
-```python
-from config.config_manager import Config
-
-config = Config(
-    # Model architecture
-    hidden_size=1024,
-    num_layers=24,
-    num_heads=16,
-    num_kv_heads=4,  # GQA for efficient KV cache
-    seq_length=2048,
-    
-    # MoE settings
-    use_moe=True,
-    num_experts=8,
-    moe_top_k=2,
-    capacity_factor=1.25,
-    
-    # MoD settings (optional)
-    use_mod=True,
-    mod_capacity_factor=0.5,
-    
-    # Training
-    batch_size=4,
-    gradient_accumulation_steps=8,
-    learning_rate=1e-4,
-    num_epochs=3,
-)
-
-# Enable adaptive orchestrator
-use_adaptive_training = True
-```
-
----
-
-## Advanced Features
-
-### Chinchilla Scaler Configuration
-
-The Enhanced Chinchilla Scaler automatically determines optimal training duration:
-
-```python
-chinchilla_params = {
-    # Core settings
-    'auto_epoch_scaling': True,           # Enable auto-scaling
-    'chinchilla_multiplier': 20,          # Tokens per parameter (standard: 20)
-    'min_auto_epochs': 1,                 # Minimum epochs
-    'max_auto_epochs': 50,                # Maximum epochs
-    
-    # Advanced features
-    'enable_loss_landscape': True,        # Plateau/divergence detection
-    'enable_compute_efficiency': True,    # Track efficiency metrics
-    'enable_adaptive_curriculum': True,   # Dynamic difficulty adjustment
-    'enable_early_stopping': True,        # Stop when converged
-    
-    # Thresholds
-    'plateau_patience': 5,                # Epochs before plateau detection
-    'efficiency_decline_threshold': 0.3,  # Flag efficiency drops
-    'convergence_threshold': 0.85,        # Consider converged at 85%
+    'batch_size': 4,  # Start conservative
+    'compile': False,  # Can be unstable
 }
 ```
 
-**How it works:**
-1. Calculates optimal tokens: `N_opt = 20 × model_parameters`
-2. Determines base epochs: `epochs = N_opt / dataset_tokens`
-3. Monitors training dynamics in real-time
-4. Adjusts epochs based on:
-   - Convergence score
-   - Compute efficiency trends
-   - Loss landscape analysis
-5. Stops early when appropriate
+#### Multi-GPU Training
 
-### Adaptive Training Orchestrator
+```bash
+# DeepSpeed (recommended)
+deepspeed --num_gpus=4 Main.py
 
-The orchestrator provides AI-driven training optimization:
-
-```python
-# Enable in Main.py
-use_adaptive_training = True  # Recommended for all production training
-
-# What the orchestrator does automatically:
-# - Meta-learning from previous runs
-# - Real-time performance monitoring
-# - Automatic hyperparameter adjustments
-# - Anomaly detection and recovery
-# - Expert utilization optimization
-# - Memory pressure management
-# - Convergence prediction
-# - Emergency intervention
+# PyTorch DDP
+torchrun --nproc_per_node=4 Main.py
 ```
 
-#### Key Adaptive Features
-
-**1. Meta-Learning**
-```python
-# The orchestrator learns from your training history
-# and applies successful strategies automatically:
-#
-# - Optimal learning rate schedules
-# - Best batch size configurations
-# - Successful regularization patterns
-# - Convergence acceleration techniques
-```
-
-**2. Real-Time Decision Making**
-```python
-# During training, the orchestrator makes intelligent decisions:
-#
-# IF loss plateaus -> Increase LR or add expert
-# IF gradients explode -> Emergency LR reduction
-# IF expert imbalance -> Adjust routing parameters
-# IF memory pressure -> Reduce batch size
-# IF convergence predicted -> Optimize for final phase
-```
-
-**3. Advanced Recovery**
-```python
-# Automatic recovery from common training issues:
-#
-# - OOM errors: Automatic batch size reduction
-# - Gradient explosion: Emergency LR cuts
-# - Loss spikes: Checkpoint rollback
-# - Expert collapse: Dynamic expert management
-# - Convergence stalls: Adaptive interventions
-```
-
-### 18 New Adaptive Methods
-
-The enhanced trainer provides fine-grained control:
-
-```python
-# MoE Architecture (3 methods)
-trainer.add_expert(layer_idx=5)           # Add expert mid-training
-trainer.prune_expert(layer_idx=0, expert_idx=3)  # Remove underutilized expert
-trainer._initialize_new_expert(new_expert, existing_experts)  # Smart initialization
-
-# MoE Routing (4 methods)
-trainer.adjust_capacity_factor(2.0)        # Change token capacity
-trainer.adjust_routing_temperature(1.5)    # Adjust routing concentration
-trainer.enable_expert_dropout(0.1)         # Prevent expert collapse
-stats = trainer.get_expert_statistics()    # Comprehensive metrics
-
-# MoD Routing (2 methods)
-trainer.adjust_mod_capacity(0.7)           # Change compute ratio
-stats = trainer.get_mod_statistics()       # Efficiency metrics
-
-# Batch Size Adaptation (2 methods)
-trainer.adjust_batch_size(4)               # Dynamic batch size
-trainer._recreate_dataloader(dataset)      # Rebuild dataloader
-
-# Orchestrator Communication (3 methods) - CRITICAL
-metrics = trainer.get_current_metrics()    # Real-time training state
-routing = trainer._extract_moe_routing_stats()  # Expert utilization
-throughput = trainer._calculate_throughput()    # Tokens/second
-
-# Emergency Recovery (2 methods)
-trainer.emergency_lr_reduction(10.0)       # 10x LR cut
-trainer.rollback_steps(100)                # Time-travel to previous state
-
-# Advanced Optimizer (2 methods)
-trainer.adjust_weight_decay(0.05)          # Dynamic regularization
-trainer._update_optimizer_param_groups('lr', 1e-5)  # Live updates
-```
-
-### Quantization Support
-
-Train with reduced precision for memory efficiency:
+### Quantization
 
 ```python
 quantization_params = {
     'quantization_method': 'bnb',  # BitsAndBytes
-    'quantization_bits': 8,  # 4 or 8 bit
+    'quantization_bits': 8,        # 4 or 8
 }
 
-# INT8 inference precision for faster evaluation
+# Separate training/inference precision
 training_params = {
-    'precision': 'mixed_bf16',  # Training
-    'inference_precision': 'int8',  # Inference
+    'precision': 'mixed_bf16',      # Training
+    'inference_precision': 'int8',  # Evaluation
 }
 ```
 
-### Gradient Checkpointing
+---
 
-Trade computation for memory:
+## Adaptive Training
+
+### What is the Adaptive Orchestrator?
+
+The orchestrator is an autonomous system that monitors and optimizes training in real-time. It makes hundreds of micro-decisions to ensure optimal convergence.
+
+**Key Capabilities:**
+
+1. **Automatic Hyperparameter Tuning**
+   - Learning rate adjustments based on loss curves
+   - Batch size optimization with OOM recovery
+   - Weight decay adaptation for regularization
+
+2. **Architecture Management**
+   - Add/remove MoE experts based on utilization
+   - Adjust MoD capacity factors
+   - Balance routing parameters
+
+3. **Emergency Recovery**
+   - Detect gradient explosions → emergency LR reduction
+   - Detect loss spikes → rollback to previous checkpoint
+   - Detect OOM → reduce batch size and retry
+
+4. **Performance Monitoring**
+   - Track loss dynamics (plateau, divergence)
+   - Monitor expert utilization (MoE)
+   - Analyze compute efficiency (MoD)
+   - Predict convergence
+
+### Enabling Adaptive Training
 
 ```python
-training_params = {
-    'gradient_checkpointing': True,
-    # Reduces memory by ~40% at ~20% speed cost
+# In Main.py
+use_adaptive_training = True  # Strongly recommended
+
+# The orchestrator automatically:
+# - Monitors training health every 100 steps
+# - Makes adaptive decisions when needed
+# - Logs all decisions with reasoning
+# - Saves optimal configurations for future runs
+```
+
+### Adaptive Methods (18 New APIs)
+
+The trainer exposes 18 methods for fine-grained control:
+
+#### MoE Architecture (3 methods)
+
+```python
+# Add expert to underperforming layer
+trainer.add_expert(layer_idx=5)
+
+# Remove underutilized expert
+trainer.prune_expert(layer_idx=0, expert_idx=3)
+
+# Initialize new expert (internal use)
+trainer._initialize_new_expert(new_expert, existing_experts)
+```
+
+#### MoE Routing (4 methods)
+
+```python
+# Adjust token routing capacity
+trainer.adjust_capacity_factor(2.0)  # Allow more tokens per expert
+
+# Adjust routing concentration
+trainer.adjust_routing_temperature(1.5)  # Higher = more exploration
+
+# Enable expert dropout
+trainer.enable_expert_dropout(0.1)  # Prevent expert collapse
+
+# Get comprehensive statistics
+stats = trainer.get_expert_statistics()
+# Returns: {
+#   'per_expert_utilization': [...],
+#   'routing_entropy': 2.45,
+#   'load_balance_loss': 0.012,
+# }
+```
+
+#### MoD Routing (2 methods)
+
+```python
+# Adjust compute allocation
+trainer.adjust_mod_capacity(0.7)  # 70% of tokens get full compute
+
+# Get efficiency metrics
+stats = trainer.get_mod_statistics()
+# Returns: {
+#   'capacity_factor': 0.5,
+#   'tokens_processed': 1000000,
+#   'average_depth': 0.48,
+# }
+```
+
+#### Batch Size Adaptation (2 methods)
+
+```python
+# Dynamically change batch size
+trainer.adjust_batch_size(4)  # Reduce for OOM
+
+# Recreate dataloader (internal use)
+trainer._recreate_dataloader(dataset)
+```
+
+#### Orchestrator Communication (3 methods)
+
+```python
+# Get real-time training state
+metrics = trainer.get_current_metrics()
+# Returns: {
+#   'loss': 2.456,
+#   'learning_rate': 0.0001,
+#   'grad_norm': 1.23,
+#   'throughput': 1000.5,
+# }
+
+# Extract MoE routing statistics
+routing = trainer._extract_moe_routing_stats()
+
+# Calculate throughput
+throughput = trainer._calculate_throughput()  # tokens/second
+```
+
+#### Emergency Recovery (2 methods)
+
+```python
+# Emergency LR reduction (gradient explosion)
+trainer.emergency_lr_reduction(10.0)  # Reduce by 10x
+
+# Rollback to previous state
+trainer.rollback_steps(100)  # Go back 100 steps
+```
+
+#### Advanced Optimizer (2 methods)
+
+```python
+# Adjust weight decay
+trainer.adjust_weight_decay(0.05)
+
+# Update optimizer parameter groups (internal use)
+trainer._update_optimizer_param_groups('lr', 1e-5)
+```
+
+### Chinchilla Scaling
+
+Automatic epoch optimization based on compute-optimal principles.
+
+**Core Principle:** For optimal training, use approximately 20 tokens per parameter.
+
+```python
+# Enable in Main.py
+chinchilla_params = {
+    'auto_epoch_scaling': True,       # Enable automatic calculation
+    'chinchilla_multiplier': 20,      # Tokens per parameter
+    'min_auto_epochs': 1,
+    'max_auto_epochs': 50,
+    
+    # Advanced features
+    'enable_loss_landscape': True,    # Plateau/divergence detection
+    'enable_compute_efficiency': True,# Track loss per FLOP
+    'enable_early_stopping': True,    # Stop when converged
 }
 ```
 
-### Multi-Node Training
+**How it works:**
 
-Scale across multiple machines:
+1. **Calculate optimal tokens:** `N_opt = 20 × model_parameters`
+   - Example: 1B params → 20B optimal tokens
 
-```bash
-# Node 0 (master)
-deepspeed --num_nodes=4 --num_gpus=8 Main.py
+2. **Determine base epochs:** `epochs = N_opt / dataset_tokens`
+   - Example: 20B tokens / 10B dataset → 2 epochs
 
-# Nodes 1-3 (workers)
-deepspeed --num_nodes=4 --num_gpus=8 --node_rank=N Main.py
+3. **Monitor during training:**
+   - Convergence score (loss stability)
+   - Compute efficiency (loss reduction per FLOP)
+   - Loss landscape (plateaus, divergence)
+
+4. **Adjust dynamically:**
+   - If converging fast → reduce epochs
+   - If plateau detected → adjust or stop
+   - If diverging → emergency intervention
+
+**Example output:**
+
+```
+ENHANCED CHINCHILLA SCALER INITIALIZED
+Model Parameters: 1.2B
+Dataset Tokens: 24.5B
+Chinchilla Optimal: 24.0B tokens
+Base optimal epochs: 5
+Token Budget Coverage: 102.1%
+
+[Step 5000] CHINCHILLA STATUS
+Current epochs: 4 (adjusted from 5)
+Token progress: 83.4%
+Convergence: 87% (High)
+Training phase: convergence
+Compute efficiency: Stable
+Recommendation: Continue training
+```
+
+### Example: Adaptive Training in Action
+
+```
+[Step 100] Training normally...
+Loss: 2.456 | Perplexity: 11.65 | Accuracy: 45.2%
+
+[Orchestrator] Detected loss plateau
+Decision: Increase learning rate by 1.5x
+Reasoning: Loss variance < 0.001 for 50 steps
+Confidence: 75%
+
+[Step 200] Improved convergence...
+Loss: 2.234 | Perplexity: 9.34 | Accuracy: 48.7%
+
+[Orchestrator] Expert imbalance detected
+Decision: Adjust capacity factor 1.25 → 1.75
+Reasoning: Expert 3 at 92%, Expert 5 at 8%
+Confidence: 82%
+
+[Step 300] Gradient spike detected...
+Loss: 2.189 | Grad Norm: 156.2
+
+[Orchestrator] Emergency intervention
+Decision: Emergency LR reduction by 10x
+Reasoning: Gradient norm > 100 (explosion)
+Confidence: 95%
+
+[Step 350] Training stabilized...
+Loss: 2.156 | Perplexity: 8.63 | Accuracy: 52.1%
+
+[Chinchilla] Convergence predicted in ~200 steps
+Convergence score: 88%
+Expected final loss: 2.05 ± 0.15
 ```
 
 ---
@@ -650,64 +558,18 @@ deepspeed --num_nodes=4 --num_gpus=8 --node_rank=N Main.py
 
 ### Training Metrics
 
-The system tracks comprehensive metrics with adaptive insights:
+Tracked automatically:
 
-- **Loss & Perplexity**: Training and validation curves with trend analysis
+- **Loss & Perplexity**: Training/validation curves
 - **Accuracy**: Token-level prediction accuracy
-- **Throughput**: Tokens/second processing speed
+- **Throughput**: Tokens per second
 - **Memory**: GPU/MPS/CPU utilization
-- **Learning Rate**: Current LR with scheduler info and adaptive adjustments
-- **Gradient Norms**: Detect training instability
-- **Expert Utilization**: Real-time MoE routing statistics
-- **Adaptive Decisions**: Log of all orchestrator interventions
-- **Chinchilla Metrics**: Token progress, convergence score, compute efficiency
+- **Learning Rate**: Current value with scheduler info
+- **Gradient Norms**: Detect instability
+- **Expert Stats**: MoE routing statistics (if applicable)
+- **Chinchilla Metrics**: Token progress, convergence score
 
-### Health Monitoring
-
-Automatic health checks detect:
-
-- Loss spikes or divergence
-- Gradient explosion/vanishing
-- Expert imbalance (MoE)
-- Token routing issues (MoD)
-- Memory pressure
-- Training stagnation
-- **Convergence predictions**
-- **Performance anomalies**
-- **Compute efficiency decline**
-
-### Adaptive Insights
-
-The orchestrator provides detailed reports:
-
-```python
-# Get adaptive status
-status = orchestrator.get_adaptive_status()
-
-print(f"Adaptive decisions made: {status['adaptive_decisions_made']}")
-print(f"Meta-learning runs: {status['meta_learning_runs']}")
-print(f"Monitoring active: {status['monitoring_active']}")
-
-# Recent adaptive decisions with reasoning
-for decision in status['recent_decisions']:
-    print(f"{decision['type']}: {decision['reasoning']}")
-    print(f"  Confidence: {decision['confidence']:.2%}")
-```
-
-### Chinchilla Status
-
-```python
-# Get Chinchilla scaler status
-if hasattr(trainer, 'chinchilla_scaler'):
-    status = trainer.chinchilla_scaler.get_status_report()
-    
-    print(f"Token progress: {status['chinchilla']['progress']:.1f}%")
-    print(f"Convergence score: {status['training']['convergence_score']:.2%}")
-    print(f"Training phase: {status['training']['training_phase']}")
-    print(f"Current optimal epochs: {status['chinchilla']['current_optimal_epochs']}")
-```
-
-### Logging Levels
+### Logging Configuration
 
 ```python
 monitoring_params = {
@@ -719,8 +581,6 @@ monitoring_params = {
 
 ### Checkpointing
 
-Automatic checkpoint management with rollback support:
-
 ```python
 training_params = {
     'save_every_n_batches': 1000,
@@ -730,7 +590,7 @@ training_params = {
 
 # Resume from checkpoint
 checkpoint_params = {
-    'resume_from_checkpoint': 'experiments/my_exp/checkpoints/checkpoint_epoch_5.pt',
+    'resume_from_checkpoint': 'path/to/checkpoint.pt',
     'resume_training': True,
 }
 ```
@@ -741,133 +601,182 @@ checkpoint_params = {
 
 ### Out of Memory (OOM)
 
-The **Adaptive Orchestrator automatically handles OOM**:
+**Automatic Handling:** The orchestrator catches OOM and reduces batch size automatically.
 
-1. **Automatic Detection**: Catches OOM errors during training
-2. **Smart Recovery**: Reduces batch size while maintaining effective batch size via gradient accumulation
-3. **Adaptive Retry**: Recreates training components and continues
-4. **Configuration Saving**: Saves optimal settings for future runs
+**Manual intervention:**
 
-Manual intervention (if needed):
 ```python
+# Reduce memory usage
 training_params = {
-    'batch_size': 2,  # Reduce
-    'gradient_accumulation_steps': 16,  # Increase
-    'gradient_checkpointing': True,
-    'cpu_offload': True,  # If using DeepSpeed
+    'batch_size': 2,                    # Smaller batches
+    'gradient_accumulation_steps': 16,  # Maintain effective batch size
+    'gradient_checkpointing': True,     # Trade compute for memory
+    'use_deepspeed': True,
+    'zero_stage': 3,                    # Maximum memory optimization
+    'cpu_offload': True,                # Offload to CPU
 }
 ```
 
 ### Slow Training
 
-The orchestrator monitors and optimizes throughput automatically, but you can also:
+**Automatic:** Orchestrator monitors throughput and suggests optimizations.
 
-- Enable `compile=True` (PyTorch 2.0+)
-- Use `precision='mixed_bf16'` or `'mixed_fp16'`
-- Enable Flash Attention (`use_flash_attention=True`)
-- Increase `num_workers` for data loading
-- Check `batch_size` isn't too small
-- Enable DeepSpeed for multi-GPU
+**Manual optimizations:**
 
-The orchestrator will suggest optimizations if it detects performance issues.
+```python
+training_params = {
+    'compile': True,              # PyTorch 2.0 compilation
+    'precision': 'mixed_bf16',    # Faster than FP32
+    'use_flash_attention': True,  # 2-4x faster attention
+    'num_workers': 4,             # Data loading parallelism
+}
+```
 
 ### Training Instabilities
 
-The **Adaptive Orchestrator handles most instabilities automatically**:
+**Automatic Recovery:**
+- Gradient explosion → Emergency LR reduction
+- Loss spikes → Checkpoint rollback
+- Expert collapse → Routing adjustments
 
-**Gradient Explosion:**
-```python
-# Automatic emergency LR reduction when grad_norm > 100
-# The orchestrator detects and responds immediately
-```
+**Manual tuning:**
 
-**Loss Spikes:**
 ```python
-# Automatic rollback to previous checkpoint
-# The orchestrator maintains checkpoint history for recovery
-```
-
-**Expert Imbalance (MoE):**
-```python
-# Automatic routing adjustments
-# The orchestrator monitors and balances expert utilization
-```
-
-Manual tuning (if needed):
-```python
+# Gradient explosion
 training_params = {
-    'load_balancing_weight': 0.02,  # Increase (from 0.01)
-    'routing_temperature': 1.2,  # Increase exploration
-    'capacity_factor': 1.5,  # Allow more tokens per expert
+    'gradient_clip_val': 1.0,  # Clip gradients
+    'learning_rate': 5e-5,     # Lower LR
+}
+
+# Expert imbalance (MoE)
+training_params = {
+    'load_balancing_weight': 0.02,  # Stronger balancing
+    'capacity_factor': 1.5,         # More token capacity
+    'routing_temperature': 1.2,     # More exploration
 }
 ```
 
 ### MPS (Apple Silicon) Issues
 
-The system auto-optimizes for MPS, but manual tips:
-
 ```python
-# If encountering issues
+# If encountering stability issues
 training_params = {
-    'compile': False,  # Can be unstable on MPS
-    'num_workers': 0,  # MPS prefers main thread loading
-    'batch_size': 2,  # Start small
+    'compile': False,       # Can be unstable on MPS
+    'num_workers': 0,       # MPS prefers single-threaded
+    'batch_size': 2,        # Start small
+    'precision': 'fp16',    # Explicitly set
 }
 ```
 
 ---
 
-## Example: Adaptive Training in Action
+## Complete Configuration Example
 
-Here's what happens during a typical adaptive training run:
+```python
+# Main.py - Production configuration for 7B model
 
+config_choice = 'b7'  # 7B active, 56B total
+use_adaptive_training = True  # Enable orchestrator
+
+# Training configuration
+training_params = {
+    # Core settings
+    'num_epochs': 3,
+    'batch_size': 16,
+    'gradient_accumulation_steps': 8,
+    'learning_rate': 1e-4,
+    
+    # Precision
+    'precision': 'mixed_bf16',
+    
+    # Architecture
+    'use_moe': True,
+    'use_mod': True,  # Hybrid mode
+    'num_experts': 8,
+    'moe_top_k': 2,
+    'mod_capacity_factor': 0.5,
+    
+    # Optimization
+    'use_flash_attention': True,
+    'gradient_checkpointing': True,
+    'compile': True,
+    
+    # DeepSpeed
+    'use_deepspeed': True,
+    'zero_stage': 2,
+    'gradient_compression': True,
+    
+    # Monitoring
+    'save_every_n_batches': 1000,
+    'log_every_n_steps': 50,
+    'early_stopping_patience': 10,
+}
+
+# Data configuration
+data_params = {
+    'training_mode': 'finetuning_only',
+    'finetuning_paths': [
+        'data/train_1.jsonl',
+        'data/train_2.jsonl',
+    ],
+    'finetuning_eval_paths': ['data/eval.jsonl'],
+}
+
+# Chinchilla scaling
+chinchilla_params = {
+    'auto_epoch_scaling': True,
+    'chinchilla_multiplier': 20,
+    'enable_loss_landscape': True,
+    'enable_compute_efficiency': True,
+    'enable_early_stopping': True,
+}
+
+# Quantization (optional)
+quantization_params = {
+    'quantization_method': 'bnb',
+    'quantization_bits': 8,
+}
 ```
-[STEP 100] Normal training...
-  Loss: 2.456 | PPL: 11.65 | Acc: 45.2%
 
-[ORCHESTRATOR] Detected loss plateau
-  Decision: Increase learning rate by 1.5x
-  Confidence: 75%
-  Reasoning: Loss variance < 0.001 for 50 steps
+---
 
-[STEP 200] Improved convergence...
-  Loss: 2.234 | PPL: 9.34 | Acc: 48.7%
+## Best Practices
 
-[ORCHESTRATOR] Expert imbalance detected
-  Decision: Adjust capacity factor 1.25 -> 1.75
-  Confidence: 82%
-  Reasoning: Expert 3 utilization at 92%, Expert 5 at 8%
+### For AI Engineers
 
-[STEP 300] Gradient spike detected...
-  Loss: 2.189 | GradNorm: 156.2
+1. **Start with adaptive training enabled** - Let the system optimize itself
+2. **Use pre-configured model sizes** - They're tested and optimized
+3. **Monitor the orchestrator logs** - Learn what decisions are being made
+4. **Trust automatic recovery** - The system handles most issues
+5. **Use Chinchilla scaling** - Stop guessing optimal epochs
 
-[ORCHESTRATOR] Emergency intervention
-  Decision: Emergency LR reduction by 10x
-  Confidence: 95%
-  Reasoning: Gradient norm > 100 (explosion detected)
+### For Production
 
-[STEP 350] Training stabilized...
-  Loss: 2.156 | PPL: 8.63 | Acc: 52.1%
+1. **Enable checkpointing** - Save every 1000 steps
+2. **Use mixed precision** - `mixed_bf16` for modern GPUs
+3. **Enable DeepSpeed** - For multi-GPU setups
+4. **Monitor memory** - Set `save_total_limit` to avoid disk issues
+5. **Test recovery** - Ensure checkpoint resumption works
 
-[CHINCHILLA] Convergence predicted in ~200 steps
-  Convergence score: 88%
-  Expected final loss: 2.05 ± 0.15
-  Recommend continuing training
-```
+### For Experimentation
+
+1. **Use `debug` config first** - Fast iteration
+2. **Enable verbose logging** - `log_level='DEBUG'`
+3. **Disable compilation initially** - `compile=False` for easier debugging
+4. **Monitor expert utilization** - For MoE models
+5. **Check Chinchilla recommendations** - Optimize training duration
 
 ---
 
 ## Citation
 
-If you use LuminaAI in your research, please cite:
-
 ```bibtex
 @software{luminaai2025,
-  title = {LuminaAI: Advanced Transformer Training with Adaptive Intelligence},
+  title = {LuminaAI: Transformer Training with Adaptive Intelligence},
   author = {MatN23},
   year = {2025},
   url = {https://github.com/matn23/luminaai},
-  note = {AI-driven training optimization with MoE, MoD, and Chinchilla scaling}
+  note = {Autonomous training optimization with MoE, MoD, and Chinchilla scaling}
 }
 ```
 
@@ -875,23 +784,11 @@ If you use LuminaAI in your research, please cite:
 
 ## License
 
-This project is licensed under a Custom License. See [LICENSE](LICENSE) file for details.
+Custom License - See [LICENSE](LICENSE) file for details.
 
 ---
 
-## Acknowledgments
-
-- DeepSpeed team for distributed training framework
-- Flash Attention authors for efficient attention implementation
-- tiktoken for fast tokenization
-- PyTorch team for the foundation
-- OpenAssistant for conversational datasets
-- Chinchilla paper authors for compute-optimal scaling insights
-- The open-source AI community for continuous inspiration
-
----
-
-## Additional Resources
+## Resources
 
 - **Documentation**: [docs/](docs/)
 - **Adaptive Training Guide**: [docs/adaptive_training.md](docs/adaptive_training.md)
@@ -901,8 +798,8 @@ This project is licensed under a Custom License. See [LICENSE](LICENSE) file for
 
 <div align="center">
 
-**Built with care for the AI research community**
+**Built for the AI engineering community**
 
-*Featuring autonomous training intelligence that learns, adapts, and optimizes*
+*Training systems that learn, adapt, and optimize themselves*
 
 </div>
