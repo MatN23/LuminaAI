@@ -14,7 +14,10 @@
 
 </div>
 
-![Screenshot](assets/logo.png)
+<p align="center">
+  <img src="assets/logo.png" width="400">
+</p>
+
 
 ---
 
@@ -43,7 +46,7 @@ LuminaAI is a production-ready deep learning training framework that combines mo
 
 ```bash
 # Clone repository
-git clone https://github.com/yourusername/luminaai.git
+git clone https://github.com/matn23/luminaai.git
 cd luminaai
 
 # Install PyTorch (CUDA)
@@ -194,6 +197,9 @@ config = Config(
 | `b14` | ~14B | ~112B | 8x MoE | A100 80GB | ~250 tok/s |
 | `b30` | ~30B | ~240B | 8x MoE | Multi-A100 | ~100 tok/s |
 | `b50` | ~50B | ~400B | 8x MoE | Multi-H100 | ~50 tok/s |
+| `b100` | ~100B | ~800B | 8x MoE | Large-H100-Server | ~50 tok/s |
+| `b200` | ~200B | ~1600B | 8x MoE | OPENAI-GRADE-h200-Server | ~30 tok/s |
+| `b300` | ~300B | ~2400B | 8x MoE | OPENAI-GRADE-h200-Server | ~20 tok/s |
 
 **Note:** Throughput is approximate and depends on sequence length, batch size, and hardware.
 
