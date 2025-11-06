@@ -14,6 +14,8 @@
 
 </div>
 
+![Screenshot](assets/logo.png)
+
 ---
 
 ## What is LuminaAI?
