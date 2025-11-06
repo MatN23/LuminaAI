@@ -15,7 +15,7 @@
 </div>
 
 <p align="center">
-  <img src="assets/Logo.png" width="400">
+  <img src="assets/ReadmeLogo.png" width="400">
 </p>
 
 
