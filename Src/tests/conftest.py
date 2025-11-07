@@ -163,7 +163,7 @@ def sample_base_training_data(temp_dir):
 def small_model(mock_config):
     """Create small model for testing."""
     try:
-        from model import DeepSeekTransformer, DeepSeekConfig
+        from Main_Scripts.core.model import DeepSeekTransformer, DeepSeekConfig
         
         model_config = DeepSeekConfig(
             vocab_size=mock_config.vocab_size,

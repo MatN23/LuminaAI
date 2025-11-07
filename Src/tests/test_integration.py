@@ -7,7 +7,7 @@ class TestModelTrainerIntegration:
     
     def test_full_training_step(self, small_model, mock_tokenizer, mock_config, mock_logger):
         """Test complete training step with model and trainer."""
-        from trainer import EnhancedConversationTrainer
+        from Main_Scripts.training.trainer import EnhancedConversationTrainer
         
         trainer = EnhancedConversationTrainer(
             small_model, mock_tokenizer, mock_config, mock_logger
@@ -41,7 +41,7 @@ class TestDatasetTrainerIntegration:
     ):
         """Test training with real dataloader."""
         try:
-            from Main_Scripts.coredataset import FastConversationDataset, create_dataloader
+            from Main_Scripts.core.dataset import FastConversationDataset, create_dataloader
             from Main_Scripts.training.trainer import EnhancedConversationTrainer
             
             dataset = FastConversationDataset(
