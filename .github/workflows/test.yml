@@ -38,4 +38,6 @@ jobs:
 
       - name: Run all tests
         run: |
+          export PYTHONPATH=$PYTHONPATH:$GITHUB_WORKSPACE/Src
           pytest Src/tests/ -v --tb=short
+
