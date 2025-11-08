@@ -2271,53 +2271,102 @@ class EnhancedConversationTrainer:
         return self.precision_manager.get_autocast_context(for_inference=for_inference)
     
     def compute_loss(self, logits, labels, loss_weights):
+        """
+        Compute loss with proper masking and perplexity calculation.
+    
+        Args:
+            logits: Model output logits [batch, seq_len, vocab_size]
+            labels: Target labels [batch, seq_len]
+            loss_weights: Optional per-token loss weights [batch, seq_len]
+
+        Returns:
+            Dictionary with loss, perplexity, accuracy, and statistics
+        """
+        # Shift for next-token prediction
         shift_logits = logits[..., :-1, :].contiguous()
         shift_labels = labels[..., 1:].contiguous()
 
+        # Flatten for loss computation
         flat_logits = shift_logits.view(-1, shift_logits.size(-1))
         flat_labels = shift_labels.view(-1)
 
-        mask = (flat_labels != getattr(self.tokenizer, 'pad_token_id', 0)).float()
+        # Create mask for valid tokens (non-padding)
+        # ✅ OPTIMIZATION: Compute mask once
+        pad_token_id = getattr(self.tokenizer, 'pad_token_id', 0)
+        mask = (flat_labels != pad_token_id).float()
 
-        # Accuracy
+        # Early exit if no valid tokens
+        valid_token_count = mask.sum()
+        if valid_token_count == 0:
+            return {
+                'loss': torch.tensor(0.0, device=logits.device, requires_grad=True),
+                'raw_loss': torch.tensor(0.0, device=logits.device),
+                'perplexity': torch.tensor(float('inf'), device=logits.device),
+                'valid_tokens': torch.tensor(0, device=logits.device),
+                'accuracy': torch.tensor(0.0, device=logits.device)
+            }
+
+        # ✅ ACCURACY CALCULATION (before loss to avoid gradient issues)
         with torch.no_grad():
             predictions = torch.argmax(flat_logits, dim=-1)
             correct_predictions = (predictions == flat_labels).float() * mask
-            accuracy = correct_predictions.sum() / mask.sum().clamp(min=1)
+            accuracy = correct_predictions.sum() / valid_token_count
 
-        # Cross-entropy loss (per token)
-        loss = F.cross_entropy(flat_logits, flat_labels, reduction='none')
+        # ✅ COMPUTE RAW CROSS-ENTROPY LOSS (per token, no reduction)
+        loss_per_token = F.cross_entropy(
+            flat_logits, 
+            flat_labels, 
+            reduction='none',
+            ignore_index=-100  # This won't affect us since we mask manually
+        )
 
-        # ✅ FIX: Calculate raw (unweighted) loss BEFORE applying weights
-        raw_loss_for_ppl = (loss * mask).sum() / mask.sum().clamp(min=1)
+        # ✅ COMPUTE UNWEIGHTED LOSS FOR PERPLEXITY
+        # This must be computed from the raw per-token loss before any weighting
+        masked_loss_sum = (loss_per_token * mask).sum()
+        raw_loss_for_ppl = masked_loss_sum / valid_token_count
+
+        # Detach to prevent gradient flow through perplexity calculation
         raw_loss_for_ppl = raw_loss_for_ppl.detach()
 
-        # Apply loss weights for training
+        # ✅ APPLY LOSS WEIGHTS FOR TRAINING
         if loss_weights is not None:
+            # Shift and flatten loss weights to match tokens
             shift_weights = loss_weights[..., 1:].contiguous()
             flat_weights = shift_weights.view(-1)
-            weighted_loss = loss * flat_weights * mask
-            total_weight = (flat_weights * mask).sum().clamp(min=1)
+
+            # Apply both mask and weights
+            weighted_loss_per_token = loss_per_token * flat_weights * mask
+            total_weight = (flat_weights * mask).sum().clamp(min=1e-8)
+
+            # Final weighted loss for backprop
+            final_loss = weighted_loss_per_token.sum() / total_weight
         else:
-            weighted_loss = loss * mask
-            total_weight = mask.sum().clamp(min=1)
+            # No weights - just use masked loss
+            final_loss = masked_loss_sum / valid_token_count
 
-        final_loss = weighted_loss.sum() / total_weight
-
-        # ✅ Use raw_loss_for_ppl for perplexity
+        # ✅ COMPUTE PERPLEXITY FROM RAW UNWEIGHTED LOSS
+        # Clamp to prevent overflow in exp()
         clamped_loss = torch.clamp(raw_loss_for_ppl, min=0.0, max=15.0)
 
         try:
             perplexity = torch.exp(clamped_loss)
         except (OverflowError, RuntimeError):
-            perplexity = torch.tensor(float('inf'), device=loss.device)
+            # Fallback for numerical issues
+            perplexity = torch.tensor(float('inf'), device=logits.device)
+
+        # ✅ WARNING: Check if loss was clamped
+        if raw_loss_for_ppl.item() > 15.0:
+            logging.warning(
+                f"Loss {raw_loss_for_ppl.item():.2f} exceeds safe range for perplexity. "
+                f"Clamped to 15.0 (perplexity = {math.exp(15.0):.0f})"
+            )
 
         return {
-            'loss': final_loss,  # Training loss (weighted)
-            'raw_loss': raw_loss_for_ppl,  # ✅ Actual unweighted loss for perplexity
-            'perplexity': perplexity,  # ✅ Now correct!
-            'valid_tokens': mask.sum().detach(),
-            'accuracy': accuracy.detach()
+            'loss': final_loss,              # For backprop (potentially weighted)
+            'raw_loss': raw_loss_for_ppl,    # For logging (always unweighted)
+            'perplexity': perplexity,        # Computed from raw_loss
+            'valid_tokens': valid_token_count,
+            'accuracy': accuracy
         }
     
     def train_step(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:

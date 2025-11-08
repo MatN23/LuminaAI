@@ -1928,6 +1928,15 @@ def main():
         print("Initializing model architecture...")
         model = DeepSeekTransformer(model_config)
         
+        if torch.__version__ >= "2.0" and not is_mps:
+            logging.info("Compiling model with torch.compile...")
+            model = torch.compile(
+                model,
+                mode='reduce-overhead',  # Best for training
+                fullgraph=True,
+                dynamic=False
+            )
+            logging.info("✅ Model compiled")
 
         def init_weights_for_fp16(module):
             if isinstance(module, (nn.Linear, nn.Embedding)):
