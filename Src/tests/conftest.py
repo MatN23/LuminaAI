@@ -143,7 +143,7 @@ def sample_conversation_data(temp_dir):
     data_path = temp_dir / "test_data.jsonl"
     with open(data_path, 'w') as f:
         for item in data:
-            f.write(json.dumps(item) + '\\n')
+            f.write(json.dumps(item) + '\n')
     
     return str(data_path)
 
@@ -154,7 +154,7 @@ def sample_base_training_data(temp_dir):
     data_path = temp_dir / "test_base.txt"
     with open(data_path, 'w') as f:
         for i in range(10):
-            f.write(f"This is sample text number {i}. " * 20 + "\\n")
+            f.write(f"This is sample text number {i}. " * 20 + "\n")
     
     return str(data_path)
 
