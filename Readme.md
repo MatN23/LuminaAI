@@ -40,26 +40,26 @@ LuminaAI is a production-ready deep learning training framework that combines mo
 
 ---
 
-## Quick Start
+## Quick Start (5 Minutes)
 
-### Installation
-
+**Simplest possible example:**
 ```bash
-# Clone repository
-git clone https://github.com/matn23/luminaai.git
+# Install
+git clone https://github.com/matn23/luminaai
 cd luminaai
-
-# Install PyTorch (CUDA)
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-
-# Install dependencies
 pip install -r requirements.txt
 
-# Optional: DeepSpeed for distributed training
-pip install deepspeed
+cd Src/Main_Scripts
+# Run debug config (trains in ~5 mins on any hardware)
+python Main.py
+```
 
-# Optional: Flash Attention for efficiency
-pip install flash-attn --no-build-isolation
+**What you'll see:**
+- Orchestrator monitoring every 100 steps
+- Automatic interventions if issues detected
+- Training completes without manual tuning
+
+**Expected output:**
 ```
 
 ### Minimal Training Example
