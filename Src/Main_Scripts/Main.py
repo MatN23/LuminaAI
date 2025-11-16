@@ -1741,9 +1741,17 @@ def main():
         'reset_scheduler': False,       
     }
     
-    checkpoint_path = Path(checkpoint_params.get('resume_from_checkpoint', ''))
-    if checkpoint_params['resume_training'] and checkpoint_path and not checkpoint_path.exists():
-        print(f"⚠️ WARNING: Checkpoint not found: {checkpoint_path}")
+    # Fixed: Handle None checkpoint path safely
+    checkpoint_file = checkpoint_params.get('resume_from_checkpoint')
+    if checkpoint_file:
+        checkpoint_path = Path(checkpoint_file)
+        if checkpoint_params['resume_training'] and not checkpoint_path.exists():
+            print(f"⚠️ WARNING: Checkpoint not found: {checkpoint_path}")
+            print("   Starting training from scratch instead")
+            checkpoint_params['resume_training'] = False
+    elif checkpoint_params['resume_training']:
+        # resume_training is True but no checkpoint specified
+        print(f"⚠️ WARNING: resume_training=True but no checkpoint specified")
         print("   Starting training from scratch instead")
         checkpoint_params['resume_training'] = False
     
