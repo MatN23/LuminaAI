@@ -139,15 +139,15 @@ def validate_data_paths(data_params: dict) -> bool:
                 
                 # Check if it's a directory (ERROR)
                 if path.is_dir():
-                    print(f"  ❌ [{i}] {path_str} - ERROR: This is a directory, not a file!")
+                    print(f"  ✗ [{i}] {path_str} - ERROR: This is a directory, not a file!")
                     all_valid = False
                 # Check if file exists
                 elif path.exists() and path.is_file():
                     size = path.stat().st_size / (1024*1024)
-                    print(f"  ✅ [{i}] {path_str} ({size:.2f} MB)")
+                    print(f"  ✓ [{i}] {path_str} ({size:.2f} MB)")
                     checked_paths.append(str(path))
                 else:
-                    print(f"  ❌ [{i}] {path_str} - File not found!")
+                    print(f"  ✗ [{i}] {path_str} - File not found!")
                     all_valid = False
     
     # Check fine-tuning paths
@@ -160,18 +160,18 @@ def validate_data_paths(data_params: dict) -> bool:
                 
                 # Check if it's a directory (ERROR)
                 if path.is_dir():
-                    print(f"  ❌ [{i}] {path_str} - ERROR: This is a directory, not a file!")
+                    print(f"  ✗ [{i}] {path_str} - ERROR: This is a directory, not a file!")
                     all_valid = False
                 # Check if file exists
                 elif path.exists() and path.is_file():
                     size = path.stat().st_size / (1024*1024)
-                    print(f"  ✅ [{i}] {path_str} ({size:.2f} MB)")
+                    print(f"  ✓ [{i}] {path_str} ({size:.2f} MB)")
                     checked_paths.append(str(path))
                 else:
-                    print(f"  ❌ [{i}] {path_str} - File not found!")
+                    print(f"  ✗ [{i}] {path_str} - File not found!")
                     all_valid = False
         else:
-            print("\n❌ No fine-tuning paths specified for finetuning_only mode!")
+            print("\n✗ No fine-tuning paths specified for finetuning_only mode!")
             all_valid = False
     
     # Check eval paths
@@ -187,22 +187,22 @@ def validate_data_paths(data_params: dict) -> bool:
             path = Path(path_str)
             
             if path.is_dir():
-                print(f"  ❌ [{i}] {path_str} - ERROR: This is a directory, not a file!")
+                print(f"  ✗ [{i}] {path_str} - ERROR: This is a directory, not a file!")
                 all_valid = False
             elif path.exists() and path.is_file():
                 size = path.stat().st_size / (1024*1024)
-                print(f"  ✅ [{i}] {path_str} ({size:.2f} MB)")
+                print(f"  ✓ [{i}] {path_str} ({size:.2f} MB)")
             else:
-                print(f"  ⚠️  [{i}] {path_str} - File not found (will use training data)")
+                print(f"  ⚠️ [{i}] {path_str} - File not found (will use training data)")
     
     # Summary
     print("\n" + "="*80)
     if all_valid and checked_paths:
-        print(f"✅ VALIDATION PASSED - All {len(checked_paths)} file(s) are valid")
+        print(f"✓ VALIDATION PASSED - All {len(checked_paths)} file(s) are valid")
         print("="*80 + "\n")
         return True
     else:
-        print("❌ VALIDATION FAILED - Please fix the issues above")
+        print("✗ VALIDATION FAILED - Please fix the issues above")
         print("="*80 + "\n")
         return False
     
@@ -250,7 +250,7 @@ def validate_mps_compatibility(config) -> Tuple[bool, List[str]]:
 """
     # After defining data_params:
     if not validate_data_paths(data_params):
-        print("\n❌ Data path validation failed. Cannot continue.")
+        print("\n✗ Data path validation failed. Cannot continue.")
         print("Please check your file paths in the data_params configuration.\n")
         return 1
 """
@@ -300,9 +300,9 @@ def wrap_orchestrator_with_oom_protection(orchestrator, train_dataset, eval_data
 
             if hasattr(orchestrator.trainer, 'scheduler') and orchestrator.trainer.scheduler:
                 scheduler = orchestrator.trainer.scheduler
-                print(f"✅ Scheduler exists: {type(scheduler).__name__}")
-                print(f"✅ Current LR: {scheduler.get_last_lr()[0]:.2e}")
-                print(f"✅ Base LRs: {scheduler.base_lrs}")
+                print(f"✓ Scheduler exists: {type(scheduler).__name__}")
+                print(f"✓ Current LR: {scheduler.get_last_lr()[0]:.2e}")
+                print(f"✓ Base LRs: {scheduler.base_lrs}")
 
                 # Test scheduler step
                 initial_lr = scheduler.get_last_lr()[0]
@@ -310,11 +310,11 @@ def wrap_orchestrator_with_oom_protection(orchestrator, train_dataset, eval_data
                 after_lr = scheduler.get_last_lr()[0]
 
                 if abs(initial_lr - after_lr) > 1e-10:
-                    print(f"✅ Scheduler is WORKING: {initial_lr:.2e} → {after_lr:.2e}")
+                    print(f"✓ Scheduler is WORKING: {initial_lr:.2e} → {after_lr:.2e}")
                 else:
                     print(f"⚠️ Scheduler not changing LR (might be in warmup)")
             else:
-                print("❌ CRITICAL: No scheduler found!")
+                print("✗ CRITICAL: No scheduler found!")
 
             print("="*80 + "\n")
             
@@ -653,7 +653,7 @@ def print_system_diagnostics():
                 print(f"  Note: MPS uses unified memory (shared with system)")
                 recommended_mem = 16.0  # GB
                 if total_mem < recommended_mem:
-                    print(f"  ⚠️  Warning: {recommended_mem:.0f}GB+ recommended for MPS training")
+                    print(f"  ⚠️ Warning: {recommended_mem:.0f}GB+ recommended for MPS training")
         
         if system_info.get('cpu_count'):
             print(f"  CPU Cores: {system_info.get('cpu_count', 0)}")
@@ -688,9 +688,9 @@ def print_system_diagnostics():
                 if "MPS" in issue or "Apple Silicon" in issue:
                     symbol = "ℹ️ "
                 elif "insufficient" in issue.lower() or "low" in issue.lower():
-                    symbol = "⚠️  "
+                    symbol = "⚠️ "
                 elif "slow" in issue.lower() or "not available" in issue.lower():
-                    symbol = "⚠️  "
+                    symbol = "⚠️ "
                 else:
                     symbol = "   "
                 print(f"    {symbol}{i}. {issue}")
@@ -799,16 +799,16 @@ def print_system_diagnostics():
             elif total_mem >= 16:
                 print("  ✓ Good memory (16GB+) for MPS training")
             elif total_mem >= 8:
-                print("  ⚠️  Limited memory (8GB) - use small models only")
+                print("  ⚠️ Limited memory (8GB) - use small models only")
             else:
-                print("  ⚠️  Insufficient memory (<8GB) - not recommended")
+                print("  ⚠️ Insufficient memory (<8GB) - not recommended")
         elif system_info.get('cuda_available'):
             gpu_mem = system_info.get('gpu_memory_gb', 0)
             sys_mem = system_info.get('system_memory_gb', 0)
             print(f"  GPU Memory: {gpu_mem:.1f}GB")
             print(f"  System Memory: {sys_mem:.1f}GB")
             if sys_mem < 16:
-                print("  ⚠️  Consider 16GB+ system RAM for optimal performance")
+                print("  ⚠️ Consider 16GB+ system RAM for optimal performance")
         
     else:
         print("  Utils not available - showing basic diagnostics only")
@@ -1006,7 +1006,7 @@ def estimate_and_display_training_time(config, dataset_size: int):
         print(f"    Memory Utilization: {estimates['memory_utilization']:.1%}")
         
         if estimates.get('memory_warning'):
-            print(f"    ⚠️  WARNING: High memory utilization expected!")
+            print(f"    ⚠️ WARNING: High memory utilization expected!")
             print(f"       Consider reducing batch size or enabling gradient checkpointing")
         else:
             print(f"    ✓ Memory utilization within safe limits")
@@ -1075,13 +1075,6 @@ def estimate_and_display_training_time(config, dataset_size: int):
         import traceback
         traceback.print_exc()
         print("  Continuing without time estimates...")
-
-
-def print_section(title: str, width: int = 80):
-    """Print a section header."""
-    print("\n" + "-"*width)
-    print(title)
-    print("-"*width)
 
 
 def setup_signal_handlers(orchestrator):
@@ -1211,8 +1204,6 @@ def save_experiment_metadata(experiment_dir: Path, config, model, datasets_info)
         json.dump(metadata, f, indent=2, default=str)
     print(f"  Experiment metadata saved: {metadata_path}")
 
-    # Add this to Main.py to fix multi-dataset support
-
 def load_checkpoint_for_continuation(checkpoint_path: str, orchestrator) -> Dict[str, Any]:
     """
     Load checkpoint and restore training state - FIXED VERSION
@@ -1309,6 +1300,7 @@ def load_checkpoint_for_continuation(checkpoint_path: str, orchestrator) -> Dict
     
     return info
 
+
 def setup_multi_dataset_training(config, data_params):
     """
     Setup training with multi-dataset support.
@@ -1330,7 +1322,7 @@ def setup_multi_dataset_training(config, data_params):
         if validation_stats.get('validation_errors'):
             print("Validation errors found:")
             for error in validation_stats['validation_errors']:
-                print(f"  ❌ {error}")
+                print(f"  ✗ {error}")
         
         print(f"\nTraining datasets: {len(validation_stats.get('train_datasets', []))}")
         for ds in validation_stats.get('train_datasets', []):
@@ -1362,6 +1354,7 @@ def setup_multi_dataset_training(config, data_params):
     
     return train_data_path, eval_data_path
 
+
 def auto_adjust_epochs_chinchilla(config, model, dataset):
     """
     Chinchilla-style automatic epoch adjustment based on dataset size and model parameters.
@@ -1386,7 +1379,7 @@ def auto_adjust_epochs_chinchilla(config, model, dataset):
         P_billions = P / 1e9
         print(f"📊 Model Parameters: {P:,} ({P_billions:.2f}B)")
     except Exception as e:
-        print(f"⚠️  Could not count model parameters: {e}")
+        print(f"⚠️ Could not count model parameters: {e}")
         print("   Skipping auto-epoch scaling")
         return config
     
@@ -1401,13 +1394,13 @@ def auto_adjust_epochs_chinchilla(config, model, dataset):
             seq_length = getattr(config, 'seq_length', 2048)
             dataset_tokens = num_samples * seq_length
         else:
-            print("⚠️  Could not estimate dataset size")
+            print("⚠️ Could not estimate dataset size")
             print("   Skipping auto-epoch scaling")
             return config
         
         print(f"📚 Dataset Tokens: {dataset_tokens:,} ({dataset_tokens/1e9:.2f}B)")
     except Exception as e:
-        print(f"⚠️  Could not estimate dataset tokens: {e}")
+        print(f"⚠️ Could not estimate dataset tokens: {e}")
         print("   Skipping auto-epoch scaling")
         return config
     
@@ -1417,7 +1410,7 @@ def auto_adjust_epochs_chinchilla(config, model, dataset):
     
     # Calculate needed epochs
     if dataset_tokens <= 0:
-        print("⚠️  Invalid dataset token count")
+        print("⚠️ Invalid dataset token count")
         return config
     
     tokens_per_epoch = dataset_tokens
@@ -1436,25 +1429,25 @@ def auto_adjust_epochs_chinchilla(config, model, dataset):
     print(f"   Optimal epochs (unconstrained): {optimal_epochs}")
     print(f"   Epoch constraints: {min_epochs} - {max_epochs}")
     print(f"   Original config: {old_epochs} epochs")
-    print(f"   ➡️  Adjusted to: {final_epochs} epochs")
+    print(f"   ➡️ Adjusted to: {final_epochs} epochs")
     
     # Calculate total training tokens
     total_tokens = tokens_per_epoch * final_epochs
     chinchilla_ratio = (total_tokens / N_opt) * 100
     
-    print(f"\n🔢 Training Token Budget:")
+    print(f"\n📢 Training Token Budget:")
     print(f"   Total tokens (new): {total_tokens:,} ({total_tokens/1e9:.2f}B)")
     print(f"   Chinchilla target: {N_opt:,} ({N_opt/1e9:.2f}B)")
     print(f"   Coverage: {chinchilla_ratio:.1f}% of optimal")
     
     if chinchilla_ratio < 50:
-        print(f"   ⚠️  WARNING: Significantly under Chinchilla recommendation")
+        print(f"   ⚠️ WARNING: Significantly under Chinchilla recommendation")
         print(f"      Consider increasing max_auto_epochs or dataset size")
     elif chinchilla_ratio > 150:
-        print(f"   ⚠️  WARNING: Exceeding Chinchilla recommendation")
+        print(f"   ⚠️ WARNING: Exceeding Chinchilla recommendation")
         print(f"      May lead to overfitting - consider early stopping")
     else:
-        print(f"   ✅ Within reasonable range of Chinchilla scaling")
+        print(f"   ✓ Within reasonable range of Chinchilla scaling")
     
     # Update config
     config.num_epochs = final_epochs
@@ -1463,11 +1456,13 @@ def auto_adjust_epochs_chinchilla(config, model, dataset):
     
     return config
 
+
 def main():
     """Main training function with advanced features and comprehensive logging."""
     
-    # CONFIGURATION SECTION - MODIFY THESE PARAMETERS
-    # =================================================
+    # ========================================================================
+    # 🎯 CONFIGURATION SECTION - MODIFY THESE PARAMETERS
+    # ========================================================================
     
     # Base model configuration
     config_choice = 'debug'  # Options: 'debug', 'debug_200m', 'b1', 'b7', 'b14', 'b50', 'b100', 'b200', 'b300'
@@ -1475,29 +1470,24 @@ def main():
     # Training mode selection
     use_adaptive_training = TRAINING_INFRASTRUCTURE_AVAILABLE  # Orchestrator with AI-driven optimization
 
-    # Training parameters
+    # ========================================================================
+    # 📊 STANDARD TRAINING PARAMETERS
+    # ========================================================================
     training_params = {
         'use_moe': True,
         'use_mod': True,
         'num_epochs': 20,
-
         'learning_rate': 1e-4,
         'min_lr': 1e-6,
-        
         'use_lr_scheduler': True,
-        'lr_scheduler': "cosine", # cosine, constant, or linear
+        'lr_scheduler': "cosine",  # cosine, constant, or linear
         'warmup_ratio': 0.02,
-        
         'batch_size': 25,
         'gradient_accumulation_steps': 8,
-        
         'precision': "fp32",
         'inference_precision': "fp16",
-        
-        # Comment these out if your not using MoE
         'num_experts': 8,
         'moe_top_k': 1,
-        
         'compile': True,
         'max_memory_usage': 0.85,
         'save_every_n_batches': 1000,
@@ -1509,20 +1499,177 @@ def main():
         'weight_decay': 0.01,
     }
 
-    adaptive_lr_params = {
-        'enable_adaptive_lr': True,           # Master switch for adaptive LR adjustments
-        'allow_scheduler_override': True,     # Allow orchestrator to override scheduler
-        'min_override_threshold': 0.2,        # Only override if change > 20%
-        'emergency_override_enabled': True,   # Always allow emergency LR reductions
-        'log_lr_decisions': True,             # Log all LR decision making
+    # ========================================================================
+    # 🧠 1. ADAPTIVE INTELLIGENCE PARAMETERS (NEW!)
+    # ========================================================================
+    adaptive_intelligence_params = {
+        # Meta-learning confidence thresholds
+        'meta_confidence_soft': 0.70,       # Start suggesting changes
+        'meta_confidence_medium': 0.80,     # Make moderate changes
+        'meta_confidence_hard': 0.90,       # Make aggressive changes
+        'meta_confidence_critical': 0.95,   # Emergency interventions
+        
+        # Decision memory
+        'strategy_memory_size': 20,         # Remember top N strategies
+        'learning_transfer_weight': 0.8,    # Trust past learnings (0-1)
+        
+        # Risk tolerance
+        'adaptive_risk_tolerance': 'balanced',  # 'conservative', 'balanced', 'aggressive'
+        'exploration_rate': 0.15,           # Try new strategies 15% of time
     }
     
-    # Data configuration
+    # ========================================================================
+    # 🏗️ 2. DYNAMIC ARCHITECTURE PARAMETERS (NEW!)
+    # ========================================================================
+    dynamic_architecture_params = {
+        # MoE Expert Management
+        'dynamic_expert_management': True,
+        'expert_growth_threshold': 0.85,    # Add expert when utilization > 85%
+        'expert_prune_threshold': 0.15,     # Remove when utilization < 15%
+        'max_experts_per_layer': 16,        # Safety limit
+        'min_experts_per_layer': 4,         # Minimum experts
+        
+        # MoD Adaptive Capacity
+        'mod_capacity_adaptation': True,
+        'mod_early_training_aggr': 0.7,     # More computation early
+        'mod_mid_training_aggr': 0.5,       # Balanced
+        'mod_late_training_aggr': 0.3,      # Aggressive savings late
+        
+        # Layer-specific routing
+        'per_layer_routing_config': True,
+        'attention_heavy_layers': [0, 1, 2, -3, -2, -1],  # More compute here
+    }
+    
+    # ========================================================================
+    # 🔮 3. PREDICTIVE OPTIMIZATION PARAMETERS (NEW!)
+    # ========================================================================
+    predictive_optimization_params = {
+        # Convergence prediction
+        'convergence_prediction_horizon': 1000,  # Steps to look ahead
+        'plateau_detection_window': 200,         # Steps for plateau detection
+        'divergence_early_warning': 50,          # Early warning steps
+        
+        # Resource forecasting
+        'memory_trend_analysis': True,
+        'oom_prediction_confidence': 0.85,
+        'throughput_optimization_mode': True,
+        
+        # Smart checkpointing
+        'importance_based_checkpointing': True,
+        'checkpoint_quality_metric': 'loss_gradient',  # or 'convergence_rate'
+    }
+    
+    # ========================================================================
+    # ✅ 4. QUALITY-AWARE TRAINING PARAMETERS (NEW!)
+    # ========================================================================
+    quality_aware_training_params = {
+        # Loss landscape awareness
+        'loss_smoothness_threshold': 0.01,      # Maximum acceptable noise
+        'gradient_health_monitoring': True,
+        'curvature_aware_training': True,       # Adjust for loss landscape
+        
+        # Output quality guards
+        'max_perplexity_spike': 2.0,            # Reject if perplexity doubles
+        'min_quality_improvement': 0.001,       # Min improvement per epoch
+        
+        # Knowledge retention
+        'catastrophic_forgetting_threshold': 0.15,  # Max base knowledge loss
+        'knowledge_preservation_strength': 0.3,     # How strongly to preserve
+    }
+    
+    # ========================================================================
+    # ⚡ 5. HARDWARE-AWARE OPTIMIZATION PARAMETERS (NEW!)
+    # ========================================================================
+    hardware_aware_optimization_params = {
+        # GPU architecture specific
+        'hardware_optimization_level': 'aggressive',  # 'minimal', 'balanced', 'aggressive'
+        'tensor_core_optimization': 'aggressive',
+        'memory_bus_utilization_target': 0.85,
+        
+        # Multi-GPU optimization
+        'communication_overlap_aggressiveness': 0.8,
+        'gradient_sync_strategy': 'adaptive',    # 'smart', 'eager', 'lazy'
+        
+        # Power efficiency
+        'power_efficiency_mode': False,
+        'thermal_throttling_avoidance': True,
+    }
+    
+    # ========================================================================
+    # 📚 6. DATA INTELLIGENCE PARAMETERS (NEW!)
+    # ========================================================================
+    data_intelligence_params = {
+        # Dynamic data sampling
+        'difficulty_based_sampling': True,
+        'curriculum_learning_aggressiveness': 0.7,
+        'hard_example_mining_threshold': 0.1,
+        
+        # Quality filtering
+        'automatic_data_cleaning': True,
+        'data_quality_threshold': 0.85,
+        'diversity_penalty': 0.1,               # Penalize repetitive patterns
+        
+        # Adaptive batch construction
+        'sequence_length_optimization': True,
+        'similarity_aware_batching': True,      # Batch similar lengths together
+    }
+    
+    # ========================================================================
+    # 🛡️ 7. SAFETY & ROBUSTNESS PARAMETERS (NEW!)
+    # ========================================================================
+    safety_robustness_params = {
+        # Training stability
+        'maximum_acceptable_instability': 0.05,
+        'recovery_aggressiveness': 0.8,
+        'emergency_rollback_depth': 500,        # Steps to rollback
+        
+        # Output safety
+        'toxicity_monitoring': True,
+        'bias_detection_sensitivity': 0.7,
+        'factuality_guards': True,
+        
+        # Model health
+        'max_weight_norm': 10.0,
+        'max_gradient_norm': 5.0,
+    }
+    
+    # ========================================================================
+    # 🎯 8. MULTI-OBJECTIVE OPTIMIZATION PARAMETERS (NEW!)
+    # ========================================================================
+    multi_objective_optimization_params = {
+        # Trade-off management
+        'speed_quality_tradeoff': 0.5,          # 0 = max speed, 1 = max quality
+        'memory_performance_balance': 0.6,      # 0 = min memory, 1 = max perf
+        
+        # Objective weights
+        'primary_objective': 'quality',         # 'quality', 'speed', 'stability', 'efficiency'
+        'secondary_objective_speed': 0.3,
+        'secondary_objective_memory': 0.3,
+        'secondary_objective_quality': 0.4,
+        
+        # Constraint handling
+        'hard_constraints_memory': True,
+        'hard_constraints_time': True,
+        'soft_constraints_quality': True,
+        'soft_constraints_stability': True,
+    }
+    
+    # ========================================================================
+    # 🔄 9. ADAPTIVE LR PARAMETERS
+    # ========================================================================
+    adaptive_lr_params = {
+        'enable_adaptive_lr': True,
+        'allow_scheduler_override': True,
+        'min_override_threshold': 0.2,
+        'emergency_override_enabled': True,
+        'log_lr_decisions': True,
+    }
+    
+    # ========================================================================
+    # 📈 10. DATA CONFIGURATION
+    # ========================================================================
     data_params = {
-        # ===================================================================
-        # BASE TRAINING (Pre-training on raw text like The Pile, C4, etc. Works on .txt and .jsonl)
-        # ===================================================================
-
+        # Base training paths (pre-training on raw text - .txt and .jsonl)
         'base_training_paths': [
             'datasets/wikipedia_1.txt',
             'datasets/wikipedia_2.txt',
@@ -1540,13 +1687,11 @@ def main():
             'datasets/ccnews_1.txt',
         ],
 
-        'base_eval_paths': [ # Only .jsonl
+        'base_eval_paths': [  # Only .jsonl
             'datasets/oasst1_validation.jsonl',
         ],
 
-        # ===================================================================
-        # FINE-TUNING (Instruction tuning on conversations. Only works on .jsonl)
-        # ===================================================================
+        # Fine-tuning paths (instruction tuning - only .jsonl)
         'finetuning_paths': [
             'datasets/oasst1_train.jsonl',
             'datasets/oasst1_train_part2.jsonl',
@@ -1557,33 +1702,20 @@ def main():
             'datasets/oasst1_validation.jsonl',
         ],
 
-        # ===================================================================
-        # TRAINING MODE
-        # ===================================================================
-        'training_mode': 'hybrid',  # Options:
-        # - 'base_only': Only base/pre-training on raw text
-        # - 'finetuning_only': Only instruction/chat fine-tuning (default)
-        # - 'hybrid': Sequential - base training THEN fine-tuning
-        # - 'interleaved': Mixed - alternate between base and fine-tuning
+        # Training mode
+        'training_mode': 'hybrid',  # 'base_only', 'finetuning_only', 'hybrid', 'interleaved'
+        'base_finetuning_ratio': 0.7,  # For interleaved mode: 70% base, 30% fine-tuning
 
-        # For 'interleaved' mode only:
-        'base_finetuning_ratio': 0.7,  # 70% base, 30% fine-tuning
-
-        # ===================================================================
-        # DATASET PROCESSING
-        # ===================================================================
+        # Dataset processing
         'max_conversations_per_dataset': None,
         'validate_datasets': True,
         'cache_combined_dataset': True,
         'streaming_threshold_gb': 10.0,  # Use streaming for files > 10GB
     }
-    # Validate data paths FIRST
-    if not validate_data_paths(data_params):
-        print("\n❌ Data path validation failed. Cannot continue.")
-        print("Please check your file paths in the data_params configuration.\n")
-        return 1
     
-    # DeepSpeed configuration
+    # ========================================================================
+    # 💾 11. DEEPSPEED & QUANTIZATION CONFIGURATION
+    # ========================================================================
     deepspeed_params = {
         'use_deepspeed': False,
         'cpu_offload': True,
@@ -1594,29 +1726,33 @@ def main():
         'max_grad_norm': 1.0,
     }
     
-    # Quantization configuration
     quantization_params = {
         'quantization_method': None,  # Options: None, 'bnb', 'gptq', 'quanto'
-        'quantization_bits': None,  # Options: None, 4, 8
+        'quantization_bits': None,    # Options: None, 4, 8
     }
-    # Add these to your monitoring_params or create a new checkpoint_params section:
+    
+    # ========================================================================
+    # 💾 12. CHECKPOINT PARAMETERS
+    # ========================================================================
     checkpoint_params = {
-        'resume_from_checkpoint': 'checkpoint_final_597.pt',  # ✅ SPECIFIC CHECKPOINT
-        'resume_training': True,        
+        'resume_from_checkpoint': None,  # Set to 'checkpoint_final_597.pt' to resume
+        'resume_training': False,        # Set to True to resume
         'reset_optimizer': False,       
         'reset_scheduler': False,       
     }
     
-    checkpoint_path = Path(checkpoint_params['resume_from_checkpoint'])
-    if checkpoint_params['resume_training'] and not checkpoint_path.exists():
+    checkpoint_path = Path(checkpoint_params.get('resume_from_checkpoint', ''))
+    if checkpoint_params['resume_training'] and checkpoint_path and not checkpoint_path.exists():
         print(f"⚠️ WARNING: Checkpoint not found: {checkpoint_path}")
         print("   Starting training from scratch instead")
         checkpoint_params['resume_training'] = False
     
-    # Monitoring and logging
+    # ========================================================================
+    # 📊 13. MONITORING & LOGGING PARAMETERS
+    # ========================================================================
     monitoring_params = {
         'log_level': "INFO",
-        'experiment_name': f'Advanced_Training_{datetime.now().strftime("%Y%m%d_%H%M%S")}',
+        'experiment_name': f'Enhanced_Training_{datetime.now().strftime("%Y%m%d_%H%M%S")}',
         'early_stopping_patience': 5,
         'backup_every_n_hours': 12,
         'enable_wandb': True,
@@ -1626,7 +1762,9 @@ def main():
         'log_every_n_steps': 50,
     }
     
-    # Advanced features configuration
+    # ========================================================================
+    # 🔧 14. ADVANCED FEATURES CONFIGURATION
+    # ========================================================================
     advanced_features = {
         'enable_data_validation': True,
         'generate_data_reports': True,
@@ -1637,53 +1775,42 @@ def main():
         'enable_profiling': False,
         'save_optimizer_states': True,
     }
+    
+    # ========================================================================
+    # 📐 15. CHINCHILLA SCALING PARAMETERS
+    # ========================================================================
     chinchilla_params = {
-        'auto_epoch_scaling': True,      # Enable/disable auto-scaling
-        'min_auto_epochs': 1,            # Minimum epochs (safety)
-        'max_auto_epochs': 50,           # Maximum epochs (safety)
-
-        # 🆕 ADD THESE REQUIRED PARAMETERS:
-        'chinchilla_multiplier': 20,     # Tokens per parameter (20 is standard)
-
-        # Enhanced feature toggles
+        'auto_epoch_scaling': True,
+        'min_auto_epochs': 1,
+        'max_auto_epochs': 50,
+        'chinchilla_multiplier': 20,
         'enable_loss_landscape': True,
-        'enable_compute_efficiency': True, 
+        'enable_compute_efficiency': True,
         'enable_adaptive_curriculum': True,
         'enable_early_stopping': True,
-
-        # Threshold parameters
-        'plateau_patience': 5,           # Epochs to wait before plateau detection
-        'efficiency_decline_threshold': 0.3,  # When to flag efficiency drops
-        'convergence_threshold': 0.85,   # When to consider model converged
-
-        # Optional advanced features
+        'plateau_patience': 5,
+        'efficiency_decline_threshold': 0.3,
+        'convergence_threshold': 0.85,
         'enable_memory_aware_scaling': True,
         'quality_aware_adjustment': True,
     }
     
-    # =================================================
+    # ========================================================================
     # END CONFIGURATION SECTION
+    # ========================================================================
 
+    # Validate data paths FIRST
+    if not validate_data_paths(data_params):
+        print("\n✗ Data path validation failed. Cannot continue.")
+        print("Please check your file paths in the data_params configuration.\n")
+        return 1
+    
+    # Check MPS compatibility if applicable
     if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-        print_banner("MPS COMPATIBILITY CHECK")
-        is_compatible, issues = validate_mps_compatibility(config)
-        
-        if not is_compatible:
-            print("MPS Compatibility Issues Detected:")
-            for i, issue in enumerate(issues, 1):
-                print(f"  {i}. {issue}")
-            
-            print("\nApplying automatic fixes...")
-            config.apply_device_optimizations('mps')
-            
-            # Re-validate
-            is_compatible, remaining_issues = validate_mps_compatibility(config)
-            if remaining_issues:
-                print("\nRemaining issues after auto-fix:")
-                for issue in remaining_issues:
-                    print(f"  ⚠️  {issue}")
-        else:
-            print("✓ Configuration is MPS compatible")
+        # Will validate after config is created
+        is_mps = True
+    else:
+        is_mps = False
     
     # Setup logging
     logging.basicConfig(
@@ -1698,11 +1825,21 @@ def main():
     logger = logging.getLogger(__name__)
     
     # Print startup banner
-    print_banner("DEEPSEEK MOE TRANSFORMER - ADVANCED TRAINING SYSTEM")
+    print_banner("DEEPSEEK MOE TRANSFORMER - ENHANCED TRAINING SYSTEM V2.0")
     print(f"Experiment: {monitoring_params['experiment_name']}")
     print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Mode: {'Adaptive AI-Driven' if use_adaptive_training else 'Standard'} Training")
-    print(f"")
+    print("")
+    print("🎯 ENHANCED FEATURES ENABLED:")
+    print("  ✓ Adaptive Intelligence")
+    print("  ✓ Dynamic Architecture")
+    print("  ✓ Predictive Optimization")
+    print("  ✓ Quality-Aware Training")
+    print("  ✓ Hardware-Aware Optimization")
+    print("  ✓ Data Intelligence")
+    print("  ✓ Safety & Robustness")
+    print("  ✓ Multi-Objective Optimization")
+    print("")
     print(f"System Status:")
     print(f"  Training Infrastructure: {'Available' if TRAINING_INFRASTRUCTURE_AVAILABLE else 'Not Available'}")
     print(f"  Utils Modules: {'Available' if UTILS_AVAILABLE else 'Not Available'}")
@@ -1718,7 +1855,7 @@ def main():
         print_system_diagnostics()
         
         # Step 2: Create base configuration
-        print_banner("STEP 2: CREATING CONFIGURATION")
+        print_banner("STEP 2: CREATING ENHANCED CONFIGURATION")
         print(f"Loading configuration preset: {config_choice}")
         
         if hasattr(ConfigPresets, config_choice):
@@ -1727,8 +1864,6 @@ def main():
         else:
             raise ValueError(f"Unknown config preset: {config_choice}")
 
-        # After: config = getattr(ConfigPresets, config_choice)()
-        
         # FORCE REMOVE ANY LIMITS
         config.limit_train_batches = None
         config.max_train_steps = None  
@@ -1740,45 +1875,85 @@ def main():
         
         # Apply all parameter overrides
         all_params = {
-            **training_params, 
+            **training_params,
+            **adaptive_intelligence_params,
+            **dynamic_architecture_params,
+            **predictive_optimization_params,
+            **quality_aware_training_params,
+            **hardware_aware_optimization_params,
+            **data_intelligence_params,
+            **safety_robustness_params,
+            **multi_objective_optimization_params,
+            **adaptive_lr_params,
             **data_params, 
             **deepspeed_params, 
             **checkpoint_params,
             **quantization_params,
             **monitoring_params,
             **advanced_features,
-            **adaptive_lr_params,
             **chinchilla_params,
         }
         
-        print_section("Applying Parameter Overrides")
-        print(f"Total parameters to override: {len(all_params)}")
+        print_section("Applying Enhanced Parameter Overrides")
+        print(f"Total parameters to configure: {len(all_params)}")
         
+        # Group parameters by category for better output
+        param_categories = {
+            'Adaptive Intelligence': adaptive_intelligence_params,
+            'Dynamic Architecture': dynamic_architecture_params,
+            'Predictive Optimization': predictive_optimization_params,
+            'Quality-Aware Training': quality_aware_training_params,
+            'Hardware Optimization': hardware_aware_optimization_params,
+            'Data Intelligence': data_intelligence_params,
+            'Safety & Robustness': safety_robustness_params,
+            'Multi-Objective': multi_objective_optimization_params,
+        }
+        
+        for category, params in param_categories.items():
+            print(f"\n{category}:")
+            configured_count = 0
+            for key, value in params.items():
+                setattr(config, key, value)
+                configured_count += 1
+            print(f"  ✓ Configured {configured_count} parameters")
+        
+        # Apply remaining parameters silently
         override_count = 0
         for key, value in all_params.items():
             if value is not None:
                 old_value = getattr(config, key, None)
                 setattr(config, key, value)
                 if old_value is not None and old_value != value and key not in ['raw_oasst_path']:
-                    print(f"  {key}: {old_value} -> {value}")
                     override_count += 1
         
-        print(f"Applied {override_count} configuration overrides")
-
-        print("\nApplying Adaptive LR parameters...")
-        for key, value in adaptive_lr_params.items():
-            setattr(config, key, value)
-        print(f"  {key}: {value}")
-
-        # Apply Chinchilla scaling parameters
-        print("\nApplying Chinchilla scaling parameters...")
-        for key, value in chinchilla_params.items():
-            setattr(config, key, value)
-            print(f"  {key}: {value}")
+        print(f"\n✓ Applied {override_count} additional configuration overrides")
+        print(f"✓ Total enhanced parameters: {len(all_params)}")
+        
+        # Validate MPS compatibility if applicable
+        if is_mps:
+            print_banner("MPS COMPATIBILITY CHECK")
+            is_compatible, issues = validate_mps_compatibility(config)
+            
+            if not is_compatible:
+                print("MPS Compatibility Issues Detected:")
+                for i, issue in enumerate(issues, 1):
+                    print(f"  {i}. {issue}")
+                
+                print("\nApplying automatic fixes...")
+                config.apply_device_optimizations('mps')
+                
+                # Re-validate
+                is_compatible, remaining_issues = validate_mps_compatibility(config)
+                if remaining_issues:
+                    print("\nRemaining issues after auto-fix:")
+                    for issue in remaining_issues:
+                        print(f"  ⚠️ {issue}")
+            else:
+                print("✓ Configuration is MPS compatible")
         
         # Step 3: Validate precision support
         print_banner("STEP 3: VALIDATING PRECISION SUPPORT")
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        device = torch.device('cuda' if torch.cuda.is_available() else ('mps' if is_mps else 'cpu'))
         training_precision = training_params.get('precision', 'fp32')
         inference_precision = training_params.get('inference_precision', 'fp16')
         
@@ -1794,36 +1969,38 @@ def main():
             print(f"\nTraining cannot continue with unsupported precision.")
             return 1
         else:
-            print(f"Training precision validated successfully")
+            print(f"✓ Training precision validated successfully")
         
         # Validate inference precision
         is_supported, error_msg = validate_precision_support(inference_precision, device)
         if not is_supported:
-            print(f"\nWARNING: Inference precision not supported")
+            print(f"\n⚠️ Inference precision not supported")
             print(f"  {error_msg}")
             print(f"  Using training precision for inference instead")
             config.inference_precision = training_precision
         else:
-            print(f"Inference precision validated successfully")
+            print(f"✓ Inference precision validated successfully")
         
         # Step 4: Validate configuration
-        print_banner("STEP 4: VALIDATING CONFIGURATION")
+        print_banner("STEP 4: VALIDATING ENHANCED CONFIGURATION")
         try:
             config.validate()
-            print("Configuration validation passed")
+            print("✓ Configuration validation passed")
             print(f"  Batch size: {config.batch_size}")
             print(f"  Sequence length: {config.seq_length}")
             print(f"  Learning rate: {config.learning_rate}")
             print(f"  Epochs: {config.num_epochs}")
+            print(f"  Risk Tolerance: {config.adaptive_risk_tolerance}")
+            print(f"  Hardware Optimization: {config.hardware_optimization_level}")
         except Exception as e:
-            print(f"Configuration validation failed: {e}")
+            print(f"✗ Configuration validation failed: {e}")
             return 1
         
         # Step 5: Initialize tokenizer
         print_banner("STEP 5: INITIALIZING TOKENIZER")
         tokenizer = ConversationTokenizer()
         config.vocab_size = tokenizer.vocab_size
-        print(f"Tokenizer initialized successfully")
+        print(f"✓ Tokenizer initialized successfully")
         print(f"  Vocabulary size: {config.vocab_size:,}")
         print(f"  Special tokens: {len(tokenizer.special_tokens) if hasattr(tokenizer, 'special_tokens') else 'N/A'}")
         
@@ -1835,17 +2012,12 @@ def main():
             print_banner("STEP 6: DATA PREPARATION (BASIC)")
             print("Skipping advanced data validation")
         
-        # Complete replacement for Step 7 in Main.py (around line 1270-1350)
-        # This handles both single and multiple dataset files correctly
-
-        # Step 7: Setup datasets
-        print_banner("STEP 7: SETTING UP DATASETS")
+        # Step 7: Setup datasets with data intelligence
+        print_banner("STEP 7: SETTING UP DATASETS WITH DATA INTELLIGENCE")
         
-        # Use the HybridDatasetManager from dataset.py
         from core.dataset import HybridDatasetManager, setup_datasets
 
-        # First, transfer data_params to config attributes
-        # This ensures the HybridDatasetManager can read them
+        # Transfer data params to config attributes
         config.base_training_paths = data_params.get('base_training_paths', [])
         config.base_eval_paths = data_params.get('base_eval_paths', [])
         config.finetuning_paths = data_params.get('finetuning_paths', [])
@@ -1853,17 +2025,17 @@ def main():
         config.training_mode = data_params.get('training_mode', 'finetuning_only')
         config.data_cache_dir = data_params.get('data_cache_dir', 'data/cache')
         config.streaming_threshold_gb = data_params.get('streaming_threshold_gb', 10.0)
-
-        # Additional config settings
         config.base_finetuning_ratio = data_params.get('base_finetuning_ratio', 0.5)
         config.max_conversations_per_dataset = data_params.get('max_conversations_per_dataset', None)
 
         print(f"\nTraining mode: {config.training_mode}")
-        print(f"Fine-tuning paths: {config.finetuning_paths}")
-        print(f"Fine-tuning eval paths: {config.finetuning_eval_paths}")
+        print(f"Data Intelligence Features:")
+        print(f"  Difficulty-based sampling: {config.difficulty_based_sampling}")
+        print(f"  Curriculum learning aggressiveness: {config.curriculum_learning_aggressiveness}")
+        print(f"  Automatic data cleaning: {config.automatic_data_cleaning}")
+        print(f"  Quality threshold: {config.data_quality_threshold}")
+        print(f"  Sequence length optimization: {config.sequence_length_optimization}")
 
-        # Use the setup_datasets function which handles everything
-        print("\nSetting up datasets using HybridDatasetManager...")
         try:
             train_dataset, eval_dataset = setup_datasets(config, tokenizer)
 
@@ -1878,29 +2050,9 @@ def main():
             print(f"\n✗ Dataset loading failed: {e}")
             import traceback
             traceback.print_exc()
+            return 1
 
-            # Provide helpful error messages
-            print("\n" + "="*80)
-            print("TROUBLESHOOTING DATASET ERROR")
-            print("="*80)
-            print("\nPlease check:")
-            print("1. All file paths in finetuning_paths exist:")
-            for i, path in enumerate(config.finetuning_paths, 1):
-                exists = Path(path).exists()
-                status = "✓" if exists else "✗"
-                print(f"   {status} [{i}] {path}")
-
-            print("\n2. Files are valid JSONL format")
-            print("3. Directory permissions allow reading")
-
-        # Try to give specific advice based on the error
-            if "IsADirectoryError" in str(e):
-                print("\n⚠️  ERROR: A directory path was passed instead of a file path")
-                print("   Check that all paths in finetuning_paths point to actual files, not directories")
-
-            sys.exit(1)
-
-        # Display dataset statistics if available
+        # Display dataset statistics
         print("\n" + "="*80)
         print("DATASET & TRAINING CALCULATION VERIFICATION")
         print("="*80)
@@ -1919,28 +2071,28 @@ def main():
         if advanced_features.get('estimate_training_time'):
             estimate_and_display_training_time(config, len(train_dataset))
         
-        
-        # Step 9: Initialize model
-        print_banner("STEP 9: INITIALIZING MODEL")
+        # Step 9: Initialize model with dynamic architecture
+        print_banner("STEP 9: INITIALIZING MODEL WITH DYNAMIC ARCHITECTURE")
         print("Creating model configuration...")
         model_config = config_to_deepseek_config(config)
         
         print("Initializing model architecture...")
         model = DeepSeekTransformer(model_config)
         
-        if torch.__version__ >= "2.0" and not is_mps:
+        # Model compilation
+        if torch.__version__ >= "2.0" and not is_mps and config.compile:
             logging.info("Compiling model with torch.compile...")
             model = torch.compile(
                 model,
-                mode='reduce-overhead',  # Best for training
+                mode='reduce-overhead',
                 fullgraph=True,
                 dynamic=False
             )
-            logging.info("✅ Model compiled")
+            logging.info("✓ Model compiled")
 
+        # Apply FP16-safe initialization
         def init_weights_for_fp16(module):
             if isinstance(module, (nn.Linear, nn.Embedding)):
-                # Use smaller std for FP16 stability
                 module.weight.data.normal_(mean=0.0, std=0.02)
                 if isinstance(module, nn.Linear) and module.bias is not None:
                     module.bias.data.zero_()
@@ -1950,6 +2102,7 @@ def main():
 
         model.apply(init_weights_for_fp16)
         print("✓ Applied FP16-safe weight initialization")
+        
         total_params = sum(p.numel() for p in model.parameters())
         trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         
@@ -1967,31 +2120,44 @@ def main():
             print(f"  Top-K Routing: {config.moe_top_k}")
             print(f"  Capacity Factor: {config.capacity_factor}")
             print(f"  Load Balancing Weight: {config.load_balancing_weight}")
+            print(f"\nDynamic Architecture Features:")
+            print(f"  Dynamic Expert Management: {config.dynamic_expert_management}")
+            print(f"  Expert Growth Threshold: {config.expert_growth_threshold}")
+            print(f"  Expert Prune Threshold: {config.expert_prune_threshold}")
+            print(f"  Max Experts Per Layer: {config.max_experts_per_layer}")
+            print(f"  Min Experts Per Layer: {config.min_experts_per_layer}")
 
         # Step 9.5: Auto-adjust epochs using Chinchilla scaling
         if getattr(config, 'auto_epoch_scaling', False):
-            if not CHINCHILLA_SCALER_AVAILABLE:
-                print("⚠️ Chinchilla scaler not available, using basic scaling")
+            if CHINCHILLA_SCALER_AVAILABLE:
+                print_banner("STEP 9.5: CHINCHILLA EPOCH SCALING")               
+            else:
+                print("⚠️ Chinchilla scaler not available, skipping auto-scaling")
         
-        # Step 10: Initialize training system
-        print_banner("STEP 10: INITIALIZING TRAINING SYSTEM")
+        # Step 10: Initialize enhanced training system
+        print_banner("STEP 10: INITIALIZING ENHANCED TRAINING SYSTEM")
         
         orchestrator = None
         
         if use_adaptive_training and TRAINING_INFRASTRUCTURE_AVAILABLE:
-            print("Initializing Adaptive Training Orchestrator")
-            print("\nAdvanced Features:")
-            print("  - AI-driven hyperparameter optimization")
-            print("  - Real-time performance monitoring")
-            print("  - Adaptive learning rate scheduling")
-            print("  - Advanced checkpointing system")
-            print("  - Meta-learning capabilities")
-            print("  - Automatic recovery from failures")
-            print("  - Performance profiling and analysis")
+            print("Initializing Enhanced Adaptive Training Orchestrator")
+            print("\n🚀 ENHANCED FEATURES ACTIVE:")
+            print("  ✓ AI-driven hyperparameter optimization")
+            print("  ✓ Adaptive intelligence with meta-learning")
+            print("  ✓ Real-time performance monitoring")
+            print("  ✓ Dynamic architecture optimization")
+            print("  ✓ Predictive resource management")
+            print("  ✓ Quality-aware training guards")
+            print("  ✓ Hardware-specific optimizations")
+            print("  ✓ Intelligent data sampling")
+            print("  ✓ Multi-objective optimization")
+            print("  ✓ Advanced safety & robustness")
+            print("  ✓ Automatic recovery from failures")
+            print("  ✓ Performance profiling and analysis")
             
             try:
                 orchestrator = AdaptiveTrainingOrchestrator(config)
-                print("\nOrchestrator initialized successfully")
+                print("\n✓ Orchestrator initialized successfully")
                 print("\n" + "="*80)
                 print("🔍 TRAINER VERIFICATION")
                 print("="*80)
@@ -2004,30 +2170,32 @@ def main():
                 print(f"Trainer type: {trainer_type}")
 
                 if trainer_type == 'AdaptiveTrainer':
-                    print("❌ CRITICAL ERROR: Using fallback trainer!")
+                    print("✗ CRITICAL ERROR: Using fallback trainer!")
                     print("   Real EnhancedConversationTrainer failed to load")
                     print("   Training will NOT work!")
                     sys.exit(1)
 
                 # Verify train method exists and is callable
                 if not hasattr(orchestrator.trainer, 'train'):
-                    print("❌ CRITICAL ERROR: Trainer has no train method!")
+                    print("✗ CRITICAL ERROR: Trainer has no train method!")
                     sys.exit(1)
 
                 if not callable(orchestrator.trainer.train):
-                    print("❌ CRITICAL ERROR: Trainer.train is not callable!")
+                    print("✗ CRITICAL ERROR: Trainer.train is not callable!")
                     sys.exit(1)
 
-                print("✅ Trainer verification passed")
-                print(f"✅ Trainer class: {orchestrator.trainer.__class__.__module__}.{trainer_type}")
+                print("✓ Trainer verification passed")
+                print(f"✓ Trainer class: {orchestrator.trainer.__class__.__module__}.{trainer_type}")
                 print("="*80 + "\n")
 
-                if getattr(config, 'auto_epoch_scaling', False):
-                    print_banner("ENHANCED CHINCHILLA SCALER INTEGRATION")
+                # Integrate Chinchilla scaler if enabled
+                if getattr(config, 'auto_epoch_scaling', False) and CHINCHILLA_SCALER_AVAILABLE:
+                    print_banner("INTEGRATING ENHANCED CHINCHILLA SCALER")
                     scaler = EnhancedChinchillaScaler(config, model, train_dataset)
                     config.num_epochs = scaler.get_optimal_epochs()
                     orchestrator.trainer.chinchilla_scaler = scaler
-                    print(f"✅ Chinchilla scaler attached to trainer")
+                    print(f"✓ Chinchilla scaler attached to trainer")
+                    print(f"✓ Optimal epochs: {config.num_epochs}")
                     print("="*80 + "\n")
             except Exception as e:
                 print(f"\nERROR: Failed to initialize orchestrator: {e}")
@@ -2043,18 +2211,31 @@ def main():
             print("  - training.checkpoint")
             return 1
         
-        # Step 10.5: Checkpoint Resumption - WORKING VERSION
-        print_banner("STEP 10.5: CHECKPOINT RESUMPTION")
+        # After Chinchilla integration in Step 10:
+        if getattr(config, 'auto_epoch_scaling', False):
+            print("\n" + "="*80)
+            print("🧠 CHINCHILLA SYSTEM VERIFICATION")
+            print("="*80)
+            print(f"Original epochs in config: {training_params['num_epochs']}")
+            print(f"Final epochs after Chinchilla: {config.num_epochs}")
+            print(f"Chinchilla scaler attached: {hasattr(orchestrator.trainer, 'chinchilla_scaler')}")
+            if hasattr(orchestrator.trainer, 'chinchilla_scaler'):
+                scaler = orchestrator.trainer.chinchilla_scaler
+                print(f"Scaler type: {type(scaler).__name__}")
+                print(f"Optimal epochs calculated: {scaler.get_optimal_epochs()}")
+            print("="*80)
+
+        # Step 10.5: Checkpoint Resumption
+        print_banner("STEP 10.5: CHECKPOINT MANAGEMENT")
 
         if checkpoint_params.get('resume_training', False) and checkpoint_params.get('resume_from_checkpoint'):
             checkpoint_path = checkpoint_params['resume_from_checkpoint']
-            print(f"🔄 Loading checkpoint: {checkpoint_path}")
+            print(f"📄 Loading checkpoint: {checkpoint_path}")
 
             try:
-                # Simple direct loading - no complex functions
                 checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
 
-                print("✅ Checkpoint loaded successfully!")
+                print("✓ Checkpoint loaded successfully!")
                 print(f"📋 Checkpoint info:")
                 print(f"   - Epoch: {checkpoint.get('epoch', 'unknown')}")
                 print(f"   - Global step: {checkpoint.get('global_step', 'unknown')}")
@@ -2063,19 +2244,19 @@ def main():
                 # Load model state
                 if 'model_state_dict' in checkpoint:
                     model.load_state_dict(checkpoint['model_state_dict'])
-                    print("✅ Model weights loaded")
+                    print("✓ Model weights loaded")
 
                 # Load optimizer state if available and not reset
                 if not checkpoint_params.get('reset_optimizer', False) and 'optimizer_state_dict' in checkpoint:
                     if hasattr(orchestrator.trainer, 'optimizer'):
                         orchestrator.trainer.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-                        print("✅ Optimizer state loaded")
+                        print("✓ Optimizer state loaded")
 
                 # Load scheduler state if available and not reset
                 if not checkpoint_params.get('reset_scheduler', False) and 'scheduler_state_dict' in checkpoint:
                     if hasattr(orchestrator.trainer, 'scheduler') and orchestrator.trainer.scheduler:
                         orchestrator.trainer.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-                        print("✅ Scheduler state loaded")
+                        print("✓ Scheduler state loaded")
 
                 # Set training state
                 start_epoch = checkpoint.get('epoch', 0) + 1
@@ -2087,62 +2268,85 @@ def main():
                 orchestrator.global_step = global_step
                 orchestrator.best_loss = best_loss
 
-                print(f"🎯 Training will continue from:")
+                print(f"\n🎯 Training will continue from:")
                 print(f"   - Epoch: {start_epoch}")
                 print(f"   - Global step: {global_step}")
                 print(f"   - Best loss: {best_loss:.4f}")
 
             except Exception as e:
-                print(f"❌ Error loading checkpoint: {e}")
+                print(f"✗ Error loading checkpoint: {e}")
                 print("Starting training from scratch...")
                 checkpoint_params['resume_training'] = False
         else:
             print("Starting fresh training session")
+            print("✓ No checkpoint to resume from")
 
-        print_banner("CHECKPOINT DETAILED INSPECTION")
+        # Verify scheduler
+        print("\n" + "="*80)
+        print("🔍 SCHEDULER VERIFICATION")
+        print("="*80)
 
-        try:
-            checkpoint = torch.load('checkpoint_final_597.pt', map_location='cpu')
+        if hasattr(orchestrator.trainer, 'scheduler'):
+            if orchestrator.trainer.scheduler is not None:
+                scheduler_type = type(orchestrator.trainer.scheduler).__name__
+                print(f"✓ Scheduler found: {scheduler_type}")
 
-            print("📋 FULL CHECKPOINT CONTENTS:")
-            for key, value in checkpoint.items():
-                if isinstance(value, (int, float, str, bool)):
-                    print(f"   {key}: {value}")
-                elif hasattr(value, 'shape'):
-                    print(f"   {key}: tensor with shape {value.shape}")
-                else:
-                    print(f"   {key}: {type(value)}")
+                try:
+                    initial_lr = orchestrator.trainer.scheduler.get_last_lr()[0]
+                    base_lrs = orchestrator.trainer.scheduler.base_lrs
+                    print(f"✓ Initial LR: {initial_lr:.2e}")
+                    print(f"✓ Base LRs: {[f'{lr:.2e}' for lr in base_lrs]}")
+                    print(f"✓ Config LR: {orchestrator.config.learning_rate:.2e}")
 
-            # Check for training metrics
-            if 'training_metrics' in checkpoint:
-                print("📊 TRAINING METRICS:")
-                for metric, val in checkpoint['training_metrics'].items():
-                    print(f"   {metric}: {val}")
+                    # Verify they match
+                    if abs(initial_lr - orchestrator.config.learning_rate) > 1e-9:
+                        print(f"⚠️ WARNING: Scheduler LR doesn't match config LR!")
+                    else:
+                        print(f"✓ Scheduler LR matches config")
 
-            # Check if there are multiple epoch numbers
-            epoch_keys = [k for k in checkpoint.keys() if 'epoch' in k.lower()]
-            if epoch_keys:
-                print("📅 EPOCH-RELATED KEYS:")
-                for key in epoch_keys:
-                    print(f"   {key}: {checkpoint[key]}")
+                except Exception as e:
+                    print(f"⚠️ Could not read scheduler state: {e}")
+            else:
+                print("⚠️ Scheduler is None")
+                print(f"   use_lr_scheduler: {getattr(orchestrator.config, 'use_lr_scheduler', 'not set')}")
+                print(f"   LR will remain constant at: {orchestrator.config.learning_rate:.2e}")
+        else:
+            print("✗ Trainer has no scheduler attribute!")
 
-        except Exception as e:
-            print(f"❌ Inspection failed: {e}")
-
+        print("="*80 + "\n")
+        
         # Step 11: Setup signal handlers
         print_banner("STEP 11: SETTING UP SIGNAL HANDLERS")
         setup_signal_handlers(orchestrator)
-        print("Signal handlers configured for graceful shutdown")
+        print("✓ Signal handlers configured for graceful shutdown")
         print("  SIGINT (Ctrl+C): Save state and exit")
         print("  SIGTERM: Save state and exit")
         
         # Step 12: Create experiment directory and save metadata
         print_banner("STEP 12: EXPERIMENT SETUP")
         experiment_dir = validate_and_setup_experiment(config)
+        
+        # Save enhanced parameters summary
+        print_section("Saving Enhanced Parameters")
+        enhanced_params_path = experiment_dir / "enhanced_parameters.json"
+        enhanced_summary = {
+            'adaptive_intelligence': adaptive_intelligence_params,
+            'dynamic_architecture': dynamic_architecture_params,
+            'predictive_optimization': predictive_optimization_params,
+            'quality_aware_training': quality_aware_training_params,
+            'hardware_optimization': hardware_aware_optimization_params,
+            'data_intelligence': data_intelligence_params,
+            'safety_robustness': safety_robustness_params,
+            'multi_objective': multi_objective_optimization_params,
+        }
+        with open(enhanced_params_path, 'w') as f:
+            json.dump(enhanced_summary, f, indent=2)
+        print(f"✓ Enhanced parameters saved: {enhanced_params_path}")
+        
         save_experiment_metadata(experiment_dir, config, model, datasets_info)
         
-        # Step 13: Display training configuration summary
-        print_banner("STEP 13: TRAINING CONFIGURATION SUMMARY")
+        # Step 13: Display enhanced training configuration summary
+        print_banner("STEP 13: ENHANCED TRAINING CONFIGURATION SUMMARY")
         
         print_section("Model Configuration")
         print(f"  Hidden Size: {config.hidden_size}")
@@ -2151,7 +2355,7 @@ def main():
         print(f"  Sequence Length: {config.seq_length}")
         print(f"  MoE: {'Enabled' if config.use_moe else 'Disabled'}")
         
-        print_section("Training Configuration")
+        print_section("Enhanced Training Configuration")
         print(f"  Epochs: {config.num_epochs}")
         print(f"  Batch Size: {config.batch_size}")
         print(f"  Gradient Accumulation: {config.gradient_accumulation_steps}")
@@ -2162,6 +2366,73 @@ def main():
         print(f"  Weight Decay: {config.weight_decay}")
         print(f"  Precision: {config.precision}")
         print(f"  Gradient Checkpointing: {config.gradient_checkpointing}")
+        
+        print_section("Adaptive Intelligence Features")
+        print(f"  Risk Tolerance: {config.adaptive_risk_tolerance}")
+        print(f"  Meta-Learning Transfer Weight: {config.learning_transfer_weight}")
+        print(f"  Strategy Memory Size: {config.strategy_memory_size}")
+        print(f"  Exploration Rate: {config.exploration_rate}")
+        print(f"  Confidence Thresholds:")
+        print(f"    - Soft: {config.meta_confidence_soft}")
+        print(f"    - Medium: {config.meta_confidence_medium}")
+        print(f"    - Hard: {config.meta_confidence_hard}")
+        print(f"    - Critical: {config.meta_confidence_critical}")
+        
+        print_section("Dynamic Architecture Features")
+        if config.use_moe:
+            print(f"  Dynamic Expert Management: {config.dynamic_expert_management}")
+            print(f"  Expert Growth Threshold: {config.expert_growth_threshold}")
+            print(f"  Expert Prune Threshold: {config.expert_prune_threshold}")
+            print(f"  Max Experts Per Layer: {config.max_experts_per_layer}")
+            print(f"  Min Experts Per Layer: {config.min_experts_per_layer}")
+        print(f"  MoD Capacity Adaptation: {config.mod_capacity_adaptation}")
+        print(f"  Per-Layer Routing Config: {config.per_layer_routing_config}")
+        
+        print_section("Predictive Optimization Features")
+        print(f"  Convergence Prediction Horizon: {config.convergence_prediction_horizon} steps")
+        print(f"  Plateau Detection Window: {config.plateau_detection_window} steps")
+        print(f"  Divergence Early Warning: {config.divergence_early_warning} steps")
+        print(f"  Memory Trend Analysis: {config.memory_trend_analysis}")
+        print(f"  OOM Prediction Confidence: {config.oom_prediction_confidence}")
+        print(f"  Importance-Based Checkpointing: {config.importance_based_checkpointing}")
+        
+        print_section("Quality & Safety Features")
+        print(f"  Loss Smoothness Threshold: {config.loss_smoothness_threshold}")
+        print(f"  Gradient Health Monitoring: {config.gradient_health_monitoring}")
+        print(f"  Curvature-Aware Training: {config.curvature_aware_training}")
+        print(f"  Max Perplexity Spike: {config.max_perplexity_spike}")
+        print(f"  Min Quality Improvement: {config.min_quality_improvement}")
+        print(f"  Catastrophic Forgetting Threshold: {config.catastrophic_forgetting_threshold}")
+        print(f"  Toxicity Monitoring: {config.toxicity_monitoring}")
+        print(f"  Max Weight Norm: {config.max_weight_norm}")
+        print(f"  Max Gradient Norm: {config.max_gradient_norm}")
+        
+        print_section("Hardware Optimization Features")
+        print(f"  Hardware Optimization Level: {config.hardware_optimization_level}")
+        print(f"  Tensor Core Optimization: {config.tensor_core_optimization}")
+        print(f"  Memory Bus Utilization Target: {config.memory_bus_utilization_target}")
+        print(f"  Communication Overlap Aggressiveness: {config.communication_overlap_aggressiveness}")
+        print(f"  Gradient Sync Strategy: {config.gradient_sync_strategy}")
+        print(f"  Thermal Throttling Avoidance: {config.thermal_throttling_avoidance}")
+        
+        print_section("Data Intelligence Features")
+        print(f"  Difficulty-Based Sampling: {config.difficulty_based_sampling}")
+        print(f"  Curriculum Learning Aggressiveness: {config.curriculum_learning_aggressiveness}")
+        print(f"  Hard Example Mining Threshold: {config.hard_example_mining_threshold}")
+        print(f"  Automatic Data Cleaning: {config.automatic_data_cleaning}")
+        print(f"  Data Quality Threshold: {config.data_quality_threshold}")
+        print(f"  Diversity Penalty: {config.diversity_penalty}")
+        print(f"  Sequence Length Optimization: {config.sequence_length_optimization}")
+        print(f"  Similarity-Aware Batching: {config.similarity_aware_batching}")
+        
+        print_section("Multi-Objective Optimization")
+        print(f"  Primary Objective: {config.primary_objective}")
+        print(f"  Speed-Quality Tradeoff: {config.speed_quality_tradeoff}")
+        print(f"  Memory-Performance Balance: {config.memory_performance_balance}")
+        print(f"  Secondary Objective Weights:")
+        print(f"    - Speed: {config.secondary_objective_speed}")
+        print(f"    - Memory: {config.secondary_objective_memory}")
+        print(f"    - Quality: {config.secondary_objective_quality}")
         
         print_section("Optimization Configuration")
         if quantization_params.get('quantization_method'):
@@ -2177,116 +2448,14 @@ def main():
         print(f"  Steps per Epoch: {len(train_dataset) // (config.batch_size * config.gradient_accumulation_steps)}")
         print(f"  Total Training Steps: {(len(train_dataset) // (config.batch_size * config.gradient_accumulation_steps)) * config.num_epochs}")
         
-        # Step 14: Start training
-
-        print_banner("QUICK RESUME TEST")
-
-        if checkpoint_params.get('resume_training', False):
-            print("🧪 Testing resume functionality...")
-
-            # Force a manual resume with proper error handling
-            try:
-                print("🔄 Attempting to load checkpoint manually...")
-                checkpoint = torch.load(checkpoint_params['resume_from_checkpoint'], map_location='cpu', weights_only=False)
-
-                print(f"📁 Checkpoint contents:")
-                for key in checkpoint.keys():
-                    if key not in ['model_state_dict', 'optimizer_state_dict', 'scheduler_state_dict']:
-                        print(f"   {key}: {checkpoint[key]}")
-
-                # Force set epoch to continue from
-                if 'epoch' in checkpoint:
-                    orchestrator.start_epoch = checkpoint['epoch'] + 1
-                    print(f"🎯 Will continue from epoch: {orchestrator.start_epoch}")
-                else:
-                    print("⚠️  No epoch found in checkpoint")
-
-                print("✅ Manual resume test PASSED")
-
-            except Exception as e:
-                print(f"❌ Resume test failed: {e}")
-                print("⚠️  Will attempt proper loading in checkpoint resumption step...")  
-
-        print_banner("STEP 14: STARTING ADAPTIVE TRAINING")
+        # Step 14: Start enhanced training
+        print_banner("STEP 14: STARTING ENHANCED ADAPTIVE TRAINING")
         print(f"Training begins at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"Experiment directory: {experiment_dir}")
         print("")
+        print("🎯 All enhanced features are active and monitoring training")
         print("Press Ctrl+C at any time to gracefully stop training and save progress")
         print("="*80)
-        
-        # ✅ CRITICAL FIX: Initialize trainer BEFORE wrapping with OOM protection
-        print("="*80)
-        print("INITIALIZING TRAINER")
-        print("="*80)
-        
-        try:
-            orchestrator.initialize_training()
-            
-            if orchestrator.trainer is None:
-                print("❌ CRITICAL: Trainer initialization returned None!")
-                return 1
-            
-            # Check if using fallback trainer (bad sign)
-            trainer_type = type(orchestrator.trainer).__name__
-            if trainer_type == 'AdaptiveTrainer':
-                print("⚠️  WARNING: Using fallback AdaptiveTrainer!")
-                print("   Real trainer initialization failed silently")
-                print("   Training may not work properly")
-            
-            print(f"✅ Trainer initialized: {trainer_type}")
-            print(f"✅ Trainer has train method: {hasattr(orchestrator.trainer, 'train')}")
-            
-            # Safe device check
-            try:
-                if hasattr(orchestrator.trainer, 'device'):
-                    print(f"✅ Model device: {orchestrator.trainer.device}")
-                else:
-                    print(f"⚠️  Device attribute not available (fallback trainer)")
-            except Exception as e:
-                print(f"⚠️  Could not get device: {e}")
-            
-            print(f"✅ Model parameters: {sum(p.numel() for p in orchestrator.model.parameters()):,}")
-            print("="*80)
-
-            print("\n" + "="*80)
-            print("📊 SCHEDULER VERIFICATION")
-            print("="*80)
-    
-            if hasattr(orchestrator.trainer, 'scheduler'):
-                if orchestrator.trainer.scheduler is not None:
-                    scheduler_type = type(orchestrator.trainer.scheduler).__name__
-                    print(f"✅ Scheduler found: {scheduler_type}")
-
-                    try:
-                        initial_lr = orchestrator.trainer.scheduler.get_last_lr()[0]
-                        base_lrs = orchestrator.trainer.scheduler.base_lrs
-                        print(f"✅ Initial LR: {initial_lr:.2e}")
-                        print(f"✅ Base LRs: {[f'{lr:.2e}' for lr in base_lrs]}")
-                        print(f"✅ Config LR: {orchestrator.config.learning_rate:.2e}")
-
-                        # Verify they match
-                        if abs(initial_lr - orchestrator.config.learning_rate) > 1e-9:
-                            print(f"⚠️  WARNING: Scheduler LR doesn't match config LR!")
-                        else:
-                            print(f"✅ Scheduler LR matches config")
-
-                    except Exception as e:
-                        print(f"⚠️  Could not read scheduler state: {e}")
-                else:
-                    print("⚠️  Scheduler is None")
-                    print(f"   use_lr_scheduler: {getattr(orchestrator.config, 'use_lr_scheduler', 'not set')}")
-                    print(f"   LR will remain constant at: {orchestrator.config.learning_rate:.2e}")
-            else:
-                print("❌ Trainer has no scheduler attribute!")
-
-            print("="*80 + "\n")
-            
-        except Exception as e:
-            print("❌ CRITICAL: Trainer initialization failed!")
-            print(f"Error: {e}")
-            import traceback
-            traceback.print_exc()
-            return 1
         
         training_start_time = time.time()
         
@@ -2307,7 +2476,6 @@ def main():
             print("TRAINING ERROR")
             print("="*80)
             print(f"Error: {e}")
-            import traceback
             traceback.print_exc()
             raise
         
@@ -2316,7 +2484,7 @@ def main():
         total_training_hours = total_training_time / 3600
         
         # Step 15: Training completion summary
-        print_banner("TRAINING COMPLETED SUCCESSFULLY!")
+        print_banner("🎉 ENHANCED TRAINING COMPLETED SUCCESSFULLY!")
         
         print_section("Training Summary")
         print(f"  Experiment: {config.experiment_name}")
@@ -2324,23 +2492,27 @@ def main():
         print(f"  Completed: {datetime.fromtimestamp(training_end_time).strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"  Total Time: {total_training_hours:.2f} hours ({total_training_time/60:.1f} minutes)")
         
-        # Get adaptive training status
+        # Get enhanced adaptive training status
         status = orchestrator.get_adaptive_status()
         
-        print_section("Adaptive Training Statistics")
+        print_section("Enhanced Adaptive Training Statistics")
         print(f"  Adaptive Decisions Made: {status.get('adaptive_decisions_made', 'N/A')}")
         print(f"  Metrics Collected: {status.get('metrics_collected', 'N/A')}")
         print(f"  Meta-Learning Runs: {status.get('meta_learning_runs', 'N/A')}")
         print(f"  Checkpoints Saved: {status.get('checkpoints_saved', 'N/A')}")
+        print(f"  Expert Adjustments: {status.get('expert_adjustments', 0)}")
+        print(f"  Quality Interventions: {status.get('quality_interventions', 0)}")
+        print(f"  Memory Optimizations: {status.get('memory_optimizations', 0)}")
+        print(f"  LR Adjustments: {status.get('lr_adjustments', 0)}")
         
         # Step 16: Generate final reports (ADVANCED)
         if advanced_features.get('generate_training_reports') and UTILS_AVAILABLE:
             print_banner("STEP 16: GENERATING TRAINING REPORTS")
             try:
                 create_training_report(str(experiment_dir))
-                print(f"Training report generated: {experiment_dir}/training_report.html")
+                print(f"✓ Training report generated: {experiment_dir}/training_report.html")
             except Exception as e:
-                print(f"Warning: Could not generate training report: {e}")
+                print(f"⚠️ Could not generate training report: {e}")
         
         # Step 17: Save final summary
         print_section("Saving Final Summary")
@@ -2357,16 +2529,29 @@ def main():
                 'trainable': trainable_params,
                 'non_trainable': total_params - trainable_params,
             },
+            'enhanced_features': {
+                'adaptive_intelligence': True,
+                'dynamic_architecture': True,
+                'predictive_optimization': True,
+                'quality_aware_training': True,
+                'hardware_optimization': True,
+                'data_intelligence': True,
+                'safety_robustness': True,
+                'multi_objective': True,
+            },
             'configuration': {
                 'model_preset': config_choice,
                 'moe_enabled': config.use_moe,
                 'num_experts': config.num_experts if config.use_moe else None,
                 'quantization': quantization_params.get('quantization_method'),
                 'precision': config.precision,
-                'training_mode': 'adaptive',
+                'training_mode': 'enhanced_adaptive',
                 'batch_size': config.batch_size,
                 'learning_rate': config.learning_rate,
                 'epochs': config.num_epochs,
+                'risk_tolerance': config.adaptive_risk_tolerance,
+                'hardware_optimization_level': config.hardware_optimization_level,
+                'primary_objective': config.primary_objective,
             },
             'dataset_info': {
                 'train_samples': len(train_dataset),
@@ -2379,14 +2564,25 @@ def main():
         summary_path = experiment_dir / "training_summary.json"
         with open(summary_path, 'w') as f:
             json.dump(summary, f, indent=2, default=str)
-        print(f"Training summary saved: {summary_path}")
+        print(f"✓ Training summary saved: {summary_path}")
         
         # Final success message
-        print_banner("ALL OPERATIONS COMPLETED SUCCESSFULLY")
+        print_banner("✨ ALL OPERATIONS COMPLETED SUCCESSFULLY ✨")
         print(f"Experiment directory: {experiment_dir}")
         print(f"Total execution time: {(time.time() - training_start_time)/3600:.2f} hours")
         print("")
-        print("Thank you for using the DeepSeek MoE Training System!")
+        print("🚀 Enhanced DeepSeek MoE Training System V2.0")
+        print("   With Advanced AI-Driven Optimization")
+        print("")
+        print("Enhanced features utilized:")
+        print("  ✓ Adaptive Intelligence")
+        print("  ✓ Dynamic Architecture")
+        print("  ✓ Predictive Optimization")
+        print("  ✓ Quality-Aware Training")
+        print("  ✓ Hardware-Aware Optimization")
+        print("  ✓ Data Intelligence")
+        print("  ✓ Safety & Robustness")
+        print("  ✓ Multi-Objective Optimization")
         print("="*80)
         
         return 0
@@ -2400,9 +2596,9 @@ def main():
         if 'orchestrator' in locals() and orchestrator:
             try:
                 orchestrator._save_meta_learning_state()
-                print("Meta-learning state saved successfully")
+                print("✓ Meta-learning state saved successfully")
             except Exception as e:
-                print(f"Error saving state: {e}")
+                print(f"⚠️ Error saving state: {e}")
         
         print("Graceful shutdown complete")
         return 0
@@ -2429,9 +2625,9 @@ def main():
             try:
                 print("Cleaning up orchestrator...")
                 orchestrator.cleanup()
-                print("Orchestrator cleanup complete")
+                print("✓ Orchestrator cleanup complete")
             except Exception as e:
-                print(f"Orchestrator cleanup error: {e}")
+                print(f"⚠️ Orchestrator cleanup error: {e}")
         
         # Clear GPU memory
         if torch.cuda.is_available():
@@ -2444,6 +2640,9 @@ def main():
                 print(f"  GPU Memory Reserved: {memory_reserved:.2f} GB")
             except:
                 pass
+        elif is_mps:
+            print("Clearing MPS memory cache...")
+            torch.mps.empty_cache()
         
         # Run garbage collection
         print("Running garbage collection...")
@@ -2458,7 +2657,7 @@ def main():
             except:
                 pass
         
-        print("Cleanup complete")
+        print("✓ Cleanup complete")
         print("="*80)
 
 
