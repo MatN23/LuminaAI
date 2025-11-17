@@ -1484,16 +1484,19 @@ def main():
         'warmup_ratio': 0.02,
         'batch_size': 25,
         'gradient_accumulation_steps': 8,
+        
         'precision': "fp32",
         'inference_precision': "fp16",
         'num_experts': 8,
         'moe_top_k': 1,
         'compile': True,
+        
         'max_memory_usage': 0.85,
         'save_every_n_batches': 1000,
         'eval_every_n_batches': 500,
         'use_flash_attention': True,
         'gradient_checkpointing': True,
+        
         'num_workers': 0,
         'save_total_limit': 5,
         'weight_decay': 0.01,
@@ -1556,7 +1559,7 @@ def main():
         
         # Smart checkpointing
         'importance_based_checkpointing': True,
-        'checkpoint_quality_metric': 'loss_gradient',  # or 'convergence_rate'
+        'checkpoint_quality_metric': 'loss_gradient',  # 'loss_gradient' or 'convergence_rate'
     }
     
     # ========================================================================
@@ -1717,12 +1720,12 @@ def main():
     # 💾 11. DEEPSPEED & QUANTIZATION CONFIGURATION
     # ========================================================================
     deepspeed_params = {
-        'use_deepspeed': False,
+        'use_deepspeed': True,
         'cpu_offload': True,
-        'cpu_offload_optimizer': False,
-        'cpu_offload_parameters': False,
-        'zero_stage': 2,
-        'nvme_path': None,
+        'cpu_offload_optimizer': True,
+        'cpu_offload_parameters': True,
+        'zero_stage': 3,
+        'nvme_path': "nvme_offloading",
         'max_grad_norm': 1.0,
     }
     
