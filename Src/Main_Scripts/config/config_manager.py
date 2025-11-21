@@ -66,7 +66,7 @@ class Config:
     
     # MoE parameters
     use_moe: bool = True
-    use_mod: bool= True,
+    use_mod: bool = True
     num_experts: int = 8
     moe_top_k: int = 1
     capacity_factor: float = 1.5
