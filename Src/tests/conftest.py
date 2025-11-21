@@ -110,9 +110,28 @@ def mock_config():
 @pytest.fixture
 def mock_tokenizer():
     """Create mock tokenizer for testing."""
+    class MockHFTokenizer:
+        """Mock HuggingFace tokenizer that's nested inside ConversationTokenizer."""
+        def encode(self, text, add_special_tokens=False, return_tensors=None):
+            """Encode text to token IDs."""
+            if isinstance(text, list):
+                # Batch encoding
+                return [list(range(min(len(t), 50))) for t in text]
+            else:
+                # Single text encoding
+                return list(range(min(len(text), 50)))
+        
+        def decode(self, token_ids, skip_special_tokens=True):
+            """Decode token IDs to text."""
+            return "decoded text"
+    
     class MockTokenizer:
+        """Mock ConversationTokenizer that wraps a HuggingFace tokenizer."""
         vocab_size = 1000
         pad_token_id = 0
+        
+        # Nested tokenizer (HuggingFace tokenizer)
+        tokenizer = MockHFTokenizer()
         
         special_tokens = {
             "<|im_start|>": 1000,
