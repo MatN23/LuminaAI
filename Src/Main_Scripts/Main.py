@@ -1725,7 +1725,7 @@ def main():
         'cpu_offload_optimizer': True,
         'cpu_offload_parameters': True,
         'zero_stage': 3,
-        'nvme_path': "nvme_offloading",
+        'nvme_path': None,
         'max_grad_norm': 1.0,
     }
     
