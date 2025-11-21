@@ -641,7 +641,8 @@ class AdaptiveTrainingOrchestrator:
         
         # Real-time monitoring thread
         self.monitoring_thread = None
-        self.monitoring_queue = queue.Queue()
+        # Bounded queue to prevent memory leaks (max 1000 metrics)
+        self.monitoring_queue = queue.Queue(maxsize=1000)
         
         # Setup signal handlers
         self._setup_signal_handlers()
@@ -771,14 +772,24 @@ class AdaptiveTrainingOrchestrator:
         def monitoring_loop():
             while self.is_training and not self.should_stop:
                 try:
-                    # Get latest metrics
-                    if not self.monitoring_queue.empty():
-                        metrics = self.monitoring_queue.get_nowait()
+                    # Get latest metrics with timeout to allow checking should_stop
+                    try:
+                        metrics = self.monitoring_queue.get(timeout=1.0)
                         self._process_real_time_metrics(metrics)
+                    except queue.Empty:
+                        # No metrics available, continue loop to check should_stop
+                        continue
                     
-                    time.sleep(1)  # Check every second
+                except (KeyboardInterrupt, SystemExit):
+                    # Allow graceful shutdown
+                    logging.info("Monitoring thread received interrupt signal")
+                    break
                 except Exception as e:
                     logging.error(f"Error in monitoring loop: {e}")
+                    import traceback
+                    logging.error(traceback.format_exc())
+                    # Continue monitoring even if one metric fails
+                    time.sleep(0.5)
         
         self.monitoring_thread = threading.Thread(target=monitoring_loop, daemon=True)
         self.monitoring_thread.start()
@@ -1107,7 +1118,22 @@ class AdaptiveTrainingOrchestrator:
             if hasattr(self.trainer, 'get_current_metrics'):
                 metrics = self.trainer.get_current_metrics()
                 if metrics:
-                    self.monitoring_queue.put(metrics)
+                    try:
+                        # Non-blocking put to prevent training from stalling
+                        self.monitoring_queue.put(metrics, block=False)
+                    except queue.Full:
+                        # Queue is full - drop oldest metric and add new one
+                        try:
+                            self.monitoring_queue.get_nowait()  # Remove oldest
+                            self.monitoring_queue.put(metrics, block=False)  # Add new
+                            logging.warning("Monitoring queue full, dropped oldest metric")
+                        except queue.Empty:
+                            # Race condition - queue became empty, just add new metric
+                            try:
+                                self.monitoring_queue.put(metrics, block=False)
+                            except queue.Full:
+                                # Still full, log and skip
+                                logging.warning("Monitoring queue persistently full, skipping metric")
             
             return result
         
@@ -1646,7 +1672,11 @@ class AdaptiveTrainingOrchestrator:
                     )
                     
                     if hasattr(self, '_orchestrator_queue'):
-                        self._orchestrator_queue.put(mock_metrics)
+                        try:
+                            self._orchestrator_queue.put(mock_metrics, block=False)
+                        except queue.Full:
+                            # Queue full, skip this metric
+                            pass
                     
                     self.global_step += 1
             
@@ -1722,9 +1752,28 @@ class AdaptiveTrainingOrchestrator:
         """Clean up adaptive training resources."""
         logging.info("Cleaning up adaptive training system...")
         
+        # Stop monitoring thread gracefully
         if self.monitoring_thread and self.monitoring_thread.is_alive():
             self.should_stop = True
-            self.monitoring_thread.join(timeout=5)
+            self.is_training = False  # Ensure monitoring loop exits
+            
+            # Wait for thread to finish with increased timeout
+            self.monitoring_thread.join(timeout=10)
+            
+            if self.monitoring_thread.is_alive():
+                logging.warning("Monitoring thread did not stop gracefully within timeout")
+            else:
+                logging.info("Monitoring thread stopped successfully")
+        
+        # Clear any remaining metrics from queue
+        try:
+            while not self.monitoring_queue.empty():
+                try:
+                    self.monitoring_queue.get_nowait()
+                except queue.Empty:
+                    break
+        except Exception as e:
+            logging.debug(f"Error clearing monitoring queue: {e}")
         
         # Save final adaptive state
         self._save_meta_learning_state()

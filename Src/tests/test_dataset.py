@@ -1,11 +1,17 @@
 import pytest
 import torch
+import sys
+from pathlib import Path
+
+# Add Src directory to Python path for imports
+_src_path = Path(__file__).parent.parent
+if str(_src_path) not in sys.path:
+    sys.path.insert(0, str(_src_path))
 
 
 class TestConversationDataset:
     """Test conversation dataset."""
     
-    @pytest.mark.skipif(True, reason="Requires HuggingFace datasets")
     def test_dataset_loading(self, sample_conversation_data, mock_tokenizer, mock_config):
         """Test conversation dataset can be loaded."""
         try:
@@ -27,11 +33,10 @@ class TestConversationDataset:
         except ImportError:
             pytest.skip("Dataset module not available")
     
-    @pytest.mark.skipif(True, reason="Requires HuggingFace datasets")
     def test_dataloader_creation(self, sample_conversation_data, mock_tokenizer, mock_config):
         """Test dataloader can be created."""
         try:
-            from Main_Scripts.core.dataset import FastConversationDataset
+            from Main_Scripts.core.dataset import FastConversationDataset, create_dataloader
             
             dataset = FastConversationDataset(
                 sample_conversation_data,
@@ -54,11 +59,10 @@ class TestConversationDataset:
 class TestBaseTrainingDataset:
     """Test base training dataset."""
     
-    @pytest.mark.skipif(True, reason="Requires HuggingFace datasets")
     def test_base_dataset_loading(self, sample_base_training_data, mock_tokenizer, mock_config):
         """Test base training dataset can be loaded."""
         try:
-            from Main_Scripts.core.dataset import FastConversationDataset
+            from Main_Scripts.core.dataset import FastBaseTrainingDataset
             
             dataset = FastBaseTrainingDataset(
                 sample_base_training_data,

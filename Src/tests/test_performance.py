@@ -2,6 +2,13 @@ import pytest
 import torch
 import time
 import gc
+import sys
+from pathlib import Path
+
+# Add Src directory to Python path for imports
+_src_path = Path(__file__).parent.parent
+if str(_src_path) not in sys.path:
+    sys.path.insert(0, str(_src_path))
 
 
 class TestForwardPassPerformance:

@@ -1,13 +1,18 @@
 import pytest
 import torch
+import sys
 from pathlib import Path
+
+# Add Src directory to Python path for imports
+_src_path = Path(__file__).parent.parent
+if str(_src_path) not in sys.path:
+    sys.path.insert(0, str(_src_path))
 
 
 class TestEndToEnd:
     """End-to-end training tests."""
     
     @pytest.mark.slow
-    @pytest.mark.skipif(True, reason="Requires full setup")
     def test_minimal_training_run(
         self, temp_dir, sample_conversation_data,
         mock_tokenizer, mock_config, mock_logger

@@ -7,8 +7,14 @@ import torch
 import tempfile
 import shutil
 import json
+import sys
 from pathlib import Path
 from unittest.mock import Mock
+
+# Add Src directory to Python path for imports
+_src_path = Path(__file__).parent.parent
+if str(_src_path) not in sys.path:
+    sys.path.insert(0, str(_src_path))
 
 
 @pytest.fixture
@@ -88,6 +94,9 @@ def mock_config():
         # Adaptive LR
         enable_adaptive_lr = True
         allow_scheduler_override = True
+        
+        # Experiment directory (will be set by tests if needed)
+        experiment_dir = None
         
         def validate(self):
             pass

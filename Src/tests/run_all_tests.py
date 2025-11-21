@@ -37,26 +37,29 @@ def main():
     # Determine which tests to run
     test_files = []
     
+    # Get the tests directory path
+    tests_dir = Path(__file__).parent
+    
     if args.model_only:
-        test_files = ['tests/test_model.py']
+        test_files = [str(tests_dir / 'test_model.py')]
     elif args.trainer_only:
-        test_files = ['tests/test_trainer.py']
+        test_files = [str(tests_dir / 'test_trainer.py')]
     elif args.integration:
-        test_files = ['tests/test_integration.py']
+        test_files = [str(tests_dir / 'test_integration.py')]
     elif args.performance:
-        test_files = ['tests/test_performance.py']
+        test_files = [str(tests_dir / 'test_performance.py')]
     else:
         test_files = [
-            'tests/test_model.py',
-            'tests/test_tokenizer.py',
-            'tests/test_dataset.py',
-            'tests/test_trainer.py',
-            'tests/test_integration.py',
-            'tests/test_performance.py',
-            'tests/test_orchestrator.py',
+            str(tests_dir / 'test_model.py'),
+            str(tests_dir / 'test_tokenizer.py'),
+            str(tests_dir / 'test_dataset.py'),
+            str(tests_dir / 'test_trainer.py'),
+            str(tests_dir / 'test_integration.py'),
+            str(tests_dir / 'test_performance.py'),
+            str(tests_dir / 'test_orchestrator.py'),
         ]
         if not args.fast:
-            test_files.append('tests/test_e2e.py')
+            test_files.append(str(tests_dir / 'test_e2e.py'))
     
     # Build pytest command
     pytest_cmd = ['pytest']

@@ -17,8 +17,10 @@ from unittest.mock import Mock, patch
 import sys
 from pathlib import Path
 
-# Add project root to path
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add Src directory to Python path for imports
+_src_path = Path(__file__).parent.parent
+if str(_src_path) not in sys.path:
+    sys.path.insert(0, str(_src_path))
 
 
 # ============================================================================

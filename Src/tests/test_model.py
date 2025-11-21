@@ -1,5 +1,13 @@
 import pytest
 import torch
+import sys
+from pathlib import Path
+
+# Add Src directory to Python path for imports
+_src_path = Path(__file__).parent.parent
+if str(_src_path) not in sys.path:
+    sys.path.insert(0, str(_src_path))
+
 from Main_Scripts.core.model import (
     RMSNorm, RotaryEmbedding, apply_rotary_pos_emb,
     SwiGLUExpert, MoEFFNLayer, DenseGroupedQueryAttention,
