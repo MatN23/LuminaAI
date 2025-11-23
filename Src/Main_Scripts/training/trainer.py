@@ -2185,51 +2185,6 @@ class EnhancedConversationTrainer:
         
         return ds_config
     
-    def _setup_scheduler(self, total_steps: int):
-        """Setup learning rate scheduler with warmup - FIXED to actually create scheduler."""
-        warmup_ratio = getattr(self.config, 'warmup_ratio', 0.1)
-        warmup_steps = int(total_steps * warmup_ratio)
-
-        lr_scheduler = getattr(self.config, 'lr_scheduler', 'cosine')  # ✅ Changed default to 'cosine'
-
-        if lr_scheduler == "cosine":
-            from torch.optim.lr_scheduler import LambdaLR
-
-            def lr_lambda(current_step: int):
-                if current_step < warmup_steps:
-                    # Warmup: 0 -> 1.0
-                    return float(current_step) / float(max(1, warmup_steps))
-                else:
-                    # Cosine decay: 1.0 -> min_lr_ratio
-                    progress = (current_step - warmup_steps) / max(1, (total_steps - warmup_steps))
-                    min_lr_ratio = self.config.min_lr / self.config.learning_rate
-                    return max(min_lr_ratio, 0.5 * (1.0 + math.cos(math.pi * progress)))
-
-            self.scheduler = LambdaLR(self.optimizer, lr_lambda)
-            print(f"✅ Cosine scheduler initialized: warmup={warmup_steps}, total={total_steps}")
-
-        elif lr_scheduler == "onecycle":
-            self.scheduler = OneCycleLR(
-                self.optimizer, max_lr=self.config.learning_rate,
-                total_steps=total_steps, pct_start=warmup_ratio
-            )
-            print(f"✅ OneCycle scheduler initialized: warmup={warmup_steps}, total={total_steps}")
-
-        else:
-            # ✅ CRITICAL FIX: Create a basic linear warmup scheduler as fallback
-            from torch.optim.lr_scheduler import LambdaLR
-
-            def lr_lambda(current_step: int):
-                if current_step < warmup_steps:
-                    return float(current_step) / float(max(1, warmup_steps))
-                else:
-                    # Linear decay
-                    progress = (current_step - warmup_steps) / max(1, (total_steps - warmup_steps))
-                    return max(0.0, 1.0 - progress)
-
-            self.scheduler = LambdaLR(self.optimizer, lr_lambda)
-            print(f"⚠️ Unknown scheduler '{lr_scheduler}', using linear warmup+decay: warmup={warmup_steps}, total={total_steps}")
-    
     def _create_standard_optimizer(self) -> torch.optim.Optimizer:
         """Create standard PyTorch optimizer."""
         decay_params = []
@@ -3313,8 +3268,29 @@ class EnhancedConversationTrainer:
 
     
     def _setup_scheduler(self, total_steps: int):
-        """Setup learning rate scheduler with warmup - ACTUALLY creates and assigns scheduler."""
-
+        """
+        Setup learning rate scheduler with warmup - COMPLETE VERSION
+        
+        Handles:
+        - DeepSpeed (uses DeepSpeed's internal scheduler)
+        - Standard PyTorch training (creates PyTorch scheduler)
+        - Multiple scheduler types (cosine, onecycle, constant, linear)
+        """
+        
+        # ✅ CRITICAL FIX: Skip scheduler setup if using DeepSpeed
+        if self.use_deepspeed:
+            print("\n" + "="*80)
+            print("SKIPPING SCHEDULER SETUP - USING DEEPSPEED SCHEDULER")
+            print("="*80)
+            print("DeepSpeed manages its own learning rate schedule")
+            print("Scheduler configuration is defined in DeepSpeed config:")
+            print("  Type: WarmupLR")
+            print(f"  Warmup steps: ~{int(total_steps * 0.02)}")
+            print(f"  Max LR: {self.config.learning_rate:.2e}")
+            print("="*80 + "\n")
+            self.scheduler = None
+            return
+        
         # ✅ CHECK: Is scheduler enabled?
         if not getattr(self.config, 'use_lr_scheduler', True):
             print("📊 Learning rate scheduler is DISABLED by config")
@@ -3335,62 +3311,105 @@ class EnhancedConversationTrainer:
         print(f"  Warmup ratio: {warmup_ratio}")
         print(f"  Warmup steps: {warmup_steps}")
         print(f"  LR scheduler type: {lr_scheduler}")
-        print(f"  Initial LR: {self.config.learning_rate}")
-        print(f"  Min LR: {getattr(self.config, 'min_lr', self.config.learning_rate * 0.1)}")
+        print(f"  Initial LR: {self.config.learning_rate:.2e}")
+        print(f"  Min LR: {getattr(self.config, 'min_lr', self.config.learning_rate * 0.1):.2e}")
 
-        if lr_scheduler == "cosine":
-            from torch.optim.lr_scheduler import LambdaLR
+        try:
+            if lr_scheduler == "cosine":
+                from torch.optim.lr_scheduler import LambdaLR
 
-            def lr_lambda(current_step: int):
-                if current_step < warmup_steps:
-                    return float(current_step) / float(max(1, warmup_steps))
-                else:
-                    progress = (current_step - warmup_steps) / max(1, (total_steps - warmup_steps))
-                    min_lr_ratio = self.config.min_lr / self.config.learning_rate
-                    return max(min_lr_ratio, 0.5 * (1.0 + math.cos(math.pi * progress)))
+                def lr_lambda(current_step: int):
+                    if current_step < warmup_steps:
+                        # Warmup: 0 -> 1.0
+                        return float(current_step) / float(max(1, warmup_steps))
+                    else:
+                        # Cosine decay: 1.0 -> min_lr_ratio
+                        progress = (current_step - warmup_steps) / max(1, (total_steps - warmup_steps))
+                        min_lr_ratio = getattr(self.config, 'min_lr', self.config.learning_rate * 0.1) / self.config.learning_rate
+                        return max(min_lr_ratio, 0.5 * (1.0 + math.cos(math.pi * progress)))
 
-            self.scheduler = LambdaLR(self.optimizer, lr_lambda)
-            print(f"✅ Cosine scheduler initialized")
+                self.scheduler = LambdaLR(self.optimizer, lr_lambda)
+                print(f"✅ Cosine scheduler initialized")
 
-        elif lr_scheduler == "onecycle":
-            self.scheduler = OneCycleLR(
-                self.optimizer, max_lr=self.config.learning_rate,
-                total_steps=total_steps, pct_start=warmup_ratio
-            )
-            print(f"✅ OneCycle scheduler initialized")
+            elif lr_scheduler == "onecycle":
+                from torch.optim.lr_scheduler import OneCycleLR
+                
+                self.scheduler = OneCycleLR(
+                    self.optimizer, 
+                    max_lr=self.config.learning_rate,
+                    total_steps=total_steps, 
+                    pct_start=warmup_ratio
+                )
+                print(f"✅ OneCycle scheduler initialized")
 
-        elif lr_scheduler == "constant":
-            from torch.optim.lr_scheduler import LambdaLR
+            elif lr_scheduler == "constant":
+                from torch.optim.lr_scheduler import LambdaLR
 
-            def constant_lr_lambda(current_step: int):
-                if current_step < warmup_steps:
-                    return float(current_step) / float(max(1, warmup_steps))
-                else:
-                    return 1.0
+                def constant_lr_lambda(current_step: int):
+                    if current_step < warmup_steps:
+                        return float(current_step) / float(max(1, warmup_steps))
+                    else:
+                        return 1.0
 
-            self.scheduler = LambdaLR(self.optimizer, constant_lr_lambda)
-            print(f"✅ Constant scheduler initialized (with warmup)")
+                self.scheduler = LambdaLR(self.optimizer, constant_lr_lambda)
+                print(f"✅ Constant scheduler initialized (with warmup)")
+            
+            elif lr_scheduler == "linear":
+                from torch.optim.lr_scheduler import LambdaLR
 
-        else:
-            # ✅ CRITICAL FIX: Create fallback scheduler instead of leaving None
-            from torch.optim.lr_scheduler import LambdaLR
+                def linear_lr_lambda(current_step: int):
+                    if current_step < warmup_steps:
+                        # Warmup
+                        return float(current_step) / float(max(1, warmup_steps))
+                    else:
+                        # Linear decay
+                        progress = (current_step - warmup_steps) / max(1, (total_steps - warmup_steps))
+                        min_lr_ratio = getattr(self.config, 'min_lr', 0) / self.config.learning_rate
+                        return max(min_lr_ratio, 1.0 - progress)
 
-            def lr_lambda(current_step: int):
-                if current_step < warmup_steps:
-                    return float(current_step) / float(max(1, warmup_steps))
-                else:
-                    progress = (current_step - warmup_steps) / max(1, (total_steps - warmup_steps))
-                    return max(0.0, 1.0 - progress)
+                self.scheduler = LambdaLR(self.optimizer, linear_lr_lambda)
+                print(f"✅ Linear scheduler initialized")
 
-            self.scheduler = LambdaLR(self.optimizer, lr_lambda)
-            print(f"⚠️ Unknown scheduler '{lr_scheduler}', using linear warmup+decay")
+            else:
+                # ✅ FALLBACK: Create basic linear warmup+decay scheduler
+                from torch.optim.lr_scheduler import LambdaLR
+                
+                print(f"⚠️ Unknown scheduler type '{lr_scheduler}', using linear warmup+decay fallback")
 
-        # ✅ CRITICAL VALIDATION
+                def fallback_lr_lambda(current_step: int):
+                    if current_step < warmup_steps:
+                        return float(current_step) / float(max(1, warmup_steps))
+                    else:
+                        progress = (current_step - warmup_steps) / max(1, (total_steps - warmup_steps))
+                        return max(0.1, 1.0 - progress)  # Min 10% of original LR
+
+                self.scheduler = LambdaLR(self.optimizer, fallback_lr_lambda)
+                print(f"✅ Fallback linear scheduler initialized")
+
+        except Exception as e:
+            print(f"❌ ERROR creating scheduler: {e}")
+            print(f"   Setting scheduler to None - LR will remain constant")
+            import traceback
+            traceback.print_exc()
+            self.scheduler = None
+            return
+
+        # ✅ VALIDATION
         if self.scheduler is None:
             print("❌ CRITICAL: Scheduler is None after setup!")
         else:
             print(f"✅ Scheduler type: {type(self.scheduler).__name__}")
-            print(f"✅ Initial LR from scheduler: {self.scheduler.get_last_lr()[0]:.2e}")
+            try:
+                initial_lr = self.scheduler.get_last_lr()[0]
+                print(f"✅ Initial LR from scheduler: {initial_lr:.2e}")
+                
+                # Verify it matches config
+                if abs(initial_lr - self.config.learning_rate) < 1e-10:
+                    print(f"✅ Scheduler LR matches config LR")
+                else:
+                    print(f"⚠️ WARNING: Scheduler LR ({initial_lr:.2e}) != Config LR ({self.config.learning_rate:.2e})")
+            except Exception as e:
+                print(f"⚠️ Could not verify scheduler LR: {e}")
 
         print("="*80 + "\n")
 

@@ -305,36 +305,49 @@ def wrap_orchestrator_with_oom_protection(orchestrator, train_dataset, eval_data
             # Run adaptive training
             orchestrator.run_adaptive_training()
 
-            # Verify scheduler is working
+            # Verify scheduler
             print("\n" + "="*80)
             print("🔍 SCHEDULER VERIFICATION")
             print("="*80)
 
-            if hasattr(orchestrator.trainer, 'scheduler') and orchestrator.trainer.scheduler:
-                scheduler = orchestrator.trainer.scheduler
-                print(f"✓ Scheduler exists: {type(scheduler).__name__}")
-                print(f"✓ Current LR: {scheduler.get_last_lr()[0]:.2e}")
-                print(f"✓ Base LRs: {scheduler.base_lrs}")
+            if hasattr(orchestrator.trainer, 'scheduler'):
+                if orchestrator.trainer.scheduler is not None:
+                    scheduler_type = type(orchestrator.trainer.scheduler).__name__
+                    print(f"✅ Scheduler found: {scheduler_type}")
 
-                # Test scheduler step
-                initial_lr = scheduler.get_last_lr()[0]
-                scheduler.step()
-                after_lr = scheduler.get_last_lr()[0]
+                    try:
+                        # DeepSpeed schedulers work differently
+                        if hasattr(orchestrator.trainer, 'use_deepspeed') and orchestrator.trainer.use_deepspeed:
+                            print(f"✅ Using DeepSpeed scheduler (managed internally)")
+                            print(f"   Initial LR: {orchestrator.config.learning_rate:.2e}")
+                            print(f"   Scheduler type: WarmupLR")
+                            print(f"   Warmup steps: ~{int(getattr(orchestrator, 'steps_per_epoch', 100) * 0.05)}")
+                        else:
+                            # Standard PyTorch scheduler verification
+                            initial_lr = orchestrator.trainer.scheduler.get_last_lr()[0]
+                            base_lrs = orchestrator.trainer.scheduler.base_lrs
+                            print(f"✅ Initial LR: {initial_lr:.2e}")
+                            print(f"✅ Base LRs: {[f'{lr:.2e}' for lr in base_lrs]}")
+                            print(f"✅ Config LR: {orchestrator.config.learning_rate:.2e}")
 
-                if abs(initial_lr - after_lr) > 1e-10:
-                    print(f"✓ Scheduler is WORKING: {initial_lr:.2e} → {after_lr:.2e}")
+                            # Verify they match
+                            if abs(initial_lr - orchestrator.config.learning_rate) > 1e-9:
+                                print(f"⚠️ WARNING: Scheduler LR doesn't match config LR!")
+                            else:
+                                print(f"✅ Scheduler LR matches config")
+
+                    except AttributeError as e:
+                        print(f"ℹ️ Scheduler state not fully accessible (normal for DeepSpeed): {e}")
+                    except Exception as e:
+                        print(f"⚠️ Could not fully verify scheduler: {e}")
                 else:
-                    print(f"⚠️ Scheduler not changing LR (might be in warmup)")
+                    print("⚠️ Scheduler is None")
+                    print(f"   use_lr_scheduler: {getattr(orchestrator.config, 'use_lr_scheduler', 'not set')}")
+                    print(f"   LR will remain constant at: {orchestrator.config.learning_rate:.2e}")
             else:
-                print("✗ CRITICAL: No scheduler found!")
+                print("❌ Trainer has no scheduler attribute!")
 
             print("="*80 + "\n")
-            
-            # Success!
-            print(f"\n{'='*80}")
-            print(f"✓ TRAINING COMPLETED SUCCESSFULLY")
-            print(f"{'='*80}")
-            break
             
         except RuntimeError as e:
             error_msg = str(e).lower()
@@ -1500,7 +1513,7 @@ def main():
         'precision': "fp32",
         'inference_precision': "fp16",
         'num_experts': 8,
-        'moe_top_k': 1,
+        'moe_top_k': 2,
         'compile': True,
         
         'max_memory_usage': 0.85,
@@ -1697,8 +1710,7 @@ def main():
             'datasets/pubmed_2.txt',
             'datasets/pubmed_3.txt',
             'datasets/pubmed_4.txt',  
-            'datasets/openwebtext_1.txt',    
-            'datasets/openwebtext_1.txt',  
+            'datasets/openwebtext_1.txt',     
             'datasets/ccnews_1.txt',
         ],
 
@@ -1718,7 +1730,7 @@ def main():
         ],
 
         # Training mode
-        'training_mode': 'hybrid',  # 'base_only', 'finetuning_only', 'hybrid', 'interleaved'
+        'training_mode': 'finetuning_only',  # 'base_only', 'finetuning_only', 'hybrid', 'interleaved'
         'base_finetuning_ratio': 0.7,  # For interleaved mode: 70% base, 30% fine-tuning
 
         # Dataset processing
@@ -1848,7 +1860,7 @@ def main():
     logger = logging.getLogger(__name__)
     
     # Print startup banner
-    print_banner("DEEPSEEK MOE TRANSFORMER - ENHANCED TRAINING SYSTEM V2.0")
+    print_banner("DEEPSEEK MOE TRANSFORMER - TRAINING SYSTEM")
     print(f"Experiment: {monitoring_params['experiment_name']}")
     print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Mode: {'Adaptive AI-Driven' if use_adaptive_training else 'Standard'} Training")
