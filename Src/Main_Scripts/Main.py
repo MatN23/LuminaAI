@@ -26,7 +26,6 @@ from torch.optim.lr_scheduler import OneCycleLR, CosineAnnealingLR
 from torch.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 import warnings
-import os
 import builtins
 import sys
 
@@ -132,6 +131,9 @@ except ImportError:
         print("✓ Advanced training infrastructure available (Orchestrator + Trainer + Checkpoint)")
     except ImportError:
         print("⚠ Advanced training infrastructure not available - will use fallback")
+
+os.environ['HF_DATASETS_DISABLE_PROGRESS_BARS'] = '1'
+os.environ['TRANSFORMERS_NO_ADVISORY_WARNINGS'] = '1'
 
 
 def validate_data_paths(data_params: dict) -> bool:

@@ -42,5 +42,3 @@ pybind11>=2.11.0
 cmake>=3.18.0
 pyarrow>=12.0.0
 polars>=0.19.0
-
-flash-attn>=2.0.1  # Optional, highly recommended for faster attention
