@@ -70,26 +70,50 @@ except ImportError:
 
 # Import our modules with fallbacks
 try:
+    # Direct import from config.config_manager
     from config.config_manager import Config, ConfigPresets
-except ImportError:
+    print("✓ Config loaded from config.config_manager")
+except ImportError as e:
+    print(f"Failed to import from config.config_manager: {e}")
     try:
+        # Try adding config to path and importing directly
+        import sys
+        from pathlib import Path
+        config_dir = Path(__file__).parent / 'config'
+        if str(config_dir) not in sys.path:
+            sys.path.insert(0, str(config_dir))
         from config_manager import Config, ConfigPresets
-    except ImportError:
+        print("✓ Config loaded from config_manager (direct)")
+    except ImportError as e2:
         print("ERROR: Could not import config classes")
+        print(f"  Primary error: {e}")
+        print(f"  Fallback error: {e2}")
+        print(f"  Current working directory: {os.getcwd()}")
+        print(f"  Script location: {Path(__file__).parent}")
+        config_path = Path(__file__).parent / 'config' / 'config_manager.py'
+        print(f"  Config file exists: {config_path.exists()}")
+        if config_path.exists():
+            print(f"  Config file path: {config_path}")
+        print(f"  Python path (first 3 entries): {sys.path[:3]}")
+        
+        # Check if yaml is installed
+        try:
+            import yaml
+            print("  PyYAML is installed")
+        except ImportError:
+            print("  ERROR: PyYAML is NOT installed!")
+            print("  Install with: pip install pyyaml")
+        
         sys.exit(1)
 
 try:
     from core.tokenizer import ConversationTokenizer
     from core.model import DeepSeekTransformer, DeepSeekConfig
     from core.dataset import ConversationDataset, create_dataloader
-except ImportError:
-    try:
-        from tokenizer import ConversationTokenizer
-        from model import DeepSeekTransformer, DeepSeekConfig
-        from core.dataset import ConversationDataset, create_dataloader, MultiDatasetManager
-    except ImportError:
-        print("ERROR: Could not import core modules")
-        sys.exit(1)
+    print("✓ Core modules loaded")
+except ImportError as e:
+    print(f"ERROR: Could not import core modules: {e}")
+    sys.exit(1)
 
 # Import training infrastructure (orchestrator, trainer, checkpoint)
 TRAINING_INFRASTRUCTURE_AVAILABLE = False
@@ -109,10 +133,6 @@ except ImportError:
     except ImportError:
         print("⚠ Advanced training infrastructure not available - will use fallback")
 
-"""
-Path Validator Helper
-Add this function to Main.py right after your imports and before main()
-"""
 
 def validate_data_paths(data_params: dict) -> bool:
     """
@@ -244,16 +264,6 @@ def validate_mps_compatibility(config) -> Tuple[bool, List[str]]:
     is_compatible = len(issues) == 0
     return is_compatible, issues
 
-
-# Add this to your main() function right after data_params is defined:
-# Example usage in main():
-"""
-    # After defining data_params:
-    if not validate_data_paths(data_params):
-        print("\n✗ Data path validation failed. Cannot continue.")
-        print("Please check your file paths in the data_params configuration.\n")
-        return 1
-"""
 
 def wrap_orchestrator_with_oom_protection(orchestrator, train_dataset, eval_dataset):
     """
@@ -1503,7 +1513,7 @@ def main():
     }
 
     # ========================================================================
-    # 🧠 1. ADAPTIVE INTELLIGENCE PARAMETERS (NEW!)
+    # 1. ADAPTIVE INTELLIGENCE PARAMETERS
     # ========================================================================
     adaptive_intelligence_params = {
         # Meta-learning confidence thresholds
@@ -1522,7 +1532,7 @@ def main():
     }
     
     # ========================================================================
-    # 🏗️ 2. DYNAMIC ARCHITECTURE PARAMETERS (NEW!)
+    # 2. DYNAMIC ARCHITECTURE PARAMETERS
     # ========================================================================
     dynamic_architecture_params = {
         # MoE Expert Management
@@ -1544,7 +1554,7 @@ def main():
     }
     
     # ========================================================================
-    # 🔮 3. PREDICTIVE OPTIMIZATION PARAMETERS (NEW!)
+    # 3. PREDICTIVE OPTIMIZATION PARAMETERS
     # ========================================================================
     predictive_optimization_params = {
         # Convergence prediction
@@ -1563,7 +1573,7 @@ def main():
     }
     
     # ========================================================================
-    # ✅ 4. QUALITY-AWARE TRAINING PARAMETERS (NEW!)
+    # 4. QUALITY-AWARE TRAINING PARAMETERS
     # ========================================================================
     quality_aware_training_params = {
         # Loss landscape awareness
@@ -1581,7 +1591,7 @@ def main():
     }
     
     # ========================================================================
-    # ⚡ 5. HARDWARE-AWARE OPTIMIZATION PARAMETERS (NEW!)
+    # ⚡ 5. HARDWARE-AWARE OPTIMIZATION PARAMETERS
     # ========================================================================
     hardware_aware_optimization_params = {
         # GPU architecture specific
@@ -1599,7 +1609,7 @@ def main():
     }
     
     # ========================================================================
-    # 📚 6. DATA INTELLIGENCE PARAMETERS (NEW!)
+    # 6. DATA INTELLIGENCE PARAMETERS
     # ========================================================================
     data_intelligence_params = {
         # Dynamic data sampling
@@ -1618,7 +1628,7 @@ def main():
     }
     
     # ========================================================================
-    # 🛡️ 7. SAFETY & ROBUSTNESS PARAMETERS (NEW!)
+    # 7. SAFETY & ROBUSTNESS PARAMETERS
     # ========================================================================
     safety_robustness_params = {
         # Training stability
@@ -1637,7 +1647,7 @@ def main():
     }
     
     # ========================================================================
-    # 🎯 8. MULTI-OBJECTIVE OPTIMIZATION PARAMETERS (NEW!)
+    # 8. MULTI-OBJECTIVE OPTIMIZATION PARAMETERS
     # ========================================================================
     multi_objective_optimization_params = {
         # Trade-off management
@@ -1658,7 +1668,7 @@ def main():
     }
     
     # ========================================================================
-    # 🔄 9. ADAPTIVE LR PARAMETERS
+    # 9. ADAPTIVE LR PARAMETERS
     # ========================================================================
     adaptive_lr_params = {
         'enable_adaptive_lr': True,
@@ -1669,7 +1679,7 @@ def main():
     }
     
     # ========================================================================
-    # 📈 10. DATA CONFIGURATION
+    # 10. DATA CONFIGURATION
     # ========================================================================
     data_params = {
         # Base training paths (pre-training on raw text - .txt and .jsonl)
@@ -1717,7 +1727,7 @@ def main():
     }
     
     # ========================================================================
-    # 💾 11. DEEPSPEED & QUANTIZATION CONFIGURATION
+    # 11. DEEPSPEED & QUANTIZATION CONFIGURATION
     # ========================================================================
     deepspeed_params = {
         'use_deepspeed': True,
@@ -1759,7 +1769,7 @@ def main():
         checkpoint_params['resume_training'] = False
     
     # ========================================================================
-    # 📊 13. MONITORING & LOGGING PARAMETERS
+    # 13. MONITORING & LOGGING PARAMETERS
     # ========================================================================
     monitoring_params = {
         'log_level': "INFO",
@@ -1774,7 +1784,7 @@ def main():
     }
     
     # ========================================================================
-    # 🔧 14. ADVANCED FEATURES CONFIGURATION
+    # 14. ADVANCED FEATURES CONFIGURATION
     # ========================================================================
     advanced_features = {
         'enable_data_validation': True,
@@ -1788,7 +1798,7 @@ def main():
     }
     
     # ========================================================================
-    # 📐 15. CHINCHILLA SCALING PARAMETERS
+    # 15. CHINCHILLA SCALING PARAMETERS
     # ========================================================================
     chinchilla_params = {
         'auto_epoch_scaling': True,
