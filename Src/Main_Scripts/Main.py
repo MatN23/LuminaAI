@@ -1418,7 +1418,7 @@ def auto_adjust_epochs_chinchilla(config, model, dataset):
     
     # Chinchilla scaling: N_opt ≈ 20 * P (20 tokens per parameter)
     N_opt = int(20 * P)  # Optimal total tokens to see
-    print(f"🎯 Chinchilla Optimal Tokens: {N_opt:,} ({N_opt/1e9:.2f}B)")
+    print(f"Chinchilla Optimal Tokens: {N_opt:,} ({N_opt/1e9:.2f}B)")
     
     # Calculate needed epochs
     if dataset_tokens <= 0:
@@ -1473,7 +1473,7 @@ def main():
     """Main training function with advanced features and comprehensive logging."""
     
     # ========================================================================
-    # 🎯 CONFIGURATION SECTION - MODIFY THESE PARAMETERS
+    # CONFIGURATION SECTION - MODIFY THESE PARAMETERS
     # ========================================================================
     
     # Base model configuration
@@ -1853,7 +1853,7 @@ def main():
     print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Mode: {'Adaptive AI-Driven' if use_adaptive_training else 'Standard'} Training")
     print("")
-    print("🎯 ENHANCED FEATURES ENABLED:")
+    print("ENHANCED FEATURES ENABLED:")
     print("  ✓ Adaptive Intelligence")
     print("  ✓ Dynamic Architecture")
     print("  ✓ Predictive Optimization")
@@ -1970,7 +1970,7 @@ def main():
                 if remaining_issues:
                     print("\nRemaining issues after auto-fix:")
                     for issue in remaining_issues:
-                        print(f"  ⚠️ {issue}")
+                        print(f" {issue}")
             else:
                 print("✓ Configuration is MPS compatible")
         
@@ -1997,7 +1997,7 @@ def main():
         # Validate inference precision
         is_supported, error_msg = validate_precision_support(inference_precision, device)
         if not is_supported:
-            print(f"\n⚠️ Inference precision not supported")
+            print(f"\nInference precision not supported")
             print(f"  {error_msg}")
             print(f"  Using training precision for inference instead")
             config.inference_precision = training_precision
@@ -2164,7 +2164,7 @@ def main():
         
         if use_adaptive_training and TRAINING_INFRASTRUCTURE_AVAILABLE:
             print("Initializing Enhanced Adaptive Training Orchestrator")
-            print("\n🚀 ENHANCED FEATURES ACTIVE:")
+            print("\nENHANCED FEATURES ACTIVE:")
             print("  ✓ AI-driven hyperparameter optimization")
             print("  ✓ Adaptive intelligence with meta-learning")
             print("  ✓ Real-time performance monitoring")
@@ -2237,7 +2237,7 @@ def main():
         # After Chinchilla integration in Step 10:
         if getattr(config, 'auto_epoch_scaling', False):
             print("\n" + "="*80)
-            print("🧠 CHINCHILLA SYSTEM VERIFICATION")
+            print("CHINCHILLA SYSTEM VERIFICATION")
             print("="*80)
             print(f"Original epochs in config: {training_params['num_epochs']}")
             print(f"Final epochs after Chinchilla: {config.num_epochs}")
@@ -2259,7 +2259,7 @@ def main():
                 checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
 
                 print("✓ Checkpoint loaded successfully!")
-                print(f"📋 Checkpoint info:")
+                print(f"Checkpoint info:")
                 print(f"   - Epoch: {checkpoint.get('epoch', 'unknown')}")
                 print(f"   - Global step: {checkpoint.get('global_step', 'unknown')}")
                 print(f"   - Loss: {checkpoint.get('loss', 'unknown')}")
@@ -2291,7 +2291,7 @@ def main():
                 orchestrator.global_step = global_step
                 orchestrator.best_loss = best_loss
 
-                print(f"\n🎯 Training will continue from:")
+                print(f"\nTraining will continue from:")
                 print(f"   - Epoch: {start_epoch}")
                 print(f"   - Global step: {global_step}")
                 print(f"   - Best loss: {best_loss:.4f}")
@@ -2306,7 +2306,7 @@ def main():
 
         # Verify scheduler
         print("\n" + "="*80)
-        print("🔍 SCHEDULER VERIFICATION")
+        print("SCHEDULER VERIFICATION")
         print("="*80)
 
         if hasattr(orchestrator.trainer, 'scheduler'):
@@ -2323,14 +2323,14 @@ def main():
 
                     # Verify they match
                     if abs(initial_lr - orchestrator.config.learning_rate) > 1e-9:
-                        print(f"⚠️ WARNING: Scheduler LR doesn't match config LR!")
+                        print(f"WARNING: Scheduler LR doesn't match config LR!")
                     else:
                         print(f"✓ Scheduler LR matches config")
 
                 except Exception as e:
-                    print(f"⚠️ Could not read scheduler state: {e}")
+                    print(f"Could not read scheduler state: {e}")
             else:
-                print("⚠️ Scheduler is None")
+                print("Scheduler is None")
                 print(f"   use_lr_scheduler: {getattr(orchestrator.config, 'use_lr_scheduler', 'not set')}")
                 print(f"   LR will remain constant at: {orchestrator.config.learning_rate:.2e}")
         else:
@@ -2476,7 +2476,7 @@ def main():
         print(f"Training begins at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"Experiment directory: {experiment_dir}")
         print("")
-        print("🎯 All enhanced features are active and monitoring training")
+        print("All enhanced features are active and monitoring training")
         print("Press Ctrl+C at any time to gracefully stop training and save progress")
         print("="*80)
         
@@ -2507,7 +2507,7 @@ def main():
         total_training_hours = total_training_time / 3600
         
         # Step 15: Training completion summary
-        print_banner("🎉 ENHANCED TRAINING COMPLETED SUCCESSFULLY!")
+        print_banner("ENHANCED TRAINING COMPLETED SUCCESSFULLY!")
         
         print_section("Training Summary")
         print(f"  Experiment: {config.experiment_name}")
@@ -2535,7 +2535,7 @@ def main():
                 create_training_report(str(experiment_dir))
                 print(f"✓ Training report generated: {experiment_dir}/training_report.html")
             except Exception as e:
-                print(f"⚠️ Could not generate training report: {e}")
+                print(f"Could not generate training report: {e}")
         
         # Step 17: Save final summary
         print_section("Saving Final Summary")
@@ -2621,7 +2621,7 @@ def main():
                 orchestrator._save_meta_learning_state()
                 print("✓ Meta-learning state saved successfully")
             except Exception as e:
-                print(f"⚠️ Error saving state: {e}")
+                print(f"Error saving state: {e}")
         
         print("Graceful shutdown complete")
         return 0
@@ -2650,7 +2650,7 @@ def main():
                 orchestrator.cleanup()
                 print("✓ Orchestrator cleanup complete")
             except Exception as e:
-                print(f"⚠️ Orchestrator cleanup error: {e}")
+                print(f"Orchestrator cleanup error: {e}")
         
         # Clear GPU memory
         if torch.cuda.is_available():
