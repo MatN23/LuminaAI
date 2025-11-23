@@ -52,6 +52,15 @@ except ImportError as e:
     print(f"⚠ Utils modules not available: {e}")
 
 try:
+    from backend.backend_deepspeed import create_deepspeed_backend
+    from backend.backend_fsdp import create_fsdp_backend
+    BACKEND_DEEPSPEED_AVAILABLE = True
+    BACKEND_FSDP_AVAILABLE = True
+except ImportError:
+    BACKEND_DEEPSPEED_AVAILABLE = False
+    BACKEND_FSDP_AVAILABLE = False
+
+try:
     from training.chinchilla_scaler import EnhancedChinchillaScaler
     CHINCHILLA_SCALER_AVAILABLE = True
     print("✓ Chinchilla scaler available")
@@ -1829,6 +1838,21 @@ def main():
         'enable_memory_aware_scaling': True,
         'quality_aware_adjustment': True,
     }
+    # ========================================================================
+    # 16. BACKEND PAREMETERS
+    # ========================================================================
+    backend_params = {
+        'backend': 'fsdp',  # Primary choice
+        'use_fsdp': True,
+        
+        # FSDP specific
+        'fsdp_sharding_strategy': 'FULL_SHARD',  # Options: FULL_SHARD, SHARD_GRAD_OP, NO_SHARD, HYBRID_SHARD
+        'fsdp_auto_wrap_threshold': 1e8,  # Wrap modules with >100M params
+        
+        # Fallback to DeepSpeed if needed
+        'use_deepspeed': False,
+        'zero_stage': 3,
+    }
     
     # ========================================================================
     # END CONFIGURATION SECTION
@@ -2106,24 +2130,13 @@ def main():
         if advanced_features.get('estimate_training_time'):
             estimate_and_display_training_time(config, len(train_dataset))
         
-        # Step 9: Initialize model with dynamic architecture
-        print_banner("STEP 9: INITIALIZING MODEL WITH DYNAMIC ARCHITECTURE")
+        # Step 9: Initialize model with FSDP backend
+        print_banner("STEP 9: INITIALIZING MODEL WITH FSDP BACKEND")
         print("Creating model configuration...")
         model_config = config_to_deepseek_config(config)
-        
-        print("Initializing model architecture...")
-        model = DeepSeekTransformer(model_config)
-        
-        # Model compilation
-        if torch.__version__ >= "2.0" and not is_mps and config.compile:
-            logging.info("Compiling model with torch.compile...")
-            model = torch.compile(
-                model,
-                mode='reduce-overhead',
-                fullgraph=True,
-                dynamic=False
-            )
-            logging.info("✓ Model compiled")
+
+        print("Initializing base model architecture...")
+        base_model = DeepSeekTransformer(model_config)
 
         # Apply FP16-safe initialization
         def init_weights_for_fp16(module):
@@ -2135,32 +2148,174 @@ def main():
                 module.bias.data.zero_()
                 module.weight.data.fill_(1.0)
 
-        model.apply(init_weights_for_fp16)
+        base_model.apply(init_weights_for_fp16)
         print("✓ Applied FP16-safe weight initialization")
-        
-        total_params = sum(p.numel() for p in model.parameters())
-        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-        
-        print(f"\nModel Statistics:")
-        print(f"  Architecture: DeepSeek Transformer")
-        print(f"  Total Parameters: {total_params:,}")
-        print(f"  Trainable Parameters: {trainable_params:,}")
-        print(f"  Non-trainable Parameters: {total_params - trainable_params:,}")
-        print(f"  Model Size (FP32): {total_params * 4 / 1e9:.2f} GB")
-        print(f"  Model Size (FP16): {total_params * 2 / 1e9:.2f} GB")
-        
+
+        # Determine backend and wrap model
+        backend_choice = backend_params.get('backend', 'pytorch')
+        use_fsdp = backend_params.get('use_fsdp', False)
+        use_deepspeed = backend_params.get('use_deepspeed', False)
+
+        print(f"\nBackend Selection:")
+        print(f"  Requested backend: {backend_choice}")
+        print(f"  FSDP available: {BACKEND_FSDP_AVAILABLE}")
+        print(f"  DeepSpeed available: {BACKEND_DEEPSPEED_AVAILABLE}")
+
+        # Priority: FSDP > DeepSpeed > PyTorch
+        if (backend_choice == 'fsdp' or use_fsdp) and BACKEND_FSDP_AVAILABLE:
+            print("\n" + "="*80)
+            print("INITIALIZING FSDP BACKEND")
+            print("="*80)
+            
+            # Transfer backend params to config
+            for key, value in backend_params.items():
+                if not hasattr(config, key):
+                    setattr(config, key, value)
+            
+            try:
+                model = create_fsdp_backend(base_model, config)
+                
+                print("✓ FSDP backend initialized successfully")
+                print(f"\nFSDP Configuration:")
+                print(f"  Backend: {model.backend_name}")
+                print(f"  Sharding Strategy: {getattr(config, 'fsdp_sharding_strategy', 'FULL_SHARD')}")
+                print(f"  World Size: {model.world_size}")
+                print(f"  Local Rank: {model.local_rank}")
+                print(f"  Mixed Precision: {config.precision}")
+                print(f"  CPU Offload: {getattr(config, 'cpu_offload', False)}")
+                print(f"  Auto Wrap Threshold: {getattr(config, 'fsdp_auto_wrap_threshold', 1e8):.0e} params")
+                print(f"  Gradient Checkpointing: {config.gradient_checkpointing}")
+                
+                # Setup scheduler after FSDP initialization
+                steps_per_epoch = len(train_dataset) // (config.batch_size * config.gradient_accumulation_steps)
+                total_steps = steps_per_epoch * config.num_epochs
+                model.setup_scheduler(total_steps)
+                print(f"  Scheduler: {'Configured' if model.scheduler else 'None'}")
+                
+                using_backend = "FSDP"
+                
+            except Exception as e:
+                print(f"✗ FSDP initialization failed: {e}")
+                print("Falling back to PyTorch backend...")
+                model = base_model
+                device = torch.device('cuda' if torch.cuda.is_available() else ('mps' if is_mps else 'cpu'))
+                model = model.to(device)
+                using_backend = "PyTorch (FSDP fallback)"
+
+        elif (backend_choice == 'deepspeed' or use_deepspeed) and BACKEND_DEEPSPEED_AVAILABLE:
+            print("\n" + "="*80)
+            print("INITIALIZING DEEPSPEED BACKEND")
+            print("="*80)
+            
+            # Transfer backend params to config
+            for key, value in backend_params.items():
+                if not hasattr(config, key):
+                    setattr(config, key, value)
+            
+            try:
+                model = create_deepspeed_backend(base_model, config)
+                
+                print("✓ DeepSpeed backend initialized successfully")
+                print(f"\nDeepSpeed Configuration:")
+                print(f"  Backend: {model.backend_name}")
+                print(f"  ZeRO Stage: {getattr(config, 'zero_stage', 2)}")
+                print(f"  World Size: {model.world_size}")
+                print(f"  Local Rank: {model.local_rank}")
+                print(f"  Mixed Precision: {config.precision}")
+                print(f"  CPU Offload: {getattr(config, 'cpu_offload', False)}")
+                print(f"  Gradient Checkpointing: {config.gradient_checkpointing}")
+                
+                using_backend = "DeepSpeed"
+                
+            except Exception as e:
+                print(f"✗ DeepSpeed initialization failed: {e}")
+                print("Falling back to PyTorch backend...")
+                model = base_model
+                device = torch.device('cuda' if torch.cuda.is_available() else ('mps' if is_mps else 'cpu'))
+                model = model.to(device)
+                using_backend = "PyTorch (DeepSpeed fallback)"
+
+        else:
+            print("\n" + "="*80)
+            print("USING STANDARD PYTORCH BACKEND")
+            print("="*80)
+            
+            model = base_model
+            device = torch.device('cuda' if torch.cuda.is_available() else ('mps' if is_mps else 'cpu'))
+            model = model.to(device)
+            
+            print(f"✓ Model moved to device: {device}")
+            using_backend = "PyTorch"
+
+        # Model compilation (only for PyTorch backend, not for FSDP/DeepSpeed)
+        if using_backend == "PyTorch" and torch.__version__ >= "2.0" and not is_mps and config.compile:
+            print("\nCompiling model with torch.compile...")
+            try:
+                model = torch.compile(
+                    model,
+                    mode='reduce-overhead',
+                    fullgraph=True,
+                    dynamic=False
+                )
+                print("✓ Model compiled successfully")
+            except Exception as e:
+                print(f"⚠️ Model compilation failed: {e}")
+                print("Continuing without compilation...")
+
+        # Calculate and display model statistics
+        total_params = sum(p.numel() for p in base_model.parameters())
+        trainable_params = sum(p.numel() for p in base_model.parameters() if p.requires_grad)
+
+        print("\n" + "="*80)
+        print("MODEL STATISTICS")
+        print("="*80)
+        print(f"Backend: {using_backend}")
+        print(f"\nArchitecture: DeepSeek Transformer")
+        print(f"  Hidden Size: {config.hidden_size}")
+        print(f"  Layers: {config.num_layers}")
+        print(f"  Attention Heads: {config.num_heads}")
+        print(f"  Sequence Length: {config.seq_length}")
+        print(f"  Vocab Size: {config.vocab_size:,}")
+
+        print(f"\nParameters:")
+        print(f"  Total: {total_params:,}")
+        print(f"  Trainable: {trainable_params:,}")
+        print(f"  Non-trainable: {total_params - trainable_params:,}")
+
+        print(f"\nModel Size Estimates:")
+        print(f"  FP32: {total_params * 4 / 1e9:.2f} GB")
+        print(f"  FP16: {total_params * 2 / 1e9:.2f} GB")
+        print(f"  BF16: {total_params * 2 / 1e9:.2f} GB")
+
         if config.use_moe:
             print(f"\nMixture of Experts Configuration:")
             print(f"  Number of Experts: {config.num_experts}")
             print(f"  Top-K Routing: {config.moe_top_k}")
             print(f"  Capacity Factor: {config.capacity_factor}")
             print(f"  Load Balancing Weight: {config.load_balancing_weight}")
-            print(f"\nDynamic Architecture Features:")
-            print(f"  Dynamic Expert Management: {config.dynamic_expert_management}")
-            print(f"  Expert Growth Threshold: {config.expert_growth_threshold}")
-            print(f"  Expert Prune Threshold: {config.expert_prune_threshold}")
-            print(f"  Max Experts Per Layer: {config.max_experts_per_layer}")
-            print(f"  Min Experts Per Layer: {config.min_experts_per_layer}")
+            
+            if config.dynamic_expert_management:
+                print(f"\nDynamic Architecture Features:")
+                print(f"  Dynamic Expert Management: Enabled")
+                print(f"  Expert Growth Threshold: {config.expert_growth_threshold}")
+                print(f"  Expert Prune Threshold: {config.expert_prune_threshold}")
+                print(f"  Max Experts Per Layer: {config.max_experts_per_layer}")
+                print(f"  Min Experts Per Layer: {config.min_experts_per_layer}")
+
+        if using_backend in ["FSDP", "DeepSpeed"]:
+            print(f"\nDistributed Training:")
+            print(f"  World Size: {model.world_size}")
+            print(f"  Local Rank: {model.local_rank}")
+            print(f"  Main Process: {model.is_main_process()}")
+            
+            memory_stats = model.get_memory_stats()
+            if memory_stats:
+                print(f"\nGPU Memory (Current Process):")
+                print(f"  Allocated: {memory_stats.get('allocated_gb', 0):.2f} GB")
+                print(f"  Reserved: {memory_stats.get('reserved_gb', 0):.2f} GB")
+                print(f"  Max Allocated: {memory_stats.get('max_allocated_gb', 0):.2f} GB")
+
+        print("="*80 + "\n")
 
         # Step 9.5: Auto-adjust epochs using Chinchilla scaling
         if getattr(config, 'auto_epoch_scaling', False):
