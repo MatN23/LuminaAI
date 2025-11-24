@@ -1753,7 +1753,7 @@ def main():
     # 11. DEEPSPEED & QUANTIZATION CONFIGURATION
     # ========================================================================
     deepspeed_params = {
-        'use_deepspeed': True,
+        'use_deepspeed': False,
         'cpu_offload': True,
         'cpu_offload_optimizer': True,
         'cpu_offload_parameters': True,
@@ -1838,13 +1838,14 @@ def main():
         'enable_memory_aware_scaling': True,
         'quality_aware_adjustment': True,
     }
+
     # ========================================================================
-    # 16. BACKEND PAREMETERS
+    # 16. BACKEND PARAMS
     # ========================================================================
     backend_params = {
         'backend': 'fsdp',  # Primary choice
         'use_fsdp': True,
-        
+
         # FSDP specific
         'fsdp_sharding_strategy': 'FULL_SHARD',  # Options: FULL_SHARD, SHARD_GRAD_OP, NO_SHARD, HYBRID_SHARD
         'fsdp_auto_wrap_threshold': 1e8,  # Wrap modules with >100M params
@@ -1853,7 +1854,6 @@ def main():
         'use_deepspeed': False,
         'zero_stage': 3,
     }
-    
     # ========================================================================
     # END CONFIGURATION SECTION
     # ========================================================================
@@ -1951,6 +1951,7 @@ def main():
             **monitoring_params,
             **advanced_features,
             **chinchilla_params,
+            **backend_params,
         }
         
         print_section("Applying Enhanced Parameter Overrides")
@@ -2156,13 +2157,56 @@ def main():
         use_fsdp = backend_params.get('use_fsdp', False)
         use_deepspeed = backend_params.get('use_deepspeed', False)
 
+        # ----- SANITIZE CONFLICTS BETWEEN DEEPSPEED <-> FSDP FLAGS -----
+        # Prevent deepspeed params from accidentally affecting FSDP runs and vice-versa.
+        if backend_choice == 'fsdp' or use_fsdp:
+            if getattr(config, 'use_deepspeed', False):
+                logging.warning("Config sets use_deepspeed=True but backend_choice is FSDP — disabling use_deepspeed to avoid conflicts")
+                config.use_deepspeed = False
+            # also clear DeepSpeed-specific attrs that some code may check
+            for attr in ['zero_stage', 'cpu_offload', 'nvme_path']:
+                if hasattr(config, attr):
+                    try:
+                        setattr(config, attr, None if attr.endswith('path') else False)
+                    except Exception:
+                        pass
+
+        # If DeepSpeed is explicitly selected, clear FSDP-specific flags
+        if backend_choice == 'deepspeed' or use_deepspeed:
+            if getattr(config, 'use_fsdp', False):
+                logging.warning("Config sets use_fsdp=True but backend_choice is DeepSpeed — disabling use_fsdp to avoid conflicts")
+                config.use_fsdp = False
+            for attr in ['fsdp_sharding_strategy', 'fsdp_auto_wrap_threshold', 'fsdp_offload_params']:
+                if hasattr(config, attr):
+                    try:
+                        setattr(config, attr, None)
+                    except Exception:
+                        pass
+
+        # ---------------------------------------------------------------
         print(f"\nBackend Selection:")
         print(f"  Requested backend: {backend_choice}")
         print(f"  FSDP available: {BACKEND_FSDP_AVAILABLE}")
         print(f"  DeepSpeed available: {BACKEND_DEEPSPEED_AVAILABLE}")
 
+        # Check if we're in a distributed environment
+        world_size = int(os.environ.get('WORLD_SIZE', 1))
+        local_rank = int(os.environ.get('LOCAL_RANK', 0))
+        is_distributed = world_size > 1
+
+        print(f"  Distributed Environment: {'Yes' if is_distributed else 'No'}")
+        print(f"  World Size: {world_size}")
+        print(f"  Local Rank: {local_rank}")
+
+        # FSDP requires distributed environment - skip if single GPU
+        if (backend_choice == 'fsdp' or use_fsdp) and not is_distributed:
+            print("\n⚠️  FSDP requires distributed environment (multi-GPU)")
+            print("   Single GPU detected - falling back to PyTorch backend")
+            backend_choice = 'pytorch'
+            use_fsdp = False
+
         # Priority: FSDP > DeepSpeed > PyTorch
-        if (backend_choice == 'fsdp' or use_fsdp) and BACKEND_FSDP_AVAILABLE:
+        if (backend_choice == 'fsdp' or use_fsdp) and BACKEND_FSDP_AVAILABLE and is_distributed:
             print("\n" + "="*80)
             print("INITIALIZING FSDP BACKEND")
             print("="*80)
@@ -2316,6 +2360,7 @@ def main():
                 print(f"  Max Allocated: {memory_stats.get('max_allocated_gb', 0):.2f} GB")
 
         print("="*80 + "\n")
+
 
         # Step 9.5: Auto-adjust epochs using Chinchilla scaling
         if getattr(config, 'auto_epoch_scaling', False):
