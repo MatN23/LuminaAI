@@ -7,7 +7,7 @@
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg)](https://pytorch.org/)
 [![License](https://img.shields.io/badge/License-Commercial-green.svg)](LICENSE)
-[![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/your-demo-link)
+[![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1tH1z9e7px2G8NGqWUN9gdqxs1CnUC7p1)
 
 [Demo](#demo) • [Architecture](#architecture) • [Configuration](#configuration) • [API](#api-reference) • [Licensing](#licensing)
 
@@ -336,7 +336,7 @@ Dynamic loss scaling adjusts automatically: scale increases every scale_window s
 
 Free GPU training demonstration requiring no local setup.
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/your-demo-link)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1tH1z9e7px2G8NGqWUN9gdqxs1CnUC7p1)
 
 **Environment:**
 - Hardware: Google Colab T4 GPU (15.8GB memory, Turing architecture)
@@ -1311,6 +1311,6 @@ Demo notebook and local installation for evaluation purposes. 30-day evaluation 
 
 *Production transformer training for ML engineers*
 
-[GitHub](https://github.com/matn23/luminaai) • [Demo](https://colab.research.google.com/drive/your-demo-link) • [License](LICENSE)
+[GitHub](https://github.com/matn23/luminaai) • [Demo](https://colab.research.google.com/drive/1tH1z9e7px2G8NGqWUN9gdqxs1CnUC7p1) • [License](LICENSE)
 
 </div>
