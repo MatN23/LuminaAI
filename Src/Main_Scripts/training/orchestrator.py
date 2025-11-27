@@ -655,6 +655,40 @@ class AdaptiveTrainingOrchestrator:
             config.save(str(self.experiment_dir / "initial_config.yaml"))
         
         logging.info("Adaptive Training Orchestrator initialized with AI-driven optimization")
+
+    @property
+    def use_deepspeed(self) -> bool:
+        """
+        Property to check if DeepSpeed is being used.
+        Delegates to trainer if available, otherwise checks config.
+        """
+        if self.trainer and hasattr(self.trainer, 'use_deepspeed'):
+            return self.trainer.use_deepspeed
+        
+        # Fallback to config
+        return getattr(self.config, 'use_deepspeed', False)
+
+    @property
+    def steps_per_epoch(self) -> int:
+        """
+        Property to get steps per epoch.
+        Useful for scheduler setup.
+        """
+        if hasattr(self, '_steps_per_epoch'):
+            return self._steps_per_epoch
+        
+        # Try to calculate from trainer
+        if self.trainer and hasattr(self.trainer, 'train_dataset'):
+            try:
+                dataset_size = len(self.trainer.train_dataset)
+                batch_size = self.config.batch_size
+                grad_accum = getattr(self.config, 'gradient_accumulation_steps', 1)
+                return dataset_size // (batch_size * grad_accum)
+            except:
+                pass
+        
+        # Default fallback
+        return 100
     
     def _deep_copy_config(self, config):
         """Create a deep copy of config for comparison."""

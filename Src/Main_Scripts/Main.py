@@ -2392,6 +2392,22 @@ def main():
             
             try:
                 orchestrator = AdaptiveTrainingOrchestrator(config)
+                print("DEBUG: Orchestrator created")
+                
+                orchestrator.initialize_training()
+
+                # INLINE TEST - Cannot be skipped
+                print("\n🔍 INLINE ADAPTIVE TEST")
+                print(f"Trainer type: {type(orchestrator.trainer).__name__}")
+                print(f"Has adjust_learning_rate: {hasattr(orchestrator.trainer, 'adjust_learning_rate')}")
+                print(f"Has get_current_metrics: {hasattr(orchestrator.trainer, 'get_current_metrics')}")
+                print(f"Has _monitoring_queue: {hasattr(orchestrator.trainer, '_monitoring_queue')}")
+                print(f"Scheduler exists: {orchestrator.trainer.scheduler is not None if hasattr(orchestrator.trainer, 'scheduler') else 'No attr'}")
+                print()
+                print("DEBUG: Training initialized")
+                
+                print("\n" + "="*80)
+                print("STEP 10.9: TESTING ADAPTIVE PIPELINE".center(80))
                 print("\n✓ Orchestrator initialized successfully")
                 print("\n" + "="*80)
                 print("🔍 TRAINER VERIFICATION")
@@ -2399,6 +2415,50 @@ def main():
 
                 # Initialize training system
                 orchestrator.initialize_training()
+
+                # STEP 10.9: TEST ADAPTIVE PIPELINE
+                print_banner("STEP 10.9: TESTING ADAPTIVE PIPELINE")
+                
+                logging.info("Testing adaptive training pipeline...")
+                
+                # Test 1: get_current_metrics()
+                try:
+                    test_metrics = orchestrator.trainer.get_current_metrics()
+                    logging.info(f"✅ Test 1 PASSED: get_current_metrics() works")
+                    logging.info(f"   Returned: {type(test_metrics).__name__}")
+                except Exception as e:
+                    logging.error(f"❌ Test 1 FAILED: get_current_metrics() error: {e}")
+                
+                # Test 2: adjust_learning_rate()
+                try:
+                    original_lr = orchestrator.trainer.optimizer.param_groups[0]['lr']
+                    orchestrator.trainer.adjust_learning_rate(1e-5, grace_period=5)
+                    new_lr = orchestrator.trainer.optimizer.param_groups[0]['lr']
+                    
+                    if abs(new_lr - 1e-5) < 1e-9:
+                        logging.info(f"✅ Test 2 PASSED: adjust_learning_rate() works")
+                        logging.info(f"   LR changed: {original_lr:.2e} → {new_lr:.2e}")
+                        # Restore original LR
+                        orchestrator.trainer.adjust_learning_rate(original_lr, grace_period=0)
+                    else:
+                        logging.error(f"❌ Test 2 FAILED: LR not changed correctly")
+                        logging.error(f"   Expected: 1e-5, Got: {new_lr:.2e}")
+                except Exception as e:
+                    logging.error(f"❌ Test 2 FAILED: adjust_learning_rate() error: {e}")
+                
+                # Test 3: Monitoring queue
+                try:
+                    has_queue = hasattr(orchestrator.trainer, '_monitoring_queue')
+                    if has_queue:
+                        logging.info(f"✅ Test 3 PASSED: Trainer has monitoring queue")
+                    else:
+                        logging.error(f"❌ Test 3 FAILED: Trainer missing _monitoring_queue")
+                except Exception as e:
+                    logging.error(f"❌ Test 3 FAILED: Queue check error: {e}")
+                
+                logging.info("\n" + "="*80)
+                logging.info("ADAPTIVE PIPELINE TEST COMPLETE")
+                logging.info("="*80 + "\n")
 
                 # Verify trainer is real
                 trainer_type = type(orchestrator.trainer).__name__
@@ -2549,49 +2609,44 @@ def main():
             print("✗ Trainer has no scheduler attribute!")
 
         print("="*80 + "\n")
-        # STEP 10.9: TEST ADAPTIVE PIPELINE
-        print_banner("STEP 10.9: TESTING ADAPTIVE PIPELINE")
+
+        # 🔥 FIX: Setup scheduler NOW with dataset info
+        print("\n" + "="*80)
+        print("STEP 10.8: SETTING UP LEARNING RATE SCHEDULER".center(80))
+        print("="*80)
         
-        logging.info("Testing adaptive training pipeline...")
-        
-        # Test 1: get_current_metrics()
-        try:
-            test_metrics = orchestrator.trainer.get_current_metrics()
-            logging.info(f"✅ Test 1 PASSED: get_current_metrics() works")
-            logging.info(f"   Returned: {type(test_metrics).__name__}")
-        except Exception as e:
-            logging.error(f"❌ Test 1 FAILED: get_current_metrics() error: {e}")
-        
-        # Test 2: adjust_learning_rate()
-        try:
-            original_lr = orchestrator.trainer.optimizer.param_groups[0]['lr']
-            orchestrator.trainer.adjust_learning_rate(1e-5, grace_period=5)
-            new_lr = orchestrator.trainer.optimizer.param_groups[0]['lr']
+        if orchestrator.trainer and not orchestrator.use_deepspeed:
+            # Calculate total steps
+            gradient_accumulation_steps = getattr(config, 'gradient_accumulation_steps', 1)
+            batches_per_epoch = len(train_dataset) // config.batch_size
+            steps_per_epoch = batches_per_epoch // gradient_accumulation_steps
+            total_steps = steps_per_epoch * config.num_epochs
             
-            if abs(new_lr - 1e-5) < 1e-9:
-                logging.info(f"✅ Test 2 PASSED: adjust_learning_rate() works")
-                logging.info(f"   LR changed: {original_lr:.2e} → {new_lr:.2e}")
-                # Restore original LR
-                orchestrator.trainer.adjust_learning_rate(original_lr, grace_period=0)
+            print(f"Scheduler Configuration:")
+            print(f"  Batches per epoch: {batches_per_epoch}")
+            print(f"  Steps per epoch: {steps_per_epoch}")
+            print(f"  Total epochs: {config.num_epochs}")
+            print(f"  Total steps: {total_steps}")
+            print(f"  Scheduler type: {config.lr_scheduler}")
+            
+            # Setup the scheduler
+            orchestrator.trainer._setup_scheduler(total_steps)
+            
+            # Verify it worked
+            if orchestrator.trainer.scheduler is not None:
+                print(f"✅ Scheduler created: {type(orchestrator.trainer.scheduler).__name__}")
+                try:
+                    initial_lr = orchestrator.trainer.scheduler.get_last_lr()[0]
+                    print(f"✅ Initial LR: {initial_lr:.2e}")
+                except:
+                    print(f"✅ Scheduler ready (LR: {config.learning_rate:.2e})")
             else:
-                logging.error(f"❌ Test 2 FAILED: LR not changed correctly")
-                logging.error(f"   Expected: 1e-5, Got: {new_lr:.2e}")
-        except Exception as e:
-            logging.error(f"❌ Test 2 FAILED: adjust_learning_rate() error: {e}")
+                print(f"❌ WARNING: Scheduler is still None!")
+                print(f"   Adaptive training will work but scheduler won't!")
+        else:
+            print("Skipping scheduler setup (DeepSpeed handles it)")
         
-        # Test 3: Monitoring queue
-        try:
-            has_queue = hasattr(orchestrator.trainer, '_monitoring_queue')
-            if has_queue:
-                logging.info(f"✅ Test 3 PASSED: Trainer has monitoring queue")
-            else:
-                logging.error(f"❌ Test 3 FAILED: Trainer missing _monitoring_queue")
-        except Exception as e:
-            logging.error(f"❌ Test 3 FAILED: Queue check error: {e}")
-        
-        logging.info("\n" + "="*80)
-        logging.info("ADAPTIVE PIPELINE TEST COMPLETE")
-        logging.info("="*80 + "\n")
+        print("="*80 + "\n")
         
         # Step 11: Setup signal handlers
         print_banner("STEP 11: SETTING UP SIGNAL HANDLERS")
