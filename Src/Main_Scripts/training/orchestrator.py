@@ -7,6 +7,7 @@ import math
 import signal
 import time
 import traceback
+from dataclasses import dataclass, asdict
 import pickle
 from datetime import datetime
 from pathlib import Path
@@ -90,9 +91,21 @@ class MetaLearningEngine:
         
     def record_training_outcome(self, config, metrics, final_performance):
         """Record the outcome of a training run for meta-learning."""
+        
+        # Validate metrics have to_dict method
+        metrics_dicts = []
+        for m in metrics:
+            if hasattr(m, 'to_dict'):
+                metrics_dicts.append(m.to_dict())
+            elif isinstance(m, dict):
+                metrics_dicts.append(m)
+            else:
+                logging.warning(f"Metric object {type(m)} has no to_dict() method, converting to dict")
+                metrics_dicts.append(asdict(m) if hasattr(m, '__dataclass_fields__') else {})
+        
         outcome = {
             'config': self._serialize_config(config),
-            'metrics_progression': [m.to_dict() for m in metrics],
+            'metrics_progression': metrics_dicts,
             'final_performance': final_performance,
             'training_duration': len(metrics),
             'success_score': self._calculate_success_score(metrics, final_performance)
@@ -825,8 +838,21 @@ class AdaptiveTrainingOrchestrator:
                     # Continue monitoring even if one metric fails
                     time.sleep(0.5)
         
+        print("🔍 DEBUG: Creating monitoring thread...")
         self.monitoring_thread = threading.Thread(target=monitoring_loop, daemon=True)
+        print(f"   Thread created: {self.monitoring_thread}")
+        print(f"   Thread daemon: {self.monitoring_thread.daemon}")
+        
+        print("🔍 DEBUG: Starting thread...")
         self.monitoring_thread.start()
+        
+        import time
+        time.sleep(0.1)  # Brief pause
+        
+        print(f"🔍 DEBUG: Thread started!")
+        print(f"   Thread alive: {self.monitoring_thread.is_alive()}")
+        print(f"   Thread ident: {self.monitoring_thread.ident}")
+        
         logging.info("Started real-time monitoring thread")
     
     def _process_real_time_metrics(self, metrics):
@@ -1376,6 +1402,35 @@ class AdaptiveTrainingOrchestrator:
 
         try:
             self.is_training = True
+            if not (self.monitoring_thread and self.monitoring_thread.is_alive()):
+                print("⚠️ Monitoring thread not running - starting now...")
+                print(f"   self.is_training = {self.is_training}")
+                print(f"   self.should_stop = {self.should_stop}")
+                
+                try:
+                    self.start_real_time_monitoring()
+                    
+                    import time
+                    time.sleep(0.5)  # Give thread time to start
+                    
+                    print("\n🔍 DEBUG: After start_real_time_monitoring():")
+                    print(f"   Thread exists: {self.monitoring_thread is not None}")
+                    if self.monitoring_thread:
+                        print(f"   Thread alive: {self.monitoring_thread.is_alive()}")
+                        print(f"   Thread ident: {self.monitoring_thread.ident}")
+                        print(f"   Thread daemon: {self.monitoring_thread.daemon}")
+                    
+                    if self.monitoring_thread and self.monitoring_thread.is_alive():
+                        print("✅ Monitoring thread started successfully\n")
+                    else:
+                        print("❌ Failed to start monitoring thread!\n")
+                            
+                except Exception as e:
+                    print(f"❌ Exception starting monitoring thread: {e}")
+                    import traceback
+                    traceback.print_exc()
+            else:
+                print("✅ Monitoring thread already running")
 
             # Initialize trainer if needed
             if self.trainer is None:
@@ -1490,9 +1545,16 @@ class AdaptiveTrainingOrchestrator:
             logging.info(f"Made {len(self.adaptive_decisions)} adaptive decisions during training")
 
         except Exception as e:
+            import traceback as tb
+            error_trace = tb.format_exc()
             logging.error(f"Adaptive training failed: {e}")
-            logging.error(traceback.format_exc())
-            self._save_emergency_adaptive_state()
+            logging.error(error_trace)
+            
+            try:
+                self._save_emergency_adaptive_state()
+            except Exception as save_error:
+                logging.error(f"Failed to save emergency state: {save_error}")
+            
             raise
         finally:
             self.is_training = False
@@ -1608,8 +1670,15 @@ class AdaptiveTrainingOrchestrator:
         if 'performance_trends' in report:
             trends = report['performance_trends']
             improvement = trends['initial_loss'] - trends['final_loss']
-            logging.info(f"Loss Improvement: {improvement:.3f} "
-                        f"({improvement/trends['initial_loss']:.1%} reduction)")
+            
+            # Avoid division by zero
+            if trends['initial_loss'] > 0:
+                reduction_pct = (improvement / trends['initial_loss']) * 100
+                logging.info(f"Loss Improvement: {improvement:.3f} "
+                            f"({reduction_pct:.1f}% reduction)")
+            else:
+                logging.info(f"Loss Improvement: {improvement:.3f} "
+                            f"(initial loss was zero)")
         
         logging.info("="*60)
     

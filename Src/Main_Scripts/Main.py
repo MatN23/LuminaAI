@@ -5,6 +5,7 @@ import os
 import sys
 import logging
 import traceback
+import traceback
 import psutil
 import gc
 import json
@@ -1511,11 +1512,11 @@ def main():
         'use_moe': True,
         'use_mod': True,
         'num_epochs': 20,
-        'learning_rate': 1e-4,
-        'min_lr': 1e-6,
+        'learning_rate': 2e-5,
+        'min_lr': 1e-7,
         'use_lr_scheduler': True,
         'lr_scheduler': "cosine",  # cosine, constant, or linear
-        'warmup_ratio': 0.02,
+        'warmup_ratio': 0.1,
         'batch_size': 25,
         'gradient_accumulation_steps': 8,
         
@@ -2783,6 +2784,49 @@ def main():
         
         # Step 14: Start enhanced training
         print_banner("STEP 14: STARTING ENHANCED ADAPTIVE TRAINING")
+        
+        # Verify adaptive monitoring pipeline
+        print("\n" + "="*80)
+        print("VERIFYING ADAPTIVE MONITORING PIPELINE")
+        print("="*80)
+        
+        # Check monitoring thread
+        monitoring_active = orchestrator.monitoring_thread and orchestrator.monitoring_thread.is_alive()
+        print(f"Monitoring thread: {'✅ Active' if monitoring_active else '❌ Not running'}")
+        
+        # Check monitoring queue
+        queue_exists = orchestrator.monitoring_queue is not None
+        print(f"Monitoring queue: {'✅ Connected' if queue_exists else '❌ Missing'}")
+        if queue_exists:
+            print(f"  Queue size: {orchestrator.monitoring_queue.qsize()}/{orchestrator.monitoring_queue.maxsize}")
+        
+        # Check trainer enhancements
+        has_queue = hasattr(orchestrator.trainer, '_monitoring_queue')
+        has_metrics = hasattr(orchestrator.trainer, 'get_current_metrics')
+        print(f"Trainer monitoring injection: {'✅ Complete' if has_queue and has_metrics else '❌ Incomplete'}")
+        
+        # Test the pipeline
+        print("\n🧪 Testing metric collection pipeline...")
+        try:
+            test_metric = orchestrator.trainer.get_current_metrics()
+            print(f"  ✅ get_current_metrics() → {type(test_metric).__name__}")
+            
+            orchestrator.monitoring_queue.put(test_metric, block=False)
+            print(f"  ✅ Queue.put() → Success")
+            
+            retrieved = orchestrator.monitoring_queue.get(timeout=0.1)
+            print(f"  ✅ Queue.get() → {type(retrieved).__name__}")
+            print(f"\n✅ PIPELINE TEST PASSED - Adaptive monitoring is functional!")
+            
+        except Exception as e:
+            print(f"  ❌ PIPELINE TEST FAILED: {e}")
+            print(f"  ⚠️  Adaptive features will be limited!")
+            import traceback
+            traceback.print_exc()
+        
+        print("="*80 + "\n")
+        
+        # Original training start messages
         print(f"Training begins at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"Experiment directory: {experiment_dir}")
         print("")

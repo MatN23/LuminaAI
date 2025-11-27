@@ -21,6 +21,10 @@ import json
 import os
 import copy
 
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Dict
+
 # Quantization imports with fallbacks
 try:
     import bitsandbytes as bnb
@@ -104,6 +108,39 @@ except ImportError:
             pass
         def save_checkpoint(self, *args, **kwargs):
             pass
+
+@dataclass
+class TrainingMetrics:
+    epoch: int
+    step: int
+    loss: float
+    grad_norm: float
+    learning_rate: float
+    expert_utilization: Dict[str, float]
+    memory_usage: Dict[str, float]
+    throughput: float
+    semantic_coherence: float
+    factual_accuracy: float
+    reasoning_score: float
+    timestamp: datetime
+    
+    def to_dict(self):
+        """Convert to dictionary with proper serialization."""
+        result = {
+            'epoch': self.epoch,
+            'step': self.step,
+            'loss': self.loss,
+            'grad_norm': self.grad_norm,
+            'learning_rate': self.learning_rate,
+            'expert_utilization': self.expert_utilization,
+            'memory_usage': self.memory_usage,
+            'throughput': self.throughput,
+            'semantic_coherence': self.semantic_coherence,
+            'factual_accuracy': self.factual_accuracy,
+            'reasoning_score': self.reasoning_score,
+            'timestamp': self.timestamp.isoformat()
+        }
+        return result
 
 
 class PrecisionManager:
@@ -1128,33 +1165,16 @@ class EnhancedConversationTrainer:
     def get_current_metrics(self):
         """
         🔥 CRITICAL FIX: Get current training metrics for orchestrator monitoring.
-    
-        This fixes the broken communication between trainer and orchestrator.
-        Returns a TrainingMetrics object with all current training state.
         """
+        # Try to import from orchestrator first
         try:
-            from orchestrator import TrainingMetrics
+            from training.orchestrator import TrainingMetrics as OrchestratorMetrics
+            MetricsClass = OrchestratorMetrics
         except ImportError:
-            # Fallback if orchestrator not available
-            from dataclasses import dataclass
-            from datetime import datetime
-
-            @dataclass
-            class TrainingMetrics:
-                epoch: int
-                step: int
-                loss: float
-                grad_norm: float
-                learning_rate: float
-                expert_utilization: Dict[str, float]
-                memory_usage: Dict[str, float]
-                throughput: float
-                semantic_coherence: float
-                factual_accuracy: float
-                reasoning_score: float
-                timestamp: datetime
-
-        return TrainingMetrics(
+            # Use the module-level TrainingMetrics defined above
+            MetricsClass = TrainingMetrics
+        
+        return MetricsClass(
             epoch=self.current_epoch,
             step=self.global_step,
             loss=self.metrics.get('train_losses', [0])[-1] if self.metrics.get('train_losses') else 0.0,
@@ -1163,9 +1183,9 @@ class EnhancedConversationTrainer:
             expert_utilization=self._extract_moe_routing_stats(),
             memory_usage=self._get_memory_usage(),
             throughput=self._calculate_throughput(),
-            semantic_coherence=0.0,  # Placeholder for future implementation
-            factual_accuracy=0.0,    # Placeholder for future implementation
-            reasoning_score=0.0,     # Placeholder for future implementation
+            semantic_coherence=0.0,
+            factual_accuracy=0.0,
+            reasoning_score=0.0,
             timestamp=datetime.now()
         )
     def _extract_moe_routing_stats(self) -> Dict[str, float]:
