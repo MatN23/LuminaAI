@@ -290,7 +290,7 @@ class AdaptiveHyperparameterOptimizer:
 
         if len(self.performance_buffer) > 0:
             steps_since_last = current_metrics.step - self.last_adjustment_step
-            if steps_since_last < 50:  # Don't adjust too often
+            if steps_since_last < 20:  # Don't adjust too often
                 self.performance_buffer.append(current_metrics)
                 return None
 
