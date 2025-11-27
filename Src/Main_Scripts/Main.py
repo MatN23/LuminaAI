@@ -4,7 +4,7 @@
 import os
 import sys
 import logging
-import traceback as tb_module
+import traceback
 import psutil
 import gc
 import json
