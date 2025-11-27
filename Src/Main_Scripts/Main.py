@@ -1494,6 +1494,7 @@ def auto_adjust_epochs_chinchilla(config, model, dataset):
 
 def main():
     """Main training function with advanced features and comprehensive logging."""
+    from datetime import datetime
     
     # ========================================================================
     # CONFIGURATION SECTION - MODIFY THESE PARAMETERS
@@ -1807,7 +1808,7 @@ def main():
     # ========================================================================
     monitoring_params = {
         'log_level': "INFO",
-        'experiment_name': f'Enhanced_Training_{datetime.now().strftime("%Y%m%d_%H%M%S")}',
+        'experiment_name': f'Enhanced_Training_{__import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S")}',
         'early_stopping_patience': 5,
         'backup_every_n_hours': 12,
         'enable_wandb': True,
@@ -2412,6 +2413,56 @@ def main():
             
             try:
                 orchestrator = AdaptiveTrainingOrchestrator(config)
+                # Force adaptive logging visibility
+                print("\n" + "="*80)
+                print("🔧 ENABLING VERBOSE ADAPTIVE LOGGING")
+                print("="*80)
+
+                # 1. Lower monitoring interval for more frequent updates
+                orchestrator.config.adaptive_monitoring_interval = 5  # Every 5 steps instead of 50
+
+                # 2. Enable debug logging for adaptive components
+                logging.getLogger('orchestrator').setLevel(logging.DEBUG)
+                logging.getLogger('training.orchestrator').setLevel(logging.DEBUG)
+
+                # 3. Test the monitoring pipeline immediately
+                print("\n🧪 TESTING ADAPTIVE PIPELINE:")
+                try:
+                    # Force a test metric through the system
+                    from training.orchestrator import TrainingMetrics
+                    from datetime import datetime
+                    
+                    test_metric = TrainingMetrics(
+                        epoch=0,
+                        step=0,
+                        loss=5.0,
+                        grad_norm=1.0,
+                        learning_rate=config.learning_rate,
+                        expert_utilization={},
+                        memory_usage={},
+                        throughput=100.0,
+                        semantic_coherence=0.5,
+                        factual_accuracy=0.5,
+                        reasoning_score=0.5,
+                        timestamp=datetime.now()
+                    )
+                    
+                    # Put test metric in queue
+                    orchestrator.monitoring_queue.put(test_metric, block=False)
+                    print(f"✅ Test metric queued (queue size: {orchestrator.monitoring_queue.qsize()})")
+                    
+                    # Give monitoring thread time to process
+                    import time
+                    time.sleep(1.0)
+                    
+                    print(f"✅ Queue processed (remaining: {orchestrator.monitoring_queue.qsize()})")
+                    
+                except Exception as e:
+                    print(f"❌ Pipeline test failed: {e}")
+                    import traceback
+                    traceback.print_exc()
+
+                print("="*80 + "\n")
                 print("DEBUG: Orchestrator created")
                 
                 orchestrator.initialize_training()
