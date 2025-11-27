@@ -1494,7 +1494,6 @@ def auto_adjust_epochs_chinchilla(config, model, dataset):
 
 def main():
     """Main training function with advanced features and comprehensive logging."""
-    from datetime import datetime
     
     # ========================================================================
     # CONFIGURATION SECTION - MODIFY THESE PARAMETERS
@@ -1520,16 +1519,11 @@ def main():
         'warmup_ratio': 0.1,
         'batch_size': 25,
         'gradient_accumulation_steps': 8,
-
-        'enable_adaptive_lr': True,
-        'allow_scheduler_override': True,
-        'adaptive_monitoring_interval': 50,
-        'log_lr_decisions': True,
         
         'precision': "fp16",
         'inference_precision': "fp16",
         'num_experts': 8,
-        'moe_top_k': 1,
+        'moe_top_k': 2,
         'compile': True,
         
         'max_memory_usage': 0.85,
@@ -1547,24 +1541,19 @@ def main():
     # 1. ADAPTIVE INTELLIGENCE PARAMETERS
     # ========================================================================
     adaptive_intelligence_params = {
-        'verbose_adaptive_logging': True,  # Enable detailed adaptive logs  
-        # More conservative thresholds (reduced decision frequency)
-        'meta_confidence_soft': 0.70,       # Increased back to reduce decisions
-        'meta_confidence_medium': 0.80,     # Increased back  
-        'meta_confidence_hard': 0.90,       # Increased back
-        'meta_confidence_critical': 0.95,   # Increased back
+        # More conservative thresholds
+        'meta_confidence_soft': 0.60,       # Lowered from 0.70
+        'meta_confidence_medium': 0.75,     # Lowered from 0.80  
+        'meta_confidence_hard': 0.85,       # Lowered from 0.90
+        'meta_confidence_critical': 0.92,   # Lowered from 0.95
         
-        # Less exploration (reduces overhead)
-        'strategy_memory_size': 10,         # Reduced from 15
-        'learning_transfer_weight': 0.9,    # Increased to reduce exploration
+        # More exploration
+        'strategy_memory_size': 15,         # Reduced from 20
+        'learning_transfer_weight': 0.7,    # Reduced from 0.8
         
-        # Less aggressive exploration
-        'adaptive_risk_tolerance': 'balanced',  # Changed back from 'aggressive'
-        'exploration_rate': 0.10,           # Reduced from 0.25
-        
-        # Performance optimizations
-        'decision_cooldown_steps': 100,     # Minimum steps between decisions
-        'skip_meta_learning': True,         # Disable meta-learning (expensive!)
+        # More aggressive exploration
+        'adaptive_risk_tolerance': 'aggressive',  # Changed from 'balanced'
+        'exploration_rate': 0.25,           # Increased from 0.15
     }
     
     # ========================================================================
@@ -1709,7 +1698,7 @@ def main():
     adaptive_lr_params = {
         'enable_adaptive_lr': True,
         'allow_scheduler_override': True,
-        'min_override_threshold': 0.1,
+        'min_override_threshold': 0.2,
         'emergency_override_enabled': True,
         'log_lr_decisions': True,
     }
@@ -1808,7 +1797,7 @@ def main():
     # ========================================================================
     monitoring_params = {
         'log_level': "INFO",
-        'experiment_name': f'Enhanced_Training_{__import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S")}',
+        'experiment_name': f'Enhanced_Training_{datetime.now().strftime("%Y%m%d_%H%M%S")}',
         'early_stopping_patience': 5,
         'backup_every_n_hours': 12,
         'enable_wandb': True,
@@ -1816,12 +1805,6 @@ def main():
         'wandb_entity': 'matiasnhmb',
         'health_check_interval': 50,
         'log_every_n_steps': 50,
-
-        # 🚀 Performance optimizations
-        'adaptive_monitoring_interval': 10,
-        'lightweight_metrics_only': False,    
-        'disable_realtime_analytics': False,   # 🆕 Changed to True - disable expensive analytics
-        'monitoring_queue_size': 10,          # 🆕 Smaller queue to reduce memory
     }
     
     # ========================================================================
@@ -2413,56 +2396,6 @@ def main():
             
             try:
                 orchestrator = AdaptiveTrainingOrchestrator(config)
-                # Force adaptive logging visibility
-                print("\n" + "="*80)
-                print("🔧 ENABLING VERBOSE ADAPTIVE LOGGING")
-                print("="*80)
-
-                # 1. Lower monitoring interval for more frequent updates
-                orchestrator.config.adaptive_monitoring_interval = 5  # Every 5 steps instead of 50
-
-                # 2. Enable debug logging for adaptive components
-                logging.getLogger('orchestrator').setLevel(logging.DEBUG)
-                logging.getLogger('training.orchestrator').setLevel(logging.DEBUG)
-
-                # 3. Test the monitoring pipeline immediately
-                print("\n🧪 TESTING ADAPTIVE PIPELINE:")
-                try:
-                    # Force a test metric through the system
-                    from training.orchestrator import TrainingMetrics
-                    from datetime import datetime
-                    
-                    test_metric = TrainingMetrics(
-                        epoch=0,
-                        step=0,
-                        loss=5.0,
-                        grad_norm=1.0,
-                        learning_rate=config.learning_rate,
-                        expert_utilization={},
-                        memory_usage={},
-                        throughput=100.0,
-                        semantic_coherence=0.5,
-                        factual_accuracy=0.5,
-                        reasoning_score=0.5,
-                        timestamp=datetime.now()
-                    )
-                    
-                    # Put test metric in queue
-                    orchestrator.monitoring_queue.put(test_metric, block=False)
-                    print(f"✅ Test metric queued (queue size: {orchestrator.monitoring_queue.qsize()})")
-                    
-                    # Give monitoring thread time to process
-                    import time
-                    time.sleep(1.0)
-                    
-                    print(f"✅ Queue processed (remaining: {orchestrator.monitoring_queue.qsize()})")
-                    
-                except Exception as e:
-                    print(f"❌ Pipeline test failed: {e}")
-                    import traceback
-                    traceback.print_exc()
-
-                print("="*80 + "\n")
                 print("DEBUG: Orchestrator created")
                 
                 orchestrator.initialize_training()

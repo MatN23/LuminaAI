@@ -16,8 +16,6 @@ from dataclasses import dataclass, asdict
 from collections import deque
 import threading
 import queue
-import functools
-import math
 
 import numpy as np
 import torch
@@ -292,7 +290,7 @@ class AdaptiveHyperparameterOptimizer:
 
         if len(self.performance_buffer) > 0:
             steps_since_last = current_metrics.step - self.last_adjustment_step
-            if steps_since_last < 20:  # Don't adjust too often
+            if steps_since_last < 50:  # Don't adjust too often
                 self.performance_buffer.append(current_metrics)
                 return None
 
@@ -470,56 +468,28 @@ class RealTimeAnalytics:
         return None
         
     def analyze_loss_dynamics(self, recent_metrics):
-        """Analyze loss curve dynamics for insights with robust error handling."""
+        """Analyze loss curve dynamics for insights."""
         if len(recent_metrics) < 10:
             return None
         
         losses = [m.loss for m in recent_metrics]
         steps = [m.step for m in recent_metrics]
         
-        # CRITICAL FIX: Check for invalid data before polynomial fitting
-        # This prevents SVD convergence errors
+        # Fit polynomial to detect trends
+        coeffs = np.polyfit(steps, losses, 2)
         
-        # 1. Check for all-zero losses (common in early training)
-        if all(loss == 0.0 for loss in losses):
-            logging.warning("Loss dynamics: All losses are zero - skipping analysis")
-            return None
+        # Analyze curvature
+        curvature = coeffs[0]
+        trend = coeffs[1]
         
-        # 2. Check for NaN or Inf values
-        import math
-        if any(math.isnan(loss) or math.isinf(loss) for loss in losses):
-            logging.warning("Loss dynamics: Invalid loss values detected - skipping analysis")
-            return None
+        insights = {
+            'trend_direction': 'decreasing' if trend < 0 else 'increasing',
+            'trend_strength': abs(trend),
+            'curvature': 'concave_up' if curvature > 0 else 'concave_down',
+            'predicted_convergence': self._predict_convergence(coeffs, steps[-1])
+        }
         
-        # 3. Check for sufficient variance (too little variance causes SVD issues)
-        loss_std = np.std(losses)
-        if loss_std < 1e-8:
-            logging.warning(f"Loss dynamics: Insufficient variance (std={loss_std:.2e}) - skipping analysis")
-            return None
-        
-        try:
-            # Fit polynomial to detect trends (now safe from SVD errors)
-            coeffs = np.polyfit(steps, losses, 2)
-            
-            # Analyze curvature
-            curvature = coeffs[0]
-            trend = coeffs[1]
-            
-            insights = {
-                'trend_direction': 'decreasing' if trend < 0 else 'increasing',
-                'trend_strength': abs(trend),
-                'curvature': 'concave_up' if curvature > 0 else 'concave_down',
-                'predicted_convergence': self._predict_convergence(coeffs, steps[-1])
-            }
-            
-            return insights
-            
-        except np.linalg.LinAlgError as e:
-            logging.warning(f"Loss dynamics: SVD convergence failed - {e}")
-            return None
-        except Exception as e:
-            logging.warning(f"Loss dynamics: Unexpected error - {e}")
-            return None
+        return insights
     
     def detect_training_anomalies(self, current_metrics):
         """Detect unusual patterns in training using adaptive thresholds."""
@@ -886,163 +856,106 @@ class AdaptiveTrainingOrchestrator:
         logging.info("Started real-time monitoring thread")
     
     def _process_real_time_metrics(self, metrics):
-        """Enhanced metric processing with visible adaptive decisions."""
-
-        # Initialize last processed step
-        if not hasattr(self, '_last_processed_step'):
-            self._last_processed_step = -1
-
-        # Deduplicate steps
-        if metrics.step == self._last_processed_step:
-            return  # Exit immediately for duplicates
-        self._last_processed_step = metrics.step
-
-        # Skip zero losses
-        if metrics.loss == 0.0:
-            return
-
-        # Print basic metric info
-        print(f"📊 [ADAPTIVE] Step {metrics.step} | Loss: {metrics.loss:.4f} | LR: {metrics.learning_rate:.2e}")
-        print(f"🔊 [ADAPTIVE DEBUG] Received metric: Step {metrics.step}, Loss {metrics.loss:.4f}")
-
-        # Initialize histories if not present
-        if not hasattr(self, 'training_metrics_history'):
-            self.training_metrics_history = []
-        if not hasattr(self, 'current_metrics'):
-            self.current_metrics = None
-
-        # Store metrics
+        """Process metrics in real-time and make adaptive decisions."""
         self.current_metrics = metrics
         self.training_metrics_history.append(metrics)
-
-        # Monitoring interval (default to 10 if not set)
-        monitoring_interval = getattr(self.config, 'adaptive_monitoring_interval', 10)
-
-        # Log every 10 steps
-        try:
-            queue_size = self.monitoring_queue.qsize()
-        except AttributeError:
-            queue_size = 'N/A'
-        if metrics.step % 10 == 0:
-            logging.info(
-                f"📊 [ADAPTIVE] Step {metrics.step} | Loss: {metrics.loss:.4f} | "
-                f"LR: {metrics.learning_rate:.2e} | Queue: {queue_size}"
-            )
-
-        # Only do heavy analysis at monitoring intervals
-        if metrics.step % monitoring_interval != 0:
-            return
-
-        logging.info(f"\n{'='*80}")
-        logging.info(f"🔍 ADAPTIVE ANALYSIS @ Step {metrics.step}")
-        logging.info(f"{'='*80}")
-
-        # Initialize analytics buffer
-        if not hasattr(self.analytics, 'metrics_buffer'):
-            self.analytics.metrics_buffer = []
         self.analytics.metrics_buffer.append(metrics)
-
-        # 1. Detect anomalies
+        
+        # Check for anomalies
         anomalies = self.analytics.detect_training_anomalies(metrics)
         if anomalies:
-            logging.warning(f"⚠️  ANOMALIES DETECTED:")
             for anomaly in anomalies:
-                severity_emoji = "🚨" if anomaly.get('severity') == 'critical' else "⚠️ "
-                logging.warning(f"  {severity_emoji} {anomaly['type']}: {anomaly['description']}")
-                if anomaly.get('severity') in ['critical', 'high']:
-                    logging.warning(f"     → Taking corrective action...")
-                    self._handle_training_anomaly(anomaly)
+                logging.warning(f"Training anomaly detected: {anomaly}")
+                self._handle_training_anomaly(anomaly)
 
-        # 2. Analyze loss dynamics every 500 steps
-        if metrics.step % 500 == 0 and len(self.training_metrics_history) >= 10:
+        if self.global_step % 100 == 0:
+            scheduler_status = self.get_scheduler_status()
+            logging.info(f"📊 Scheduler Status at step {self.global_step}:")
+            for key, value in scheduler_status.items():
+                logging.info(f"   {key}: {value}")
+        
+        # Analyze loss dynamics
+        if len(self.training_metrics_history) >= 10:
             insights = self.analytics.analyze_loss_dynamics(self.training_metrics_history[-10:])
             if insights:
-                logging.info(f"\n📈 LOSS DYNAMICS INSIGHTS:")
-                logging.info(f"   Trend: {insights['trend_direction']} ({insights['trend_strength']:.4f})")
-                logging.info(f"   Curvature: {insights['curvature']}")
-                if insights.get('predicted_convergence'):
-                    logging.info(f"   Predicted convergence: step {insights['predicted_convergence']}")
                 self._act_on_loss_insights(insights)
-
-        # 3. Check learning rate adjustment
+        
+        # Check if hyperparameters should be adjusted
         lr_adjustment = self.hyperparameter_optimizer.should_adjust_learning_rate(metrics)
         if lr_adjustment:
-            logging.info(f"\n🎯 LR ADJUSTMENT RECOMMENDED:")
-            logging.info(f"   Action: {lr_adjustment.get('action', 'unknown')}")
-            logging.info(f"   Factor: {lr_adjustment.get('factor', 1.0)}x")
-            logging.info(f"   Reason: {lr_adjustment.get('reasoning', 'N/A')}")
             self._apply_learning_rate_adjustment(lr_adjustment)
-
-        logging.info(f"{'='*80}\n")
-
+        
+        # Check architecture modifications
+        if hasattr(metrics, 'expert_utilization'):
+            arch_suggestions = self.architecture_evolution.suggest_architecture_changes(
+                metrics, self._get_model_info()
+            )
+            for suggestion in arch_suggestions:
+                self._consider_architecture_change(suggestion)
+        
+        # Predict training trajectory
+        trajectory = self.meta_learner.predict_training_trajectory(metrics, self.config)
+        if trajectory and trajectory['confidence'] > 0.8:
+            self._act_on_trajectory_prediction(trajectory)
     
     def _handle_training_anomaly(self, anomaly):
-        """Handle detected training anomalies with enhanced logging."""
-        
-        logging.warning(f"\n{'='*80}")
-        logging.warning(f"🔧 HANDLING ANOMALY: {anomaly['type']}")
-        logging.warning(f"   Severity: {anomaly.get('severity', 'unknown')}")
-        logging.warning(f"   Description: {anomaly.get('description', 'N/A')}")
-        logging.warning(f"{'='*80}")
-        
+        """Handle detected training anomalies."""
         if anomaly['type'] == 'gradient_explosion':
+            # ✅ Mark as emergency
             adjustment = {
                 'factor': 0.1,
-                'reasoning': f"EMERGENCY: {anomaly.get('description', 'Gradient explosion')}",
+                'reasoning': 'EMERGENCY: Gradient explosion detected',
                 'emergency': True
             }
-            logging.warning(f"   → Applying emergency LR reduction (0.1x)")
             self._apply_learning_rate_adjustment(adjustment)
 
         elif anomaly['type'] == 'loss_spike':
+            # ✅ Mark as emergency if severe
             severity = anomaly.get('severity', 'medium')
-            factor = 0.5 if severity == 'critical' else 0.8
-            
             adjustment = {
-                'factor': factor,
-                'reasoning': f"Loss spike detected: {anomaly.get('description', 'N/A')}",
+                'factor': 0.5 if severity == 'critical' else 0.8,
+                'reasoning': f'Loss spike detected (severity: {severity})',
                 'emergency': severity == 'critical'
             }
-            logging.warning(f"   → Applying LR reduction ({factor}x)")
             self._apply_learning_rate_adjustment(adjustment)
-        
-        logging.warning(f"{'='*80}\n")
     
     def _apply_learning_rate_adjustment(self, adjustment):
-        """Apply learning rate adjustment with prominent logging."""
+        """Apply learning rate adjustment - FIXED to bypass scheduler conflicts."""
         if not self.trainer:
             return
 
+        # ✅ CHECK: Is adaptive LR enabled at all?
         if not getattr(self.config, 'enable_adaptive_lr', True):
-            logging.info(f"⏸️  Adaptive LR disabled - skipping: {adjustment['reasoning']}")
+            if getattr(self.config, 'log_lr_decisions', False):
+                logging.info(f"⏸️ Adaptive LR disabled - skipping adjustment: {adjustment['reasoning']}")
             return
 
         current_lr = getattr(self.trainer, 'current_lr', self.config.learning_rate)
         new_lr = current_lr * adjustment['factor']
+
         is_emergency = adjustment.get('emergency', False)
 
-        # ✅ ALWAYS log LR changes prominently
-        logging.info(f"\n{'='*80}")
         if is_emergency:
-            logging.warning(f"🚨 EMERGENCY LR OVERRIDE")
+            # Emergency changes always apply immediately
+            logging.warning(f"🚨 EMERGENCY LR Override")
+            logging.warning(f"   Reason: {adjustment['reasoning']}")
+            logging.warning(f"   Current LR: {current_lr:.2e} → New LR: {new_lr:.2e}")
         else:
-            logging.info(f"🎛️  ADAPTIVE LR ADJUSTMENT")
-        
-        logging.info(f"   Current LR: {current_lr:.2e}")
-        logging.info(f"   New LR: {new_lr:.2e}")
-        logging.info(f"   Change: {((new_lr - current_lr) / current_lr * 100):+.1f}%")
-        logging.info(f"   Reason: {adjustment['reasoning']}")
-        logging.info(f"   Emergency: {'YES' if is_emergency else 'NO'}")
-        logging.info(f"{'='*80}\n")
+            # Check if change is significant enough
+            min_threshold = getattr(self.config, 'min_override_threshold', 0.1)  # ✅ Lowered from 0.2
+            change_ratio = abs(new_lr - current_lr) / current_lr
 
-        # Rest of the method stays the same...
-        change_ratio = abs(new_lr - current_lr) / current_lr
-        min_threshold = getattr(self.config, 'min_override_threshold', 0.1)
+            if change_ratio < min_threshold:
+                if getattr(self.config, 'log_lr_decisions', False):
+                    logging.info(f"⏸️ LR change too small ({change_ratio:.1%} < {min_threshold:.1%})")
+                return
 
-        if not is_emergency and change_ratio < min_threshold:
-            logging.info(f"⏸️  Change too small ({change_ratio:.1%} < {min_threshold:.1%}), skipping")
-            return
+            if getattr(self.config, 'log_lr_decisions', False):
+                logging.info(f"📊 Adaptive LR Adjustment")
+                logging.info(f"   Reason: {adjustment['reasoning']}")
+                logging.info(f"   Current LR: {current_lr:.2e} → New LR: {new_lr:.2e} ({change_ratio:.1%} change)")
 
+        # Create and execute decision
         decision = AdaptiveDecision(
             decision_type='learning_rate_adjustment',
             parameters={
@@ -1059,11 +972,11 @@ class AdaptiveTrainingOrchestrator:
 
         self._execute_adaptive_decision(decision)
 
+        # ✅ Update trainer's learning rate
         if hasattr(self.trainer, 'adjust_learning_rate'):
+            # Pass emergency flag to set appropriate grace period
             grace_period = 20 if is_emergency else 10
             self.trainer.adjust_learning_rate(new_lr, grace_period=grace_period)
-            logging.info(f"✅ LR adjustment applied successfully")
-
     
     def _execute_adaptive_decision(self, decision):
         """Execute an adaptive decision."""
@@ -1287,7 +1200,7 @@ class AdaptiveTrainingOrchestrator:
             logging.info("✅ Fallback trainer initialized")
     
     def _enhance_trainer_with_adaptive_features(self):
-        """Add adaptive features to existing trainer - COMPLETE VERSION WITH FIX."""
+        """Add adaptive features to existing trainer - COMPLETE VERSION."""
         
         logging.info("Enhancing trainer with adaptive monitoring capabilities...")
         
@@ -1298,37 +1211,34 @@ class AdaptiveTrainingOrchestrator:
         logging.info(f"✅ Injected monitoring queue (ID: {id(self.monitoring_queue)})")
         
         # 🔥 Step 2: Wrap the optimizer step to capture metrics automatically
-        # ✅ FIX: Store reference properly and use functools.wraps for proper binding
-        import functools
-        
         original_optimizer_step = self.trainer.optimizer_step
         
-        if not hasattr(self.trainer, '_last_logged_step'):
-            self.trainer._last_logged_step = -1
-
-        @functools.wraps(original_optimizer_step)
         def enhanced_optimizer_step():
-            """Optimizer step with DEDUPLICATED metric collection."""
+            """Optimizer step with automatic metric collection."""
+            # Call original optimizer step
             result = original_optimizer_step()
             
+            # After optimizer step, collect and send metrics
             try:
                 if hasattr(self.trainer, 'get_current_metrics'):
                     metrics = self.trainer.get_current_metrics()
-                    
-                    # Skip invalid or duplicate metrics
-                    if not metrics or metrics.loss == 0.0:
-                        return result
-                    
-                    # Only log if this is a NEW step
-                    if metrics.step != self.trainer._last_logged_step:
-                        self.trainer._monitoring_queue.put_nowait(metrics)
-                        self.trainer._last_logged_step = metrics.step
-            except:
-                pass
+                    if metrics:
+                        try:
+                            self.monitoring_queue.put(metrics, block=False)
+                        except queue.Full:
+                            # Queue full - drop oldest metric and try again
+                            try:
+                                self.monitoring_queue.get_nowait()
+                                self.monitoring_queue.put(metrics, block=False)
+                            except (queue.Empty, queue.Full):
+                                pass  # Skip this metric
+            except Exception as e:
+                # Only log errors occasionally to avoid spam
+                if self.trainer.global_step % 100 == 0:
+                    logging.debug(f"Could not send metrics: {e}")
             
             return result
         
-        # ✅ FIX: Replace the method properly
         self.trainer.optimizer_step = enhanced_optimizer_step
         logging.info("✅ Enhanced optimizer_step() with automatic metric collection")
         
@@ -1383,7 +1293,6 @@ class AdaptiveTrainingOrchestrator:
         self.trainer._recent_losses = []
         self.trainer._loss_spike_threshold = 2.0  # 2x increase triggers spike
         
-        @functools.wraps(original_train_step)
         def enhanced_train_step(batch):
             """Train step with automatic anomaly detection."""
             # Call original train step
@@ -1413,14 +1322,12 @@ class AdaptiveTrainingOrchestrator:
         logging.info("✅ Enhanced train_step() with anomaly detection")
         
         # 🔥 Step 5: Enhance optimizer_step to detect gradient explosions
-        # ✅ FIX: We already wrapped optimizer_step above, so we need to wrap the wrapper
-        previous_enhanced_step = self.trainer.optimizer_step
+        original_opt_step = self.trainer.optimizer_step
         
-        @functools.wraps(previous_enhanced_step)
         def enhanced_optimizer_step_with_checks():
             """Optimizer step with gradient explosion detection."""
             # Call the already-enhanced optimizer step
-            result = previous_enhanced_step()
+            result = original_opt_step()
             
             # Check for gradient explosion
             if result and 'grad_norm' in result:
@@ -1440,33 +1347,36 @@ class AdaptiveTrainingOrchestrator:
         self.trainer._adaptive_lr_history = []
         self.trainer._scheduler_lr_history = []
         
-        # Only wrap if _standard_optimizer_step exists
+        original_standard_optimizer_step = None
         if hasattr(self.trainer, '_standard_optimizer_step'):
             original_standard_optimizer_step = self.trainer._standard_optimizer_step
-            
-            @functools.wraps(original_standard_optimizer_step)
-            def track_lr_changes(*args, **kwargs):
-                """Track LR changes from both adaptive and scheduler."""
+        
+        def track_lr_changes(*args, **kwargs):
+            """Track LR changes from both adaptive and scheduler."""
+            if original_standard_optimizer_step:
                 result = original_standard_optimizer_step(*args, **kwargs)
-                
-                # Track LR history
-                if 'lr' in result:
-                    current_lr = result['lr']
-                    adaptive_active = getattr(self.trainer, '_adaptive_lr_override', False)
-                    
-                    if adaptive_active:
-                        self.trainer._adaptive_lr_history.append((self.trainer.global_step, current_lr))
-                    else:
-                        self.trainer._scheduler_lr_history.append((self.trainer.global_step, current_lr))
-                    
-                    # Keep only recent history (last 1000 steps)
-                    if len(self.trainer._adaptive_lr_history) > 1000:
-                        self.trainer._adaptive_lr_history.pop(0)
-                    if len(self.trainer._scheduler_lr_history) > 1000:
-                        self.trainer._scheduler_lr_history.pop(0)
-                
-                return result
+            else:
+                result = {}
             
+            # Track LR history
+            if 'lr' in result:
+                current_lr = result['lr']
+                adaptive_active = getattr(self.trainer, '_adaptive_lr_override', False)
+                
+                if adaptive_active:
+                    self.trainer._adaptive_lr_history.append((self.trainer.global_step, current_lr))
+                else:
+                    self.trainer._scheduler_lr_history.append((self.trainer.global_step, current_lr))
+                
+                # Keep only recent history (last 1000 steps)
+                if len(self.trainer._adaptive_lr_history) > 1000:
+                    self.trainer._adaptive_lr_history.pop(0)
+                if len(self.trainer._scheduler_lr_history) > 1000:
+                    self.trainer._scheduler_lr_history.pop(0)
+            
+            return result
+        
+        if original_standard_optimizer_step:
             self.trainer._standard_optimizer_step = track_lr_changes
             logging.info("✅ Added LR tracking for adaptive vs scheduler decisions")
         
