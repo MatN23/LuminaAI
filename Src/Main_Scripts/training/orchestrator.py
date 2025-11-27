@@ -1239,29 +1239,21 @@ class AdaptiveTrainingOrchestrator:
         # 🔥 Step 2: Wrap the optimizer step to capture metrics automatically
         original_optimizer_step = self.trainer.optimizer_step
         
-        def enhanced_optimizer_step():
-            """Optimizer step with automatic metric collection."""
-            # Call original optimizer step
-            result = original_optimizer_step()
+        def enhanced_optimizer_step(self):
+            """Optimizer step with NON-BLOCKING metric collection."""
+            result = self.original_optimizer_step()
             
-            # After optimizer step, collect and send metrics
+            # NON-BLOCKING queue put
             try:
-                if hasattr(self.trainer, 'get_current_metrics'):
-                    metrics = self.trainer.get_current_metrics()
+                if hasattr(self, 'get_current_metrics'):
+                    metrics = self.get_current_metrics()
                     if metrics:
-                        try:
-                            self.monitoring_queue.put(metrics, block=False)
-                        except queue.Full:
-                            # Queue full - drop oldest metric and try again
-                            try:
-                                self.monitoring_queue.get_nowait()
-                                self.monitoring_queue.put(metrics, block=False)
-                            except (queue.Empty, queue.Full):
-                                pass  # Skip this metric
-            except Exception as e:
-                # Only log errors occasionally to avoid spam
-                if self.trainer.global_step % 100 == 0:
-                    logging.debug(f"Could not send metrics: {e}")
+                        # NON-BLOCKING - if queue full, skip this metric
+                        self.monitoring_queue.put_nowait(metrics)
+            except queue.Full:
+                pass  # Skip metric rather than block
+            except Exception:
+                pass  # Don't crash training
             
             return result
         
