@@ -1805,6 +1805,10 @@ def main():
         'wandb_entity': 'matiasnhmb',
         'health_check_interval': 50,
         'log_every_n_steps': 50,
+
+        'adaptive_monitoring_interval': 100,  # Only analyze every 100 steps (was every step!)
+        'lightweight_metrics_only': True,     # Skip expensive metric collection
+        'disable_realtime_analytics': False,  # Keep analytics but run less frequently
     }
     
     # ========================================================================
