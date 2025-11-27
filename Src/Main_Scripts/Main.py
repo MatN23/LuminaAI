@@ -1512,8 +1512,8 @@ def main():
         'use_moe': True,
         'use_mod': True,
         'num_epochs': 20,
-        'learning_rate': 2e-5,
-        'min_lr': 1e-7,
+        'learning_rate': 5e-4,
+        'min_lr': 1e-6,
         'use_lr_scheduler': True,
         'lr_scheduler': "cosine",  # cosine, constant, or linear
         'warmup_ratio': 0.1,
@@ -1541,19 +1541,19 @@ def main():
     # 1. ADAPTIVE INTELLIGENCE PARAMETERS
     # ========================================================================
     adaptive_intelligence_params = {
-        # Meta-learning confidence thresholds
-        'meta_confidence_soft': 0.70,       # Start suggesting changes
-        'meta_confidence_medium': 0.80,     # Make moderate changes
-        'meta_confidence_hard': 0.90,       # Make aggressive changes
-        'meta_confidence_critical': 0.95,   # Emergency interventions
+        # More conservative thresholds
+        'meta_confidence_soft': 0.60,       # Lowered from 0.70
+        'meta_confidence_medium': 0.75,     # Lowered from 0.80  
+        'meta_confidence_hard': 0.85,       # Lowered from 0.90
+        'meta_confidence_critical': 0.92,   # Lowered from 0.95
         
-        # Decision memory
-        'strategy_memory_size': 20,         # Remember top N strategies
-        'learning_transfer_weight': 0.8,    # Trust past learnings (0-1)
+        # More exploration
+        'strategy_memory_size': 15,         # Reduced from 20
+        'learning_transfer_weight': 0.7,    # Reduced from 0.8
         
-        # Risk tolerance
-        'adaptive_risk_tolerance': 'balanced',  # 'conservative', 'balanced', 'aggressive'
-        'exploration_rate': 0.15,           # Try new strategies 15% of time
+        # More aggressive exploration
+        'adaptive_risk_tolerance': 'aggressive',  # Changed from 'balanced'
+        'exploration_rate': 0.25,           # Increased from 0.15
     }
     
     # ========================================================================
@@ -1826,18 +1826,21 @@ def main():
     # ========================================================================
     chinchilla_params = {
         'auto_epoch_scaling': True,
-        'min_auto_epochs': 1,
+        'min_auto_epochs': 5,  # Increased from 1 - require minimum 3 epochs
         'max_auto_epochs': 50,
         'chinchilla_multiplier': 20,
         'enable_loss_landscape': True,
         'enable_compute_efficiency': True,
         'enable_adaptive_curriculum': True,
-        'enable_early_stopping': True,
-        'plateau_patience': 5,
-        'efficiency_decline_threshold': 0.3,
-        'convergence_threshold': 0.85,
+        'enable_early_stopping': False,
+        'plateau_patience': 10,  # Increased from 5 - be more patient
+        'efficiency_decline_threshold': 0.1,  # Lowered from 0.3 - more sensitive to decline
+        'convergence_threshold': 0.95,  # Increased from 0.85 - require better convergence
         'enable_memory_aware_scaling': True,
         'quality_aware_adjustment': True,
+        'min_loss_reduction': 0.1,  # Require at least 10% loss reduction
+        'min_absolute_loss': 2.0,   # Don't stop if loss > 2.0
+        'warmup_epochs': 2,         # No early stopping in first 2 epochs
     }
 
     # ========================================================================
