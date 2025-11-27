@@ -856,98 +856,132 @@ class AdaptiveTrainingOrchestrator:
         logging.info("Started real-time monitoring thread")
     
     def _process_real_time_metrics(self, metrics):
-        """Optimized metric processing."""
+        """Enhanced metric processing with visible adaptive decisions."""
         
-        # 🆕 Skip processing if we're not at the monitoring interval
-        monitoring_interval = getattr(self.config, 'adaptive_monitoring_interval', 50)
-        if metrics.step % monitoring_interval != 0:
-            return
-        
+        # Store metrics
         self.current_metrics = metrics
         self.training_metrics_history.append(metrics)
         
-        # 🆕 Only analyze every N steps to reduce overhead
-        if len(self.analytics.metrics_buffer) > 0 and metrics.step % 100 == 0:
-            self.analytics.metrics_buffer.append(metrics)
-            
-            # Check for critical anomalies only (not all analytics)
-            anomalies = self.analytics.detect_training_anomalies(metrics)
-            if anomalies:
-                for anomaly in anomalies:
-                    if anomaly.get('severity') in ['critical', 'high']:
-                        logging.warning(f"Critical anomaly: {anomaly}")
-                        self._handle_training_anomaly(anomaly)
+        # ✅ ALWAYS log when processing metrics (not just on interval)
+        monitoring_interval = getattr(self.config, 'adaptive_monitoring_interval', 50)
         
-        # 🆕 Only run expensive analytics periodically
-        if metrics.step % 500 == 0:  # Every 500 steps instead of every step
-            if len(self.training_metrics_history) >= 10:
-                insights = self.analytics.analyze_loss_dynamics(self.training_metrics_history[-10:])
-                if insights:
-                    self._act_on_loss_insights(insights)
+        # Log every time we receive metrics
+        if metrics.step % 10 == 0:  # Log frequently
+            logging.info(f"📊 [ADAPTIVE] Step {metrics.step} | Loss: {metrics.loss:.4f} | LR: {metrics.learning_rate:.2e} | Queue: {self.monitoring_queue.qsize()}")
+        
+        # Only do expensive analysis at intervals
+        if metrics.step % monitoring_interval != 0:
+            return
+        
+        logging.info(f"\n{'='*80}")
+        logging.info(f"🔍 ADAPTIVE ANALYSIS @ Step {metrics.step}")
+        logging.info(f"{'='*80}")
+        
+        self.analytics.metrics_buffer.append(metrics)
+        
+        # 1. Check for critical anomalies
+        anomalies = self.analytics.detect_training_anomalies(metrics)
+        if anomalies:
+            logging.warning(f"⚠️  ANOMALIES DETECTED:")
+            for anomaly in anomalies:
+                severity_emoji = "🚨" if anomaly.get('severity') == 'critical' else "⚠️ "
+                logging.warning(f"  {severity_emoji} {anomaly['type']}: {anomaly['description']}")
+                
+                if anomaly.get('severity') in ['critical', 'high']:
+                    logging.warning(f"     → Taking corrective action...")
+                    self._handle_training_anomaly(anomaly)
+        
+        # 2. Analyze loss dynamics (every 500 steps)
+        if metrics.step % 500 == 0 and len(self.training_metrics_history) >= 10:
+            insights = self.analytics.analyze_loss_dynamics(self.training_metrics_history[-10:])
+            if insights:
+                logging.info(f"\n📈 LOSS DYNAMICS INSIGHTS:")
+                logging.info(f"   Trend: {insights['trend_direction']} ({insights['trend_strength']:.4f})")
+                logging.info(f"   Curvature: {insights['curvature']}")
+                if insights.get('predicted_convergence'):
+                    logging.info(f"   Predicted convergence: step {insights['predicted_convergence']}")
+                
+                self._act_on_loss_insights(insights)
+        
+        # 3. Check if LR adjustment needed
+        lr_adjustment = self.hyperparameter_optimizer.should_adjust_learning_rate(metrics)
+        if lr_adjustment:
+            logging.info(f"\n🎯 LR ADJUSTMENT RECOMMENDED:")
+            logging.info(f"   Action: {lr_adjustment.get('action', 'unknown')}")
+            logging.info(f"   Factor: {lr_adjustment.get('factor', 1.0)}x")
+            logging.info(f"   Reason: {lr_adjustment.get('reasoning', 'N/A')}")
             
-            # Hyperparameter adjustments less frequently
-            lr_adjustment = self.hyperparameter_optimizer.should_adjust_learning_rate(metrics)
-            if lr_adjustment:
-                self._apply_learning_rate_adjustment(lr_adjustment)
+            self._apply_learning_rate_adjustment(lr_adjustment)
+        
+        logging.info(f"{'='*80}\n")
     
     def _handle_training_anomaly(self, anomaly):
-        """Handle detected training anomalies."""
+        """Handle detected training anomalies with enhanced logging."""
+        
+        logging.warning(f"\n{'='*80}")
+        logging.warning(f"🔧 HANDLING ANOMALY: {anomaly['type']}")
+        logging.warning(f"   Severity: {anomaly.get('severity', 'unknown')}")
+        logging.warning(f"   Description: {anomaly.get('description', 'N/A')}")
+        logging.warning(f"{'='*80}")
+        
         if anomaly['type'] == 'gradient_explosion':
-            # ✅ Mark as emergency
             adjustment = {
                 'factor': 0.1,
-                'reasoning': 'EMERGENCY: Gradient explosion detected',
+                'reasoning': f"EMERGENCY: {anomaly.get('description', 'Gradient explosion')}",
                 'emergency': True
             }
+            logging.warning(f"   → Applying emergency LR reduction (0.1x)")
             self._apply_learning_rate_adjustment(adjustment)
 
         elif anomaly['type'] == 'loss_spike':
-            # ✅ Mark as emergency if severe
             severity = anomaly.get('severity', 'medium')
+            factor = 0.5 if severity == 'critical' else 0.8
+            
             adjustment = {
-                'factor': 0.5 if severity == 'critical' else 0.8,
-                'reasoning': f'Loss spike detected (severity: {severity})',
+                'factor': factor,
+                'reasoning': f"Loss spike detected: {anomaly.get('description', 'N/A')}",
                 'emergency': severity == 'critical'
             }
+            logging.warning(f"   → Applying LR reduction ({factor}x)")
             self._apply_learning_rate_adjustment(adjustment)
+        
+        logging.warning(f"{'='*80}\n")
     
     def _apply_learning_rate_adjustment(self, adjustment):
-        """Apply learning rate adjustment - FIXED to bypass scheduler conflicts."""
+        """Apply learning rate adjustment with prominent logging."""
         if not self.trainer:
             return
 
-        # ✅ CHECK: Is adaptive LR enabled at all?
         if not getattr(self.config, 'enable_adaptive_lr', True):
-            if getattr(self.config, 'log_lr_decisions', False):
-                logging.info(f"⏸️ Adaptive LR disabled - skipping adjustment: {adjustment['reasoning']}")
+            logging.info(f"⏸️  Adaptive LR disabled - skipping: {adjustment['reasoning']}")
             return
 
         current_lr = getattr(self.trainer, 'current_lr', self.config.learning_rate)
         new_lr = current_lr * adjustment['factor']
-
         is_emergency = adjustment.get('emergency', False)
 
+        # ✅ ALWAYS log LR changes prominently
+        logging.info(f"\n{'='*80}")
         if is_emergency:
-            # Emergency changes always apply immediately
-            logging.warning(f"🚨 EMERGENCY LR Override")
-            logging.warning(f"   Reason: {adjustment['reasoning']}")
-            logging.warning(f"   Current LR: {current_lr:.2e} → New LR: {new_lr:.2e}")
+            logging.warning(f"🚨 EMERGENCY LR OVERRIDE")
         else:
-            # Check if change is significant enough
-            min_threshold = getattr(self.config, 'min_override_threshold', 0.1)  # ✅ Lowered from 0.2
-            change_ratio = abs(new_lr - current_lr) / current_lr
+            logging.info(f"🎛️  ADAPTIVE LR ADJUSTMENT")
+        
+        logging.info(f"   Current LR: {current_lr:.2e}")
+        logging.info(f"   New LR: {new_lr:.2e}")
+        logging.info(f"   Change: {((new_lr - current_lr) / current_lr * 100):+.1f}%")
+        logging.info(f"   Reason: {adjustment['reasoning']}")
+        logging.info(f"   Emergency: {'YES' if is_emergency else 'NO'}")
+        logging.info(f"{'='*80}\n")
 
-            if change_ratio < min_threshold:
-                if getattr(self.config, 'log_lr_decisions', False):
-                    logging.info(f"⏸️ LR change too small ({change_ratio:.1%} < {min_threshold:.1%})")
-                return
+        # Rest of the method stays the same...
+        change_ratio = abs(new_lr - current_lr) / current_lr
+        min_threshold = getattr(self.config, 'min_override_threshold', 0.1)
 
-            if getattr(self.config, 'log_lr_decisions', False):
-                logging.info(f"📊 Adaptive LR Adjustment")
-                logging.info(f"   Reason: {adjustment['reasoning']}")
-                logging.info(f"   Current LR: {current_lr:.2e} → New LR: {new_lr:.2e} ({change_ratio:.1%} change)")
+        if not is_emergency and change_ratio < min_threshold:
+            logging.info(f"⏸️  Change too small ({change_ratio:.1%} < {min_threshold:.1%}), skipping")
+            return
 
-        # Create and execute decision
         decision = AdaptiveDecision(
             decision_type='learning_rate_adjustment',
             parameters={
@@ -964,11 +998,11 @@ class AdaptiveTrainingOrchestrator:
 
         self._execute_adaptive_decision(decision)
 
-        # ✅ Update trainer's learning rate
         if hasattr(self.trainer, 'adjust_learning_rate'):
-            # Pass emergency flag to set appropriate grace period
             grace_period = 20 if is_emergency else 10
             self.trainer.adjust_learning_rate(new_lr, grace_period=grace_period)
+            logging.info(f"✅ LR adjustment applied successfully")
+
     
     def _execute_adaptive_decision(self, decision):
         """Execute an adaptive decision."""

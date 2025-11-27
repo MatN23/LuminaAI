@@ -1546,6 +1546,7 @@ def main():
     # 1. ADAPTIVE INTELLIGENCE PARAMETERS
     # ========================================================================
     adaptive_intelligence_params = {
+        'verbose_adaptive_logging': True,  # Enable detailed adaptive logs  
         # More conservative thresholds (reduced decision frequency)
         'meta_confidence_soft': 0.70,       # Increased back to reduce decisions
         'meta_confidence_medium': 0.80,     # Increased back  
@@ -1812,13 +1813,13 @@ def main():
         'enable_wandb': True,
         'wandb_project': 'deepseek-moe-training',
         'wandb_entity': 'matiasnhmb',
-        'health_check_interval': 50,        # Increased from 50
-        'log_every_n_steps': 50,            # Increased from 50
+        'health_check_interval': 50,
+        'log_every_n_steps': 50,
 
         # 🚀 Performance optimizations
-        'adaptive_monitoring_interval': 100,
-        'lightweight_metrics_only': True,    
-        'disable_realtime_analytics': True,   # 🆕 Changed to True - disable expensive analytics
+        'adaptive_monitoring_interval': 10,
+        'lightweight_metrics_only': False,    
+        'disable_realtime_analytics': False,   # 🆕 Changed to True - disable expensive analytics
         'monitoring_queue_size': 10,          # 🆕 Smaller queue to reduce memory
     }
     
