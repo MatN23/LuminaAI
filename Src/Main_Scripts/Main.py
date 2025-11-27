@@ -2549,6 +2549,49 @@ def main():
             print("✗ Trainer has no scheduler attribute!")
 
         print("="*80 + "\n")
+        # STEP 10.9: TEST ADAPTIVE PIPELINE
+        print_banner("STEP 10.9: TESTING ADAPTIVE PIPELINE")
+        
+        logging.info("Testing adaptive training pipeline...")
+        
+        # Test 1: get_current_metrics()
+        try:
+            test_metrics = orchestrator.trainer.get_current_metrics()
+            logging.info(f"✅ Test 1 PASSED: get_current_metrics() works")
+            logging.info(f"   Returned: {type(test_metrics).__name__}")
+        except Exception as e:
+            logging.error(f"❌ Test 1 FAILED: get_current_metrics() error: {e}")
+        
+        # Test 2: adjust_learning_rate()
+        try:
+            original_lr = orchestrator.trainer.optimizer.param_groups[0]['lr']
+            orchestrator.trainer.adjust_learning_rate(1e-5, grace_period=5)
+            new_lr = orchestrator.trainer.optimizer.param_groups[0]['lr']
+            
+            if abs(new_lr - 1e-5) < 1e-9:
+                logging.info(f"✅ Test 2 PASSED: adjust_learning_rate() works")
+                logging.info(f"   LR changed: {original_lr:.2e} → {new_lr:.2e}")
+                # Restore original LR
+                orchestrator.trainer.adjust_learning_rate(original_lr, grace_period=0)
+            else:
+                logging.error(f"❌ Test 2 FAILED: LR not changed correctly")
+                logging.error(f"   Expected: 1e-5, Got: {new_lr:.2e}")
+        except Exception as e:
+            logging.error(f"❌ Test 2 FAILED: adjust_learning_rate() error: {e}")
+        
+        # Test 3: Monitoring queue
+        try:
+            has_queue = hasattr(orchestrator.trainer, '_monitoring_queue')
+            if has_queue:
+                logging.info(f"✅ Test 3 PASSED: Trainer has monitoring queue")
+            else:
+                logging.error(f"❌ Test 3 FAILED: Trainer missing _monitoring_queue")
+        except Exception as e:
+            logging.error(f"❌ Test 3 FAILED: Queue check error: {e}")
+        
+        logging.info("\n" + "="*80)
+        logging.info("ADAPTIVE PIPELINE TEST COMPLETE")
+        logging.info("="*80 + "\n")
         
         # Step 11: Setup signal handlers
         print_banner("STEP 11: SETTING UP SIGNAL HANDLERS")

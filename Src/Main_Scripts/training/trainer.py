@@ -2501,7 +2501,7 @@ class EnhancedConversationTrainer:
         }
     
     def _standard_optimizer_step(self) -> Dict[str, float]:
-        """Standard optimizer step with adaptive LR override support - FIXED."""
+        """Standard optimizer step with FIXED adaptive LR override support."""
 
         # Only unscale for FP16 (scaler only exists for FP16)
         if self.use_amp and self.scaler is not None:
@@ -2531,32 +2531,23 @@ class EnhancedConversationTrainer:
         # Zero gradients AFTER successful step
         self.optimizer.zero_grad(set_to_none=True)
 
-        # ✅ FIX: Check for adaptive override
+        # 🔥 CRITICAL FIX: Check adaptive override status FIRST
         adaptive_override = getattr(self, '_adaptive_lr_override', False)
         current_lr = self.optimizer.param_groups[0]['lr']
 
-        if self.scheduler and not adaptive_override:
-            # Normal scheduler operation
-            old_lr = self.scheduler.get_last_lr()[0]
-            self.scheduler.step()
-            new_lr = self.scheduler.get_last_lr()[0]
-            current_lr = new_lr
-
-            # Log significant changes
-            if self.global_step % 100 == 0 and abs(old_lr - new_lr) > 1e-9:
-                logging.info(f"📊 Step {self.global_step}: Scheduler: {old_lr:.2e} → {new_lr:.2e}")
-
-        elif adaptive_override:
-            # Adaptive LR has control
+        # Handle adaptive override
+        if adaptive_override:
+            # Increment override counter
             self._adaptive_override_steps = getattr(self, '_adaptive_override_steps', 0) + 1
             grace_period = getattr(self, '_adaptive_override_grace', 10)
             is_emergency = getattr(self, '_adaptive_emergency', False)
 
-            # Log progress
-            if self._adaptive_override_steps == 1:
-                logging.info(f"🎯 Step {self.global_step}: Adaptive override active (LR: {current_lr:.2e}, grace: {grace_period} steps)")
+            # Log progress every 10 steps
+            if self._adaptive_override_steps % 10 == 0:
+                logging.info(f"🎯 Step {self.global_step}: Adaptive override active "
+                            f"({self._adaptive_override_steps}/{grace_period}) LR: {current_lr:.2e}")
 
-            # Release control after grace period (unless emergency)
+            # Check if we should release control
             if self._adaptive_override_steps >= grace_period:
                 if is_emergency:
                     # Check if emergency is resolved
@@ -2567,14 +2558,25 @@ class EnhancedConversationTrainer:
                         self._adaptive_override_steps = 0
                         logging.info(f"✅ Step {self.global_step}: Emergency resolved, resuming scheduler")
                     else:
-                        logging.warning(f"⚠️ Step {self.global_step}: Emergency LR still active")
+                        logging.warning(f"⚠️ Step {self.global_step}: Emergency LR still active (grad norm high)")
                 else:
                     # Normal override - release control
                     self._adaptive_lr_override = False
                     self._adaptive_override_steps = 0
                     logging.info(f"✅ Step {self.global_step}: Released adaptive override, resuming scheduler")
 
-        # ✅ Track gradient norms for emergency resolution
+        # Only run scheduler if NOT in override mode
+        if self.scheduler and not getattr(self, '_adaptive_lr_override', False):
+            old_lr = self.scheduler.get_last_lr()[0]
+            self.scheduler.step()
+            new_lr = self.scheduler.get_last_lr()[0]
+            current_lr = new_lr
+
+            # Log significant changes
+            if self.global_step % 100 == 0 and abs(old_lr - new_lr) > 1e-9:
+                logging.info(f"📊 Step {self.global_step}: Scheduler: {old_lr:.2e} → {new_lr:.2e}")
+
+        # Track gradient norms for emergency resolution
         if not hasattr(self, '_recent_grad_norms'):
             self._recent_grad_norms = []
         self._recent_grad_norms.append(grad_norm.item())
@@ -2785,6 +2787,18 @@ class EnhancedConversationTrainer:
             step_start_time = time.time()
 
             step_metrics = self.train_step(batch)
+
+            if hasattr(self, '_monitoring_queue'):
+                try:
+                    current_metrics = self.get_current_metrics()
+                    self._monitoring_queue.put(current_metrics, block=False)
+                except queue.Full:
+                    # Queue full - skip this metric to avoid blocking training
+                    pass
+                except Exception as e:
+                    # Only log errors occasionally to avoid spam
+                    if self.global_step % 100 == 0:
+                        logging.debug(f"Could not send metrics to orchestrator: {e}")
 
             if batch_idx < 5 and getattr(self.config, 'log_level', 'INFO') == 'DEBUG':
                 debug_msg = f"DEBUG: Batch {batch_idx}, Step metrics: {step_metrics}"

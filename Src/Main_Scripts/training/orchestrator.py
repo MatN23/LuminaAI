@@ -1089,6 +1089,39 @@ class AdaptiveTrainingOrchestrator:
                 # Enhance trainer with adaptive capabilities
                 self._enhance_trainer_with_adaptive_features()
 
+                logging.info("\n" + "="*80)
+                logging.info("VERIFYING ADAPTIVE TRAINER CAPABILITIES")
+                logging.info("="*80)
+                
+                required_methods = [
+                    'adjust_learning_rate',
+                    'get_current_metrics',
+                    'emergency_lr_reduction',
+                    'add_expert',
+                    'get_expert_statistics'
+                ]
+                
+                missing = []
+                for method in required_methods:
+                    has_method = hasattr(self.trainer, method)
+                    status = "✅" if has_method else "❌"
+                    logging.info(f"  {status} {method}: {'Available' if has_method else 'MISSING'}")
+                    if not has_method:
+                        missing.append(method)
+                
+                if missing:
+                    logging.error(f"❌ CRITICAL: Trainer missing adaptive methods: {missing}")
+                    logging.error("   Adaptive features will NOT work!")
+                    logging.error("   Check that EnhancedConversationTrainer is properly imported")
+                else:
+                    logging.info("✅ All adaptive methods verified - trainer is fully capable")
+                
+                logging.info("="*80 + "\n")
+
+                logging.info(f"✅ Real trainer initialized: {class_name}")
+                trainer_initialized = True
+                break
+
                 logging.info(f"✅ Real trainer initialized: {class_name}")
                 trainer_initialized = True
                 break
@@ -1107,37 +1140,197 @@ class AdaptiveTrainingOrchestrator:
             logging.info("✅ Fallback trainer initialized")
     
     def _enhance_trainer_with_adaptive_features(self):
-        """Add adaptive features to existing trainer."""
-        # Inject monitoring callback
-        original_training_step = getattr(self.trainer, 'training_step', None)
+        """Add adaptive features to existing trainer - COMPLETE VERSION."""
         
-        def adaptive_training_step(*args, **kwargs):
-            result = original_training_step(*args, **kwargs) if original_training_step else None
+        logging.info("Enhancing trainer with adaptive monitoring capabilities...")
+        
+        # 🔥 Step 1: Inject monitoring queue reference
+        self.trainer._monitoring_queue = self.monitoring_queue
+        self.trainer._orchestrator = self  # Give trainer access to orchestrator
+        
+        logging.info(f"✅ Injected monitoring queue (ID: {id(self.monitoring_queue)})")
+        
+        # 🔥 Step 2: Wrap the optimizer step to capture metrics automatically
+        original_optimizer_step = self.trainer.optimizer_step
+        
+        def enhanced_optimizer_step():
+            """Optimizer step with automatic metric collection."""
+            # Call original optimizer step
+            result = original_optimizer_step()
             
-            # Extract metrics and queue for real-time processing
-            if hasattr(self.trainer, 'get_current_metrics'):
-                metrics = self.trainer.get_current_metrics()
-                if metrics:
-                    try:
-                        # Non-blocking put to prevent training from stalling
-                        self.monitoring_queue.put(metrics, block=False)
-                    except queue.Full:
-                        # Queue is full - drop oldest metric and add new one
+            # After optimizer step, collect and send metrics
+            try:
+                if hasattr(self.trainer, 'get_current_metrics'):
+                    metrics = self.trainer.get_current_metrics()
+                    if metrics:
                         try:
-                            self.monitoring_queue.get_nowait()  # Remove oldest
-                            self.monitoring_queue.put(metrics, block=False)  # Add new
-                            logging.warning("Monitoring queue full, dropped oldest metric")
-                        except queue.Empty:
-                            # Race condition - queue became empty, just add new metric
+                            self.monitoring_queue.put(metrics, block=False)
+                        except queue.Full:
+                            # Queue full - drop oldest metric and try again
                             try:
+                                self.monitoring_queue.get_nowait()
                                 self.monitoring_queue.put(metrics, block=False)
-                            except queue.Full:
-                                # Still full, log and skip
-                                logging.warning("Monitoring queue persistently full, skipping metric")
+                            except (queue.Empty, queue.Full):
+                                pass  # Skip this metric
+            except Exception as e:
+                # Only log errors occasionally to avoid spam
+                if self.trainer.global_step % 100 == 0:
+                    logging.debug(f"Could not send metrics: {e}")
             
             return result
         
-        self.trainer.training_step = adaptive_training_step
+        self.trainer.optimizer_step = enhanced_optimizer_step
+        logging.info("✅ Enhanced optimizer_step() with automatic metric collection")
+        
+        # 🔥 Step 3: Add callback hooks for adaptive decisions
+        def on_loss_spike(loss: float, threshold: float):
+            """Called when loss spikes significantly."""
+            logging.warning(f"⚠️ Loss spike detected: {loss:.4f} (threshold: {threshold:.4f})")
+            
+            # Create adaptive decision
+            from orchestrator import AdaptiveDecision
+            decision = AdaptiveDecision(
+                decision_type='loss_spike_response',
+                parameters={'factor': 0.5, 'reason': 'loss_spike'},
+                confidence=0.8,
+                reasoning=f"Loss spike to {loss:.4f}, reducing LR",
+                expected_improvement=0.2,
+                timestamp=datetime.now()
+            )
+            
+            if hasattr(self.trainer, '_orchestrator'):
+                self.trainer._orchestrator._execute_adaptive_decision(decision)
+        
+        def on_gradient_explosion(grad_norm: float, threshold: float):
+            """Called when gradient norm exceeds threshold."""
+            logging.warning(f"🚨 Gradient explosion: {grad_norm:.2f} (threshold: {threshold:.2f})")
+            
+            from orchestrator import AdaptiveDecision
+            decision = AdaptiveDecision(
+                decision_type='emergency_lr_reduction',
+                parameters={'factor': 0.1, 'reason': 'gradient_explosion'},
+                confidence=0.95,
+                reasoning=f"Gradient norm {grad_norm:.2f}, emergency LR cut",
+                expected_improvement=0.3,
+                timestamp=datetime.now()
+            )
+            
+            if hasattr(self.trainer, '_orchestrator'):
+                self.trainer._orchestrator._execute_adaptive_decision(decision)
+        
+        # Attach callback hooks to trainer
+        self.trainer._on_loss_spike = on_loss_spike
+        self.trainer._on_gradient_explosion = on_gradient_explosion
+        
+        logging.info("✅ Attached adaptive callback hooks:")
+        logging.info("   - on_loss_spike")
+        logging.info("   - on_gradient_explosion")
+        
+        # 🔥 Step 4: Enhance train_step to detect anomalies
+        original_train_step = self.trainer.train_step
+        
+        # Track recent losses for spike detection
+        self.trainer._recent_losses = []
+        self.trainer._loss_spike_threshold = 2.0  # 2x increase triggers spike
+        
+        def enhanced_train_step(batch):
+            """Train step with automatic anomaly detection."""
+            # Call original train step
+            result = original_train_step(batch)
+            
+            # Track losses for spike detection
+            if result and 'loss' in result:
+                loss = result['loss']
+                
+                if not (math.isnan(loss) or math.isinf(loss)):
+                    self.trainer._recent_losses.append(loss)
+                    
+                    # Keep only recent history
+                    if len(self.trainer._recent_losses) > 50:
+                        self.trainer._recent_losses.pop(0)
+                    
+                    # Check for loss spike (after we have some history)
+                    if len(self.trainer._recent_losses) >= 20:
+                        recent_avg = sum(self.trainer._recent_losses[-20:-1]) / 19
+                        if loss > recent_avg * self.trainer._loss_spike_threshold:
+                            if hasattr(self.trainer, '_on_loss_spike'):
+                                self.trainer._on_loss_spike(loss, recent_avg * self.trainer._loss_spike_threshold)
+            
+            return result
+        
+        self.trainer.train_step = enhanced_train_step
+        logging.info("✅ Enhanced train_step() with anomaly detection")
+        
+        # 🔥 Step 5: Enhance optimizer_step to detect gradient explosions
+        original_opt_step = self.trainer.optimizer_step
+        
+        def enhanced_optimizer_step_with_checks():
+            """Optimizer step with gradient explosion detection."""
+            # Call the already-enhanced optimizer step
+            result = original_opt_step()
+            
+            # Check for gradient explosion
+            if result and 'grad_norm' in result:
+                grad_norm = result['grad_norm']
+                explosion_threshold = 100.0  # Configurable
+                
+                if grad_norm > explosion_threshold:
+                    if hasattr(self.trainer, '_on_gradient_explosion'):
+                        self.trainer._on_gradient_explosion(grad_norm, explosion_threshold)
+            
+            return result
+        
+        self.trainer.optimizer_step = enhanced_optimizer_step_with_checks
+        logging.info("✅ Enhanced optimizer_step() with gradient explosion detection")
+        
+        # 🔥 Step 6: Add adaptive LR tracking
+        self.trainer._adaptive_lr_history = []
+        self.trainer._scheduler_lr_history = []
+        
+        original_standard_optimizer_step = None
+        if hasattr(self.trainer, '_standard_optimizer_step'):
+            original_standard_optimizer_step = self.trainer._standard_optimizer_step
+        
+        def track_lr_changes(*args, **kwargs):
+            """Track LR changes from both adaptive and scheduler."""
+            if original_standard_optimizer_step:
+                result = original_standard_optimizer_step(*args, **kwargs)
+            else:
+                result = {}
+            
+            # Track LR history
+            if 'lr' in result:
+                current_lr = result['lr']
+                adaptive_active = getattr(self.trainer, '_adaptive_lr_override', False)
+                
+                if adaptive_active:
+                    self.trainer._adaptive_lr_history.append((self.trainer.global_step, current_lr))
+                else:
+                    self.trainer._scheduler_lr_history.append((self.trainer.global_step, current_lr))
+                
+                # Keep only recent history (last 1000 steps)
+                if len(self.trainer._adaptive_lr_history) > 1000:
+                    self.trainer._adaptive_lr_history.pop(0)
+                if len(self.trainer._scheduler_lr_history) > 1000:
+                    self.trainer._scheduler_lr_history.pop(0)
+            
+            return result
+        
+        if original_standard_optimizer_step:
+            self.trainer._standard_optimizer_step = track_lr_changes
+            logging.info("✅ Added LR tracking for adaptive vs scheduler decisions")
+        
+        # 🔥 Step 7: Summary
+        logging.info("\n" + "="*80)
+        logging.info("ADAPTIVE ENHANCEMENTS APPLIED")
+        logging.info("="*80)
+        logging.info("The trainer now has:")
+        logging.info("  ✅ Automatic metric collection after each optimizer step")
+        logging.info("  ✅ Loss spike detection and automatic response")
+        logging.info("  ✅ Gradient explosion detection and emergency LR cut")
+        logging.info("  ✅ LR tracking (adaptive vs scheduler)")
+        logging.info("  ✅ Direct communication channel to orchestrator")
+        logging.info("="*80 + "\n")
     
     def run_adaptive_training(self):
         """Run training with full adaptive intelligence - FIXED to setup scheduler."""
