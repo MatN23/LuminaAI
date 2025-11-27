@@ -1519,11 +1519,16 @@ def main():
         'warmup_ratio': 0.1,
         'batch_size': 25,
         'gradient_accumulation_steps': 8,
+
+        'enable_adaptive_lr': True,
+        'allow_scheduler_override': True,
+        'adaptive_monitoring_interval': 50,
+        'log_lr_decisions': True,
         
-        'precision': "fp32",
+        'precision': "fp16",
         'inference_precision': "fp16",
         'num_experts': 8,
-        'moe_top_k': 2,
+        'moe_top_k': 1,
         'compile': True,
         
         'max_memory_usage': 0.85,
@@ -1541,19 +1546,23 @@ def main():
     # 1. ADAPTIVE INTELLIGENCE PARAMETERS
     # ========================================================================
     adaptive_intelligence_params = {
-        # More conservative thresholds
-        'meta_confidence_soft': 0.60,       # Lowered from 0.70
-        'meta_confidence_medium': 0.75,     # Lowered from 0.80  
-        'meta_confidence_hard': 0.85,       # Lowered from 0.90
-        'meta_confidence_critical': 0.92,   # Lowered from 0.95
+        # More conservative thresholds (reduced decision frequency)
+        'meta_confidence_soft': 0.70,       # Increased back to reduce decisions
+        'meta_confidence_medium': 0.80,     # Increased back  
+        'meta_confidence_hard': 0.90,       # Increased back
+        'meta_confidence_critical': 0.95,   # Increased back
         
-        # More exploration
-        'strategy_memory_size': 15,         # Reduced from 20
-        'learning_transfer_weight': 0.7,    # Reduced from 0.8
+        # Less exploration (reduces overhead)
+        'strategy_memory_size': 10,         # Reduced from 15
+        'learning_transfer_weight': 0.9,    # Increased to reduce exploration
         
-        # More aggressive exploration
-        'adaptive_risk_tolerance': 'aggressive',  # Changed from 'balanced'
-        'exploration_rate': 0.25,           # Increased from 0.15
+        # Less aggressive exploration
+        'adaptive_risk_tolerance': 'balanced',  # Changed back from 'aggressive'
+        'exploration_rate': 0.10,           # Reduced from 0.25
+        
+        # Performance optimizations
+        'decision_cooldown_steps': 100,     # Minimum steps between decisions
+        'skip_meta_learning': True,         # Disable meta-learning (expensive!)
     }
     
     # ========================================================================
@@ -1698,7 +1707,7 @@ def main():
     adaptive_lr_params = {
         'enable_adaptive_lr': True,
         'allow_scheduler_override': True,
-        'min_override_threshold': 0.2,
+        'min_override_threshold': 0.1,
         'emergency_override_enabled': True,
         'log_lr_decisions': True,
     }
@@ -1803,12 +1812,14 @@ def main():
         'enable_wandb': True,
         'wandb_project': 'deepseek-moe-training',
         'wandb_entity': 'matiasnhmb',
-        'health_check_interval': 50,
-        'log_every_n_steps': 50,
+        'health_check_interval': 50,        # Increased from 50
+        'log_every_n_steps': 50,            # Increased from 50
 
-        'adaptive_monitoring_interval': 100,  # Only analyze every 100 steps (was every step!)
-        'lightweight_metrics_only': True,     # Skip expensive metric collection
-        'disable_realtime_analytics': False,  # Keep analytics but run less frequently
+        # 🚀 Performance optimizations
+        'adaptive_monitoring_interval': 100,
+        'lightweight_metrics_only': True,    
+        'disable_realtime_analytics': True,   # 🆕 Changed to True - disable expensive analytics
+        'monitoring_queue_size': 10,          # 🆕 Smaller queue to reduce memory
     }
     
     # ========================================================================

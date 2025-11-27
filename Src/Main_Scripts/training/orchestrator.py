@@ -856,47 +856,39 @@ class AdaptiveTrainingOrchestrator:
         logging.info("Started real-time monitoring thread")
     
     def _process_real_time_metrics(self, metrics):
-        """Process metrics in real-time and make adaptive decisions."""
+        """Optimized metric processing."""
+        
+        # 🆕 Skip processing if we're not at the monitoring interval
+        monitoring_interval = getattr(self.config, 'adaptive_monitoring_interval', 50)
+        if metrics.step % monitoring_interval != 0:
+            return
+        
         self.current_metrics = metrics
         self.training_metrics_history.append(metrics)
-        self.analytics.metrics_buffer.append(metrics)
         
-        # Check for anomalies
-        anomalies = self.analytics.detect_training_anomalies(metrics)
-        if anomalies:
-            for anomaly in anomalies:
-                logging.warning(f"Training anomaly detected: {anomaly}")
-                self._handle_training_anomaly(anomaly)
-
-        if self.global_step % 100 == 0:
-            scheduler_status = self.get_scheduler_status()
-            logging.info(f"📊 Scheduler Status at step {self.global_step}:")
-            for key, value in scheduler_status.items():
-                logging.info(f"   {key}: {value}")
+        # 🆕 Only analyze every N steps to reduce overhead
+        if len(self.analytics.metrics_buffer) > 0 and metrics.step % 100 == 0:
+            self.analytics.metrics_buffer.append(metrics)
+            
+            # Check for critical anomalies only (not all analytics)
+            anomalies = self.analytics.detect_training_anomalies(metrics)
+            if anomalies:
+                for anomaly in anomalies:
+                    if anomaly.get('severity') in ['critical', 'high']:
+                        logging.warning(f"Critical anomaly: {anomaly}")
+                        self._handle_training_anomaly(anomaly)
         
-        # Analyze loss dynamics
-        if len(self.training_metrics_history) >= 10:
-            insights = self.analytics.analyze_loss_dynamics(self.training_metrics_history[-10:])
-            if insights:
-                self._act_on_loss_insights(insights)
-        
-        # Check if hyperparameters should be adjusted
-        lr_adjustment = self.hyperparameter_optimizer.should_adjust_learning_rate(metrics)
-        if lr_adjustment:
-            self._apply_learning_rate_adjustment(lr_adjustment)
-        
-        # Check architecture modifications
-        if hasattr(metrics, 'expert_utilization'):
-            arch_suggestions = self.architecture_evolution.suggest_architecture_changes(
-                metrics, self._get_model_info()
-            )
-            for suggestion in arch_suggestions:
-                self._consider_architecture_change(suggestion)
-        
-        # Predict training trajectory
-        trajectory = self.meta_learner.predict_training_trajectory(metrics, self.config)
-        if trajectory and trajectory['confidence'] > 0.8:
-            self._act_on_trajectory_prediction(trajectory)
+        # 🆕 Only run expensive analytics periodically
+        if metrics.step % 500 == 0:  # Every 500 steps instead of every step
+            if len(self.training_metrics_history) >= 10:
+                insights = self.analytics.analyze_loss_dynamics(self.training_metrics_history[-10:])
+                if insights:
+                    self._act_on_loss_insights(insights)
+            
+            # Hyperparameter adjustments less frequently
+            lr_adjustment = self.hyperparameter_optimizer.should_adjust_learning_rate(metrics)
+            if lr_adjustment:
+                self._apply_learning_rate_adjustment(lr_adjustment)
     
     def _handle_training_anomaly(self, anomaly):
         """Handle detected training anomalies."""
