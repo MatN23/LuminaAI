@@ -21,6 +21,30 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+import warnings
+import numpy as np
+
+# Suppress LAPACK warnings from NumPy
+warnings.filterwarnings('ignore', message='.*DLASCL.*')
+warnings.filterwarnings('ignore', message='.*SVD did not converge.*')
+
+# Also suppress general numpy warnings during polyfit
+warnings.filterwarnings('ignore', category=RuntimeWarning, module='numpy')
+
+import os
+import sys
+
+class SuppressStderr:
+    """Context manager to suppress stderr output (for LAPACK warnings)."""
+    def __enter__(self):
+        self.old_stderr = sys.stderr
+        sys.stderr = open(os.devnull, 'w')
+        return self
+    
+    def __exit__(self, *args):
+        sys.stderr.close()
+        sys.stderr = self.old_stderr
+
 @dataclass
 class TrainingMetrics:
     """Comprehensive training metrics for adaptive intelligence."""
@@ -454,42 +478,79 @@ class RealTimeAnalytics:
 
     def _predict_convergence(self, coeffs, current_step):
         """Predict when training will converge."""
-        # Simple quadratic extrapolation
-        future_steps = np.arange(current_step, current_step + 1000, 10)
-        future_losses = np.polyval(coeffs, future_steps)
+        try:
+            # Simple quadratic extrapolation
+            future_steps = np.arange(current_step, current_step + 1000, 10)
+            future_losses = np.polyval(coeffs, future_steps)
 
-        # Find when loss stops decreasing significantly
-        derivatives = np.diff(future_losses)
-        convergence_point = np.where(np.abs(derivatives) < 1e-4)[0]
+            # Find when loss stops decreasing significantly
+            derivatives = np.diff(future_losses)
+            convergence_point = np.where(np.abs(derivatives) < 1e-4)[0]
 
-        if len(convergence_point) > 0:
-            return int(future_steps[convergence_point[0]])
-
+            if len(convergence_point) > 0:
+                return int(future_steps[convergence_point[0]])
+        except Exception as e:
+            logging.debug(f"Could not predict convergence: {e}")
+        
         return None
         
     def analyze_loss_dynamics(self, recent_metrics):
-        """Analyze loss curve dynamics for insights."""
+        """Analyze loss curve dynamics for insights with robust error handling."""
         if len(recent_metrics) < 10:
             return None
         
-        losses = [m.loss for m in recent_metrics]
-        steps = [m.step for m in recent_metrics]
-        
-        # Fit polynomial to detect trends
-        coeffs = np.polyfit(steps, losses, 2)
-        
-        # Analyze curvature
-        curvature = coeffs[0]
-        trend = coeffs[1]
-        
-        insights = {
-            'trend_direction': 'decreasing' if trend < 0 else 'increasing',
-            'trend_strength': abs(trend),
-            'curvature': 'concave_up' if curvature > 0 else 'concave_down',
-            'predicted_convergence': self._predict_convergence(coeffs, steps[-1])
-        }
-        
-        return insights
+        try:
+            losses = [m.loss for m in recent_metrics]
+            steps = [m.step for m in recent_metrics]
+            
+            if any(math.isnan(l) or math.isinf(l) for l in losses):
+                logging.warning("Invalid loss values detected in dynamics analysis")
+                return None
+
+            losses_array = np.array(losses, dtype=np.float64)
+            steps_array = np.array(steps, dtype=np.float64)
+            
+            loss_mean = np.mean(losses_array)
+            loss_std = np.std(losses_array) + 1e-8  # Avoid division by zero
+            normalized_losses = (losses_array - loss_mean) / loss_std
+            
+            step_mean = np.mean(steps_array)
+            step_std = np.std(steps_array) + 1e-8
+            normalized_steps = (steps_array - step_mean) / step_std
+
+            try:
+                # Try quadratic (degree 2)
+                with SuppressStderr():
+                    coeffs = np.polyfit(normalized_steps, normalized_losses, 2, full=False)
+            except np.linalg.LinAlgError:
+                logging.debug("Degree-2 polyfit failed, falling back to linear")
+                try:
+                    # Fall back to linear (degree 1)
+                    with SuppressStderr():
+                        coeffs = np.polyfit(normalized_steps, normalized_losses, 1, full=False)
+                    coeffs = np.array([0.0, coeffs[0], coeffs[1]])
+                except np.linalg.LinAlgError:
+                    logging.warning("All polyfit attempts failed, using simple trend")
+                    # Fallback: simple slope calculation
+                    trend = (normalized_losses[-1] - normalized_losses[0]) / (normalized_steps[-1] - normalized_steps[0])
+                    coeffs = np.array([0.0, trend, normalized_losses[0]])
+            
+            # Analyze curvature and trend
+            curvature = coeffs[0]
+            trend = coeffs[1]
+            
+            insights = {
+                'trend_direction': 'decreasing' if trend < 0 else 'increasing',
+                'trend_strength': abs(trend),
+                'curvature': 'concave_up' if curvature > 0 else 'concave_down',
+                'predicted_convergence': self._predict_convergence(coeffs, steps[-1])
+            }
+            
+            return insights
+            
+        except Exception as e:
+            logging.debug(f"Error in loss dynamics analysis: {e}")
+            return None
     
     def detect_training_anomalies(self, current_metrics):
         """Detect unusual patterns in training using adaptive thresholds."""
@@ -832,10 +893,20 @@ class AdaptiveTrainingOrchestrator:
                     logging.info("Monitoring thread received interrupt signal")
                     break
                 except Exception as e:
-                    logging.error(f"Error in monitoring loop: {e}")
-                    import traceback
-                    logging.error(traceback.format_exc())
-                    # Continue monitoring even if one metric fails
+                    consecutive_errors += 1
+                    
+                    # Only log first error and every 10th to avoid spam
+                    if consecutive_errors == 1 or consecutive_errors % 10 == 0:
+                        logging.error(f"Error in monitoring loop (count: {consecutive_errors}): {e}")
+                        if consecutive_errors <= 2:
+                            import traceback
+                            logging.error(traceback.format_exc())
+                    
+                    # Stop if too many errors
+                    if consecutive_errors >= max_consecutive_errors:
+                        logging.error(f"Too many errors ({consecutive_errors}), stopping monitoring")
+                        break
+                    
                     time.sleep(0.5)
         
         print("🔍 DEBUG: Creating monitoring thread...")
@@ -861,42 +932,30 @@ class AdaptiveTrainingOrchestrator:
         self.training_metrics_history.append(metrics)
         self.analytics.metrics_buffer.append(metrics)
         
+        # 🔥 NEW: LOG EVERY METRIC RECEIVED
+        log_frequency = getattr(self.config, 'adaptive_log_frequency', 10)
+        if self.global_step % log_frequency == 0:
+            logging.info("\n" + "="*80)
+            logging.info(f"📊 ADAPTIVE MONITORING - Step {self.global_step}")
+            logging.info("="*80)
+            logging.info(f"  Loss: {metrics.loss:.6f}")
+            logging.info(f"  Learning Rate: {metrics.learning_rate:.2e}")
+            logging.info(f"  Grad Norm: {metrics.grad_norm:.4f}")
+            logging.info(f"  Throughput: {metrics.throughput:.0f} tokens/s")
+            
+            if metrics.expert_utilization:
+                logging.info(f"  Expert Utilization:")
+                for expert_id, usage in list(metrics.expert_utilization.items())[:5]:
+                    logging.info(f"    {expert_id}: {usage:.1%}")
+            
+            logging.info("="*80 + "\n")
+        
         # Check for anomalies
         anomalies = self.analytics.detect_training_anomalies(metrics)
         if anomalies:
             for anomaly in anomalies:
-                logging.warning(f"Training anomaly detected: {anomaly}")
+                logging.warning(f"⚠️ Training anomaly detected: {anomaly}")
                 self._handle_training_anomaly(anomaly)
-
-        if self.global_step % 100 == 0:
-            scheduler_status = self.get_scheduler_status()
-            logging.info(f"📊 Scheduler Status at step {self.global_step}:")
-            for key, value in scheduler_status.items():
-                logging.info(f"   {key}: {value}")
-        
-        # Analyze loss dynamics
-        if len(self.training_metrics_history) >= 10:
-            insights = self.analytics.analyze_loss_dynamics(self.training_metrics_history[-10:])
-            if insights:
-                self._act_on_loss_insights(insights)
-        
-        # Check if hyperparameters should be adjusted
-        lr_adjustment = self.hyperparameter_optimizer.should_adjust_learning_rate(metrics)
-        if lr_adjustment:
-            self._apply_learning_rate_adjustment(lr_adjustment)
-        
-        # Check architecture modifications
-        if hasattr(metrics, 'expert_utilization'):
-            arch_suggestions = self.architecture_evolution.suggest_architecture_changes(
-                metrics, self._get_model_info()
-            )
-            for suggestion in arch_suggestions:
-                self._consider_architecture_change(suggestion)
-        
-        # Predict training trajectory
-        trajectory = self.meta_learner.predict_training_trajectory(metrics, self.config)
-        if trajectory and trajectory['confidence'] > 0.8:
-            self._act_on_trajectory_prediction(trajectory)
     
     def _handle_training_anomaly(self, anomaly):
         """Handle detected training anomalies."""
@@ -982,9 +1041,13 @@ class AdaptiveTrainingOrchestrator:
         """Execute an adaptive decision."""
         self.adaptive_decisions.append(decision)
 
-        logging.info(f"Executing adaptive decision: {decision.decision_type}")
+        # 🔥 ALWAYS LOG DECISIONS
+        logging.info("\n" + "🎯"*40)
+        logging.info(f"EXECUTING ADAPTIVE DECISION: {decision.decision_type}")
         logging.info(f"Reasoning: {decision.reasoning}")
         logging.info(f"Confidence: {decision.confidence:.2f}")
+        logging.info(f"Expected Improvement: {decision.expected_improvement:.2%}")
+        logging.info("🎯"*40 + "\n")
 
         try:
             # ✅ FIX: Don't handle learning_rate_adjustment here

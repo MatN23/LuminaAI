@@ -2548,6 +2548,12 @@ class EnhancedConversationTrainer:
             self.scaler.update()
         else:
             self.optimizer.step()
+            if hasattr(self, '_monitoring_queue'):
+                try:
+                    metrics = self.get_current_metrics()
+                    self._monitoring_queue.put(metrics, block=False)
+                except queue.Full:
+                    pass 
 
         # Zero gradients AFTER successful step
         self.optimizer.zero_grad(set_to_none=True)
