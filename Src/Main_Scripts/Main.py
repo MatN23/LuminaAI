@@ -1516,11 +1516,11 @@ def main():
         'min_lr': 1e-7,
         'use_lr_scheduler': True,
         'lr_scheduler': "cosine",  # cosine, constant, or linear
-        'warmup_ratio': 0.1,
+        'warmup_ratio': 0.02,
         'batch_size': 25,
         'gradient_accumulation_steps': 8,
         
-        'precision': "fp32",
+        'precision': "fp16",
         'inference_precision': "fp16",
         'num_experts': 8,
         'moe_top_k': 2,
@@ -1531,7 +1531,7 @@ def main():
         'eval_every_n_batches': 500,
         'use_flash_attention': True,
         'gradient_checkpointing': True,
-        
+
         'num_workers': 0,
         'save_total_limit': 5,
         'weight_decay': 0.01,
