@@ -1833,7 +1833,7 @@ def main():
         'enable_loss_landscape': True,
         'enable_compute_efficiency': True,
         'enable_adaptive_curriculum': True,
-        'enable_early_stopping': False,
+        'enable_early_stopping': True,
         'plateau_patience': 5,
         'efficiency_decline_threshold': 0.3,
         'convergence_threshold': 0.85,

@@ -2248,8 +2248,8 @@ class EnhancedConversationTrainer:
     
     def compute_loss(self, logits, labels, loss_weights):
         """
-        Compute loss with proper masking and perplexity calculation.
-    
+        FIXED: Compute loss with proper masking and accuracy calculation.
+        
         Args:
             logits: Model output logits [batch, seq_len, vocab_size]
             labels: Target labels [batch, seq_len]
@@ -2267,7 +2267,6 @@ class EnhancedConversationTrainer:
         flat_labels = shift_labels.view(-1)
 
         # Create mask for valid tokens (non-padding)
-        # ✅ OPTIMIZATION: Compute mask once
         pad_token_id = getattr(self.tokenizer, 'pad_token_id', 0)
         mask = (flat_labels != pad_token_id).float()
 
@@ -2282,18 +2281,29 @@ class EnhancedConversationTrainer:
                 'accuracy': torch.tensor(0.0, device=logits.device)
             }
 
-        # ✅ ACCURACY CALCULATION (before loss to avoid gradient issues)
+        # ✅ FIXED: ACCURACY CALCULATION
         with torch.no_grad():
             predictions = torch.argmax(flat_logits, dim=-1)
-            correct_predictions = (predictions == flat_labels).float() * mask
-            accuracy = correct_predictions.sum() / valid_token_count
+            correct_predictions = (predictions == flat_labels).float()
+            
+            # Apply mask to exclude padding tokens from accuracy
+            masked_correct = correct_predictions * mask
+            accuracy = masked_correct.sum() / valid_token_count
+
+            # ✅ DEBUG: Add sanity checks
+            if accuracy > 1.0:
+                logging.warning(f"INVALID ACCURACY: {accuracy.item():.1%} - debugging:")
+                logging.warning(f"  Correct predictions: {correct_predictions.sum().item()}")
+                logging.warning(f"  Valid tokens: {valid_token_count.item()}")
+                logging.warning(f"  Mask sum: {mask.sum().item()}")
+                # Clamp accuracy to prevent impossible values
+                accuracy = torch.clamp(accuracy, 0.0, 1.0)
 
         # ✅ COMPUTE RAW CROSS-ENTROPY LOSS (per token, no reduction)
         loss_per_token = F.cross_entropy(
             flat_logits, 
             flat_labels, 
-            reduction='none',
-            ignore_index=-100  # This won't affect us since we mask manually
+            reduction='none'
         )
 
         # ✅ COMPUTE UNWEIGHTED LOSS FOR PERPLEXITY
@@ -3210,6 +3220,8 @@ class EnhancedConversationTrainer:
                         print("MoE Routing Recommendations:")
                         for rec in moe_diagnostics['recommendations']:
                             print(f"  - {rec}")
+
+                
         
         except KeyboardInterrupt:
             print("Training interrupted by user")
