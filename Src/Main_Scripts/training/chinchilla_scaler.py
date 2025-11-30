@@ -38,7 +38,7 @@ class ScalingMetrics:
 class ConvergenceDetector:
     """Detects training convergence using multiple signals."""
     
-    def __init__(self, window_size: int = 50):
+    def __init__(self, window_size: int = 100):
         self.window_size = window_size
         self.loss_history = deque(maxlen=window_size)
         self.grad_norm_history = deque(maxlen=window_size)
@@ -382,23 +382,24 @@ class EnhancedChinchillaScaler:
             return False, None
         
         recent = self.metrics_history[-1]
+        if recent.loss < 3.0:
         
-        if recent.convergence_score > self.convergence_threshold:
-            return True, f"Converged (score: {recent.convergence_score:.2f})"
-        
-        is_declining, decline_ratio = self.compute_tracker.is_efficiency_declining(
-            threshold=self.efficiency_threshold
-        )
-        if is_declining and decline_ratio > 0.5:
-            return True, f"Compute efficiency collapsed (decline: {decline_ratio:.1%})"
-        
-        is_diverging, divergence_rate = self.convergence_detector.detect_divergence()
-        if is_diverging:
-            return True, f"Training diverged (rate: {divergence_rate:.1%})"
-        
-        is_plateau, _ = self.convergence_detector.detect_plateau(threshold=0.0001)
-        if is_plateau and self.plateau_counter > self.plateau_patience * 100:
-            return True, f"Plateau for {self.plateau_counter} steps"
+            if recent.convergence_score > self.convergence_threshold:
+                return True, f"Converged (score: {recent.convergence_score:.2f})"
+            
+            is_declining, decline_ratio = self.compute_tracker.is_efficiency_declining(
+                threshold=self.efficiency_threshold
+            )
+            if is_declining and decline_ratio > 0.5:
+                return True, f"Compute efficiency collapsed (decline: {decline_ratio:.1%})"
+            
+            is_diverging, divergence_rate = self.convergence_detector.detect_divergence()
+            if is_diverging:
+                return True, f"Training diverged (rate: {divergence_rate:.1%})"
+            
+            is_plateau, _ = self.convergence_detector.detect_plateau(threshold=0.0001)
+            if is_plateau and self.plateau_counter > self.plateau_patience * 100:
+                return True, f"Plateau for {self.plateau_counter} steps"
         
         return False, None
     

@@ -53,7 +53,7 @@ LuminaAI is a transformer training framework implementing Mixture of Experts (Mo
 
 **Framework positioning:**
 
-This is a complete training system, not a model zoo or API wrapper. Every component from tokenization to gradient synchronization is included. MoE and MoD implementations follow established research (Switch Transformer, DeepSeek-MoE, Mixture-of-Depths) with operational additions: dynamic expert management, capacity tuning, load balancing, routing analytics.
+This is a complete training system, not a model zoo or API wrapper. Every component from tokenization to gradient synchronization is included. MoE and MoD implementations follow established research (Switch Transformer, Mixture of Experts, Mixture-of-Depths) with operational additions: dynamic expert management, capacity tuning, load balancing, routing analytics.
 
 The adaptive orchestrator monitors 20+ metrics every N steps and triggers interventions across hyperparameters, architecture, and recovery procedures. Maintains decision history with confidence scoring to prevent excessive intervention.
 
