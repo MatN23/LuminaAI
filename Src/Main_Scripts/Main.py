@@ -1512,8 +1512,8 @@ def main():
         'use_moe': True,
         'use_mod': True,
         'num_epochs': 20,
-        'learning_rate': 2e-5,
-        'min_lr': 1e-7,
+        'learning_rate': 5e-4,
+        'min_lr': 1e-6,
         'use_lr_scheduler': True,
         'lr_scheduler': "cosine",  # cosine, constant, or linear
         'warmup_ratio': 0.02,
@@ -1740,7 +1740,7 @@ def main():
         ],
 
         # Training mode
-        'training_mode': 'finetuning_only',  # 'base_only', 'finetuning_only', 'hybrid', 'interleaved'
+        'training_mode': 'hybrid',  # 'base_only', 'finetuning_only', 'hybrid', 'interleaved'
         'base_finetuning_ratio': 0.7,  # For interleaved mode: 70% base, 30% fine-tuning
 
         # Dataset processing
