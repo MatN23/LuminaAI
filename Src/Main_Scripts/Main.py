@@ -1512,7 +1512,7 @@ def main():
         'use_moe': True,
         'use_mod': True,
         'num_epochs': 20,
-        'learning_rate': 5e-4,
+        'learning_rate': 1e-4,
         'min_lr': 1e-6,
         'use_lr_scheduler': True,
         'lr_scheduler': "cosine",  # cosine, constant, or linear
@@ -1526,7 +1526,7 @@ def main():
         'moe_top_k': 2,
         'compile': True,
         
-        'max_memory_usage': 0.85,
+        'max_memory_usage': 0.95,
         'save_every_n_batches': 1000,
         'eval_every_n_batches': 500,
         'use_flash_attention': True,
@@ -1740,7 +1740,7 @@ def main():
         ],
 
         # Training mode
-        'training_mode': 'hybrid',  # 'base_only', 'finetuning_only', 'hybrid', 'interleaved'
+        'training_mode': 'finetuning_only',  # 'base_only', 'finetuning_only', 'hybrid', 'interleaved'
         'base_finetuning_ratio': 0.7,  # For interleaved mode: 70% base, 30% fine-tuning
 
         # Dataset processing
