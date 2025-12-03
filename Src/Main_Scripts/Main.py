@@ -2225,13 +2225,6 @@ def main():
         print(f"  Distributed Environment: {'Yes' if is_distributed else 'No'}")
         print(f"  World Size: {world_size}")
         print(f"  Local Rank: {local_rank}")
-
-        # FSDP requires distributed environment - skip if single GPU
-        if (backend_choice == 'fsdp' or use_fsdp) and not is_distributed:
-            print("\n⚠️  FSDP requires distributed environment (multi-GPU)")
-            print("   Single GPU detected - falling back to PyTorch backend")
-            backend_choice = 'pytorch'
-            use_fsdp = False
         if (backend_choice == 'deepspeed_remake' or use_deepspeed_remake) and DEEPSPEED_REMAKE_AVAILABLE:
             print("\n" + "="*80)
             print("INITIALIZING DEEPSPEED REMAKE BACKEND")
@@ -2284,10 +2277,14 @@ def main():
                 deepspeed_integration_needed = False
 
         # Priority: DeepSpeed Remake > FSDP > Original DeepSpeed > PyTorch
-        if (backend_choice == 'fsdp' or use_fsdp) and BACKEND_FSDP_AVAILABLE and is_distributed:
+        elif (backend_choice == 'fsdp' or use_fsdp) and BACKEND_FSDP_AVAILABLE and is_distributed:
             print("\n" + "="*80)
             print("INITIALIZING FSDP BACKEND")
             print("="*80)
+            print("\n⚠️  FSDP requires distributed environment (multi-GPU)")
+            print("   Single GPU detected - falling back to PyTorch backend")
+            backend_choice = 'pytorch'
+            use_fsdp = False
             
             # Transfer backend params to config
             for key, value in backend_params.items():
