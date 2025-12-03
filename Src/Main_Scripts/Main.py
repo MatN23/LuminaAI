@@ -62,6 +62,14 @@ except ImportError:
     BACKEND_FSDP_AVAILABLE = False
 
 try:
+    from deepspeed_integration import integrate_with_trainer
+    DEEPSPEED_REMAKE_AVAILABLE = True
+    print("✓ DeepSpeed remake available")
+except ImportError:
+    DEEPSPEED_REMAKE_AVAILABLE = False
+    print("⚠ DeepSpeed remake not available")
+
+try:
     from training.chinchilla_scaler import EnhancedChinchillaScaler
     CHINCHILLA_SCALER_AVAILABLE = True
     print("✓ Chinchilla scaler available")
@@ -1845,16 +1853,28 @@ def main():
     # 16. BACKEND PARAMS
     # ========================================================================
     backend_params = {
-        'backend': 'fsdp',  # Primary choice
-        'use_fsdp': True,
-
-        # FSDP specific
-        'fsdp_sharding_strategy': 'FULL_SHARD',  # Options: FULL_SHARD, SHARD_GRAD_OP, NO_SHARD, HYBRID_SHARD
-        'fsdp_auto_wrap_threshold': 1e8,  # Wrap modules with >100M params
+        'backend': 'deepspeed_remake',  # Options: 'fsdp', 'deepspeed', 'deepspeed_remake', 'pytorch'
         
-        # Fallback to DeepSpeed if needed
+        # FSDP specific
+        'use_fsdp': False,
+        'fsdp_sharding_strategy': 'FULL_SHARD',
+        'fsdp_auto_wrap_threshold': 1e8,
+        
+        # Original DeepSpeed
         'use_deepspeed': False,
         'zero_stage': 3,
+        
+        # DeepSpeed Remake specific
+        'use_deepspeed_remake': True,
+        'deepspeed_remake_config': {
+            'zero_stage': 2,  # 1, 2, or 3
+            'cpu_offload': True,
+            'cpu_offload_parameters': False,
+            'nvme_path': None,  # Set to path for NVMe offload
+            'partition_size': int(1e9),  # 1GB partitions
+            'overlap_comm': True,
+            'gradient_clipping': 1.0,
+        }
     }
     # ========================================================================
     # END CONFIGURATION SECTION
@@ -2159,6 +2179,10 @@ def main():
         use_fsdp = backend_params.get('use_fsdp', False)
         use_deepspeed = backend_params.get('use_deepspeed', False)
 
+        use_deepspeed_remake = backend_params.get('use_deepspeed_remake', False)
+        deepspeed_integration_needed = False
+        expert_registry = {}
+
         # ----- SANITIZE CONFLICTS BETWEEN DEEPSPEED <-> FSDP FLAGS -----
         # Prevent deepspeed params from accidentally affecting FSDP runs and vice-versa.
         if backend_choice == 'fsdp' or use_fsdp:
@@ -2174,22 +2198,24 @@ def main():
                         pass
 
         # If DeepSpeed is explicitly selected, clear FSDP-specific flags
-        if backend_choice == 'deepspeed' or use_deepspeed:
+        if backend_choice == 'deepspeed_remake' or use_deepspeed_remake:
+            if getattr(config, 'use_deepspeed', False):
+                logging.warning("Disabling original DeepSpeed to use DeepSpeed remake")
+                config.use_deepspeed = False
             if getattr(config, 'use_fsdp', False):
-                logging.warning("Config sets use_fsdp=True but backend_choice is DeepSpeed — disabling use_fsdp to avoid conflicts")
+                logging.warning("Disabling FSDP to use DeepSpeed remake")
                 config.use_fsdp = False
-            for attr in ['fsdp_sharding_strategy', 'fsdp_auto_wrap_threshold', 'fsdp_offload_params']:
+            
+            for attr in ['fsdp_sharding_strategy', 'fsdp_auto_wrap_threshold', 'zero_stage']:
                 if hasattr(config, attr):
-                    try:
-                        setattr(config, attr, None)
-                    except Exception:
-                        pass
+                    setattr(config, attr, None)
 
         # ---------------------------------------------------------------
         print(f"\nBackend Selection:")
         print(f"  Requested backend: {backend_choice}")
         print(f"  FSDP available: {BACKEND_FSDP_AVAILABLE}")
         print(f"  DeepSpeed available: {BACKEND_DEEPSPEED_AVAILABLE}")
+        print(f"  DeepSpeed Remake available: {DEEPSPEED_REMAKE_AVAILABLE}")
 
         # Check if we're in a distributed environment
         world_size = int(os.environ.get('WORLD_SIZE', 1))
@@ -2206,8 +2232,58 @@ def main():
             print("   Single GPU detected - falling back to PyTorch backend")
             backend_choice = 'pytorch'
             use_fsdp = False
+        if (backend_choice == 'deepspeed_remake' or use_deepspeed_remake) and DEEPSPEED_REMAKE_AVAILABLE:
+            print("\n" + "="*80)
+            print("INITIALIZING DEEPSPEED REMAKE BACKEND")
+            print("="*80)
+            
+            remake_config = backend_params.get('deepspeed_remake_config', {})
+            for key, value in remake_config.items():
+                setattr(config, key, value)
+            
+            for key, value in backend_params.items():
+                if not hasattr(config, key):
+                    setattr(config, key, value)
+            
+            try:
+                device = torch.device('cuda' if torch.cuda.is_available() else 
+                                    ('mps' if is_mps else 'cpu'))
+                model = base_model.to(device)
+                
+                print(f"Model moved to {device}")
+                print("\nDeepSpeed Remake Configuration:")
+                print(f"  ZeRO Stage: {config.zero_stage}")
+                print(f"  CPU Offload: {config.cpu_offload}")
+                print(f"  CPU Offload Parameters: {getattr(config, 'cpu_offload_parameters', False)}")
+                print(f"  NVMe Path: {getattr(config, 'nvme_path', None) or 'None'}")
+                print(f"  Overlap Communication: {getattr(config, 'overlap_comm', True)}")
+                print(f"  Gradient Clipping: {getattr(config, 'gradient_clipping', 1.0)}")
+                
+                if config.use_moe:
+                    print(f"\nBuilding expert registry for MoE model...")
+                    for name, module in model.named_modules():
+                        if 'expert' in name.lower() or 'moe' in name.lower():
+                            expert_registry[name] = module
+                    print(f"  Found {len(expert_registry)} expert modules")
+                
+                print("\nDeepSpeed Remake will be integrated after orchestrator creation...")
+                
+                using_backend = "DeepSpeed Remake (Pending)"
+                deepspeed_integration_needed = True
+                
+            except Exception as e:
+                print(f"✗ DeepSpeed Remake initialization failed: {e}")
+                import traceback
+                traceback.print_exc()
+                print("Falling back to PyTorch backend...")
+                model = base_model
+                device = torch.device('cuda' if torch.cuda.is_available() else 
+                                    ('mps' if is_mps else 'cpu'))
+                model = model.to(device)
+                using_backend = "PyTorch (DeepSpeed Remake fallback)"
+                deepspeed_integration_needed = False
 
-        # Priority: FSDP > DeepSpeed > PyTorch
+        # Priority: DeepSpeed Remake > FSDP > Original DeepSpeed > PyTorch
         if (backend_choice == 'fsdp' or use_fsdp) and BACKEND_FSDP_AVAILABLE and is_distributed:
             print("\n" + "="*80)
             print("INITIALIZING FSDP BACKEND")
