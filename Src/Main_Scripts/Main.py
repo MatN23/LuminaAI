@@ -2567,6 +2567,33 @@ def main():
                     print(f"✓ Chinchilla scaler attached to trainer")
                     print(f"✓ Optimal epochs: {config.num_epochs}")
                     print("="*80 + "\n")
+                if deepspeed_integration_needed and DEEPSPEED_REMAKE_AVAILABLE:
+                    print_banner("INTEGRATING DEEPSPEED REMAKE WITH TRAINER")
+                    
+                    try:
+                        deepspeed_integration = integrate_with_trainer(
+                            trainer=orchestrator.trainer,  # ✅ The actual trainer object
+                            config=config,
+                            model=model,
+                            expert_registry=expert_registry if config.use_moe else None
+                        )
+                        
+                        orchestrator.deepspeed_integration = deepspeed_integration
+                        
+                        print("✓ DeepSpeed Remake integration complete")
+                        print(f"  Optimizer type: {type(orchestrator.trainer.optimizer).__name__}")
+                        print(f"  Scheduler type: {type(orchestrator.trainer.scheduler).__name__ if orchestrator.trainer.scheduler else 'None'}")
+                        print(f"  ZeRO Stage: {config.zero_stage}")
+                        print(f"  Offloading: {'Enabled' if deepspeed_integration.offload_manager else 'Disabled'}")
+                        print("="*80 + "\n")
+                        
+                        using_backend = "DeepSpeed Remake (Integrated)"
+                        
+                    except Exception as e:
+                        print(f"✗ DeepSpeed Remake integration failed: {e}")
+                        import traceback
+                        traceback.print_exc()
+                        print("Continuing with standard optimizer...")
             except Exception as e:
                 print(f"\nERROR: Failed to initialize orchestrator: {e}")
                 import traceback
