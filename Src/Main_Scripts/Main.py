@@ -62,6 +62,12 @@ except ImportError:
     BACKEND_FSDP_AVAILABLE = False
 
 try:
+    from backend.backend_colossalai import create_colossalai_backend
+    BACKEND_COLOSSALAI_AVAILABLE = True
+except ImportError:
+    BACKEND_COLOSSALAI_AVAILABLE = False
+
+try:
     from deepspeed_integration import integrate_with_trainer
     DEEPSPEED_REMAKE_AVAILABLE = True
     print("✓ DeepSpeed remake available")
@@ -1853,7 +1859,7 @@ def main():
     # 16. BACKEND PARAMS
     # ========================================================================
     backend_params = {
-        'backend': 'deepspeed_remake',  # Options: 'fsdp', 'deepspeed', 'deepspeed_remake', 'pytorch'
+        'backend': 'deepspeed_remake',  # Options: 'fsdp', 'deepspeed', 'colossalai', 'pytorch'
         
         # FSDP specific
         'use_fsdp': False,
@@ -2320,6 +2326,8 @@ def main():
                 device = torch.device('cuda' if torch.cuda.is_available() else ('mps' if is_mps else 'cpu'))
                 model = model.to(device)
                 using_backend = "PyTorch (FSDP fallback)"
+        elif backend_choice == 'colossalai':
+            model = create_colossalai_backend(base_model, config)
 
         elif (backend_choice == 'deepspeed' or use_deepspeed) and BACKEND_DEEPSPEED_AVAILABLE:
             print("\n" + "="*80)

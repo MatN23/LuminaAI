@@ -6,6 +6,7 @@ import torch.distributed as dist
 from typing import Dict, List, Optional, Any, Tuple
 from collections import defaultdict
 from enum import Enum
+import math
 
 
 class ZeROStage(Enum):
@@ -54,23 +55,39 @@ class ZeROStageManager:
         self.world_size = dist.get_world_size() if dist.is_initialized() else 1
         self.rank = dist.get_rank() if dist.is_initialized() else 0
         
-        # Partition tracking
-        self.param_partitions: Dict[str, List[torch.Tensor]] = {}
-        self.gradient_partitions: Dict[str, List[torch.Tensor]] = {}
-        self.optimizer_state_partitions: Dict[str, Any] = {}
+        # FIX: Use deterministic parameter ordering
+        self.param_list = list(model.parameters())
+        self.param_to_name = {}
+        for name, param in model.named_parameters():
+            self.param_to_name[id(param)] = name
+        
+        # Partition tracking with proper typing
+        self.param_to_rank: Dict[int, int] = {}  # param_id -> owning rank
+        self.rank_to_params: Dict[int, List[torch.nn.Parameter]] = defaultdict(list)
+        self.gradient_partitions: Dict[int, torch.Tensor] = {}  # param_id -> grad partition
+        self.optimizer_state_partitions: Dict[int, Any] = {}
+        
+        # FIX: CPU offload buffers (pinned memory for faster transfers)
+        self.cpu_offload_buffers: Dict[int, torch.Tensor] = {}
         
         # Expert-specific tracking for MoE/MoD
         self.expert_param_map: Dict[str, List[str]] = defaultdict(list)
         self.expert_active_state: Dict[str, bool] = {}
         
-        # Communication buffers
-        self.gradient_buffer: Optional[torch.Tensor] = None
-        self.param_buffer: Optional[torch.Tensor] = None
+        # FIX: Gradient accumulation buffers for bucketing
+        self.gradient_buckets: List[List[torch.nn.Parameter]] = []
+        self.bucket_size = int(5e8)  # 500MB default bucket
+        
+        # FIX: Full parameter storage for ZeRO-3
+        self.full_params: Dict[int, torch.Tensor] = {}  # Stores full param when gathered
         
         # Hooks
         self._gradient_hooks: List[Any] = []
         self._forward_hooks: List[Any] = []
         self._backward_hooks: List[Any] = []
+        
+        # FIX: Communication handles for async operations
+        self.comm_handles: List[dist.Work] = []
         
         self._initialize_stage()
     
@@ -81,6 +98,9 @@ class ZeROStageManager:
         
         # Build expert parameter map for LuminaAI
         self._build_expert_param_map()
+        
+        # FIX: Create deterministic parameter partitioning first
+        self._create_parameter_partitions()
         
         if self.stage == ZeROStage.OPTIMIZER_STATES:
             self._init_zero_stage_1()
@@ -97,189 +117,366 @@ class ZeROStageManager:
                 self.expert_param_map[expert_name].append(full_name)
                 self.expert_active_state[expert_name] = True
     
+    def _create_parameter_partitions(self):
+        """
+        FIX: Create deterministic parameter partitions across ranks.
+        Uses round-robin assignment based on parameter index (not hash).
+        """
+        params = list(self.model.parameters())
+        
+        for idx, param in enumerate(params):
+            # Deterministic round-robin assignment
+            owning_rank = idx % self.world_size
+            param_id = id(param)
+            
+            self.param_to_rank[param_id] = owning_rank
+            self.rank_to_params[owning_rank].append(param)
+        
+        print(f"[Rank {self.rank}] Owns {len(self.rank_to_params[self.rank])} parameters")
+    
+    def _create_gradient_buckets(self):
+        """
+        FIX: Create gradient buckets for efficient reduce-scatter.
+        Groups parameters by size to minimize communication overhead.
+        """
+        current_bucket = []
+        current_bucket_size = 0
+        
+        for param in self.model.parameters():
+            if not param.requires_grad:
+                continue
+            
+            param_size = param.numel() * param.element_size()
+            
+            if current_bucket_size + param_size > self.bucket_size and current_bucket:
+                self.gradient_buckets.append(current_bucket)
+                current_bucket = []
+                current_bucket_size = 0
+            
+            current_bucket.append(param)
+            current_bucket_size += param_size
+        
+        if current_bucket:
+            self.gradient_buckets.append(current_bucket)
+        
+        print(f"[Rank {self.rank}] Created {len(self.gradient_buckets)} gradient buckets")
+    
     def _init_zero_stage_1(self):
         """
         ZeRO Stage 1: Partition optimizer states across ranks
+        FIX: Properly partition optimizer state dict by parameter ownership
         """
         print(f"[Rank {self.rank}] Initializing ZeRO Stage 1: Optimizer State Partitioning")
         
-        # Partition optimizer states
+        # Partition optimizer states based on parameter ownership
         self._partition_optimizer_states()
         
-        # Register post-backward hooks for gradient accumulation
+        # FIX: Create gradient buckets for efficient all-reduce
+        self._create_gradient_buckets()
+        
+        # Register gradient hooks for all-reduce
         for param in self.model.parameters():
             if param.requires_grad:
-                param.register_hook(self._create_gradient_hook(param))
+                hook = param.register_hook(self._create_allreduce_hook(param))
+                self._gradient_hooks.append(hook)
     
     def _init_zero_stage_2(self):
         """
         ZeRO Stage 2: Partition optimizer states + gradients across ranks
+        FIX: Use reduce-scatter for gradient partitioning instead of all-reduce
         """
         print(f"[Rank {self.rank}] Initializing ZeRO Stage 2: Optimizer + Gradient Partitioning")
         
-        # Initialize Stage 1 first
+        # Partition optimizer states
         self._partition_optimizer_states()
         
-        # Partition gradients
-        self._partition_gradients()
+        # Create gradient buckets
+        self._create_gradient_buckets()
         
-        # Register hooks for gradient reduction
+        # FIX: Register reduce-scatter hooks for gradient partitioning
         for param in self.model.parameters():
             if param.requires_grad:
-                param.register_hook(self._create_gradient_partition_hook(param))
+                hook = param.register_hook(self._create_reduce_scatter_hook(param))
+                self._gradient_hooks.append(hook)
+        
+        # Allocate gradient partition buffers
+        for param in self.rank_to_params[self.rank]:
+            if param.requires_grad:
+                param_id = id(param)
+                # Each rank only stores its partition of gradients
+                partition_size = math.ceil(param.numel() / self.world_size)
+                self.gradient_partitions[param_id] = torch.zeros(
+                    partition_size, 
+                    dtype=param.dtype, 
+                    device=param.device
+                )
     
     def _init_zero_stage_3(self):
         """
         ZeRO Stage 3: Partition optimizer states + gradients + parameters across ranks
+        FIX: Properly implement parameter gathering/scattering with forward/backward hooks
         """
         print(f"[Rank {self.rank}] Initializing ZeRO Stage 3: Full Parameter Partitioning")
         
-        # Initialize Stage 2 first
+        # Initialize Stage 2 components
         self._partition_optimizer_states()
-        self._partition_gradients()
+        self._create_gradient_buckets()
         
-        # Partition parameters (most memory-intensive)
-        self._partition_parameters()
+        # Partition parameters and create CPU offload buffers
+        self._partition_parameters_stage3()
         
-        # Register forward/backward hooks for parameter gathering
+        # FIX: Register forward pre-hooks for parameter gathering
         self._register_parameter_hooks()
+        
+        # Register gradient hooks for reduce-scatter
+        for param in self.model.parameters():
+            if param.requires_grad:
+                hook = param.register_hook(self._create_reduce_scatter_hook(param))
+                self._gradient_hooks.append(hook)
     
     def _partition_optimizer_states(self):
-        """Partition optimizer states across ranks"""
-        optimizer_states = self.optimizer.state_dict()['state']
+        """
+        FIX: Partition optimizer states deterministically based on parameter ownership.
+        Only keep states for parameters owned by this rank.
+        """
+        optimizer_states = self.optimizer.state
         
-        params_per_rank = len(optimizer_states) // self.world_size
-        start_idx = self.rank * params_per_rank
-        end_idx = start_idx + params_per_rank if self.rank < self.world_size - 1 else len(optimizer_states)
+        # Clear existing partitions
+        self.optimizer_state_partitions.clear()
         
-        # Store local partition
-        for param_id in range(start_idx, end_idx):
-            if param_id in optimizer_states:
-                self.optimizer_state_partitions[param_id] = optimizer_states[param_id]
-        
-        print(f"[Rank {self.rank}] Partitioned optimizer states: {len(self.optimizer_state_partitions)} local states")
-    
-    def _partition_gradients(self):
-        """Partition gradients across ranks with expert awareness"""
-        for name, param in self.model.named_parameters():
-            if param.requires_grad:
-                # Check if parameter belongs to an expert
-                expert_name = self._get_expert_for_param(name)
+        # Only keep optimizer states for parameters this rank owns
+        for param in self.rank_to_params[self.rank]:
+            param_id = id(param)
+            if param in optimizer_states:
+                self.optimizer_state_partitions[param_id] = optimizer_states[param]
                 
-                # Assign rank based on hash (consistent partitioning)
-                param_rank = hash(name) % self.world_size
-                
-                if param_rank == self.rank:
-                    self.gradient_partitions[name] = []
-                    
-                    # Expert-specific logging
-                    if expert_name:
-                        print(f"[Rank {self.rank}] Assigned gradient partition: {name} (Expert: {expert_name})")
+                # FIX: Offload to CPU if enabled
+                if self.cpu_offload:
+                    self._offload_optimizer_state_to_cpu(param_id)
+        
+        print(f"[Rank {self.rank}] Partitioned {len(self.optimizer_state_partitions)} optimizer states")
     
-    def _partition_parameters(self):
-        """Partition parameters across ranks with expert-aware allocation"""
-        for name, param in self.model.named_parameters():
-            param_rank = hash(name) % self.world_size
+    def _partition_parameters_stage3(self):
+        """
+        FIX: Partition parameters for ZeRO-3.
+        Each rank keeps only its partition; others are freed or offloaded.
+        """
+        for param in self.model.parameters():
+            param_id = id(param)
+            owning_rank = self.param_to_rank[param_id]
             
-            if param_rank == self.rank:
-                # Keep local copy
-                self.param_partitions[name] = [param.data.clone()]
+            if owning_rank == self.rank:
+                # This rank owns this parameter - keep full copy
+                self.full_params[param_id] = param.data.clone()
+                
+                # FIX: Offload to CPU if enabled
+                if self.cpu_offload:
+                    self.cpu_offload_buffers[param_id] = param.data.to('cpu', non_blocking=True).pin_memory()
             else:
-                # Free memory, will gather on demand
-                param.data = torch.empty(0, dtype=param.dtype, device=param.device)
+                # Not owned by this rank - free GPU memory
+                # We'll gather on-demand during forward pass
+                param.data = param.data.new_empty(0)
+        
+        print(f"[Rank {self.rank}] Partitioned parameters for ZeRO-3")
     
-    def _get_expert_for_param(self, param_name: str) -> Optional[str]:
-        """Find which expert a parameter belongs to"""
-        for expert_name, param_list in self.expert_param_map.items():
-            if any(param_name in p for p in param_list):
-                return expert_name
-        return None
-    
-    def _create_gradient_hook(self, param: torch.Tensor):
-        """Create gradient accumulation hook for ZeRO-1"""
+    def _create_allreduce_hook(self, param: torch.nn.Parameter):
+        """
+        FIX: Create gradient all-reduce hook for ZeRO-1.
+        Properly averages gradients across all ranks.
+        """
         def hook(grad):
-            if self.overlap_comm and dist.is_initialized():
-                # Asynchronously reduce gradients
-                dist.all_reduce(grad, op=dist.ReduceOp.SUM, async_op=True)
+            if grad is None or not dist.is_initialized():
+                return grad
+            
+            # FIX: Synchronous all-reduce with proper averaging
+            dist.all_reduce(grad, op=dist.ReduceOp.SUM)
+            grad.div_(self.world_size)
+            
             return grad
+        
         return hook
     
-    def _create_gradient_partition_hook(self, param: torch.Tensor):
-        """Create gradient partitioning hook for ZeRO-2"""
+    def _create_reduce_scatter_hook(self, param: torch.nn.Parameter):
+        """
+        FIX: Create gradient reduce-scatter hook for ZeRO-2/3.
+        Each rank gets its partition of the reduced gradient.
+        """
+        param_id = id(param)
+        owning_rank = self.param_to_rank[param_id]
+        
         def hook(grad):
-            if dist.is_initialized():
-                # Reduce scatter: each rank gets its partition
-                output = torch.empty_like(grad)
-                dist.reduce_scatter_tensor(output, grad)
-                return output
-            return grad
+            if grad is None or not dist.is_initialized():
+                return grad
+            
+            # Only the owning rank needs the gradient partition
+            if owning_rank != self.rank:
+                # This rank doesn't own this param, zero out gradient
+                return torch.zeros_like(grad)
+            
+            # FIX: Use reduce_scatter to partition gradients
+            # Each rank computes sum of its partition across all ranks
+            grad_flat = grad.flatten()
+            chunk_size = math.ceil(grad_flat.numel() / self.world_size)
+            
+            # Pad if necessary for even division
+            padded_size = chunk_size * self.world_size
+            if grad_flat.numel() < padded_size:
+                grad_flat = torch.nn.functional.pad(grad_flat, (0, padded_size - grad_flat.numel()))
+            
+            # Split into chunks for all ranks
+            grad_chunks = grad_flat.split(chunk_size)
+            
+            # Output buffer for this rank's partition
+            output = torch.zeros_like(grad_chunks[self.rank])
+            
+            # Reduce-scatter: sum all ranks' chunks[i] into rank i
+            input_list = [chunk.contiguous() for chunk in grad_chunks]
+            dist.reduce_scatter_tensor(output, torch.stack(input_list), op=dist.ReduceOp.SUM)
+            
+            # Store in partition buffer
+            self.gradient_partitions[param_id] = output
+            
+            # Return the partition (reshaped to match original)
+            return output.view_as(grad[:chunk_size])
+        
         return hook
     
     def _register_parameter_hooks(self):
-        """Register hooks for parameter gathering in ZeRO-3"""
+        """
+        FIX: Register hooks for parameter gathering/scattering in ZeRO-3.
+        Gather before forward, scatter after backward.
+        """
         def forward_pre_hook(module, input):
             """Gather parameters before forward pass"""
-            for name, param in module.named_parameters(recurse=False):
-                if name in self.param_partitions:
-                    # Gather full parameter from all ranks
-                    self._gather_parameter(name, param)
+            for param in module.parameters(recurse=False):
+                if not param.requires_grad:
+                    continue
+                    
+                param_id = id(param)
+                owning_rank = self.param_to_rank.get(param_id)
+                
+                if owning_rank is None:
+                    continue
+                
+                # FIX: Gather parameter from owning rank
+                if owning_rank == self.rank:
+                    # This rank owns it - restore from CPU if offloaded
+                    if self.cpu_offload and param_id in self.cpu_offload_buffers:
+                        param.data = self.cpu_offload_buffers[param_id].to(
+                            param.device, non_blocking=True
+                        )
+                    elif param_id in self.full_params:
+                        param.data = self.full_params[param_id]
+                else:
+                    # Receive from owning rank via broadcast
+                    if param.data.numel() == 0:
+                        # Allocate space for full parameter
+                        param.data = torch.empty(
+                            self.full_params.get(param_id, param).shape,
+                            dtype=param.dtype,
+                            device=param.device
+                        )
+                
+                # FIX: Broadcast from owning rank to all ranks
+                if dist.is_initialized():
+                    dist.broadcast(param.data, src=owning_rank)
         
-        def forward_post_hook(module, input, output):
-            """Release parameters after forward pass"""
-            for name, param in module.named_parameters(recurse=False):
-                if name not in self.param_partitions:
-                    # Free non-local parameters
-                    param.data = torch.empty(0, dtype=param.dtype, device=param.device)
-            return output
+        def backward_post_hook(module, grad_input, grad_output):
+            """Free parameters after backward pass"""
+            for param in module.parameters(recurse=False):
+                param_id = id(param)
+                owning_rank = self.param_to_rank.get(param_id)
+                
+                if owning_rank != self.rank:
+                    # Free non-owned parameters to save memory
+                    param.data = param.data.new_empty(0)
+            
+            return grad_input
         
         # Register hooks on all modules
         for module in self.model.modules():
-            self._forward_hooks.append(module.register_forward_pre_hook(forward_pre_hook))
-            self._forward_hooks.append(module.register_forward_hook(forward_post_hook))
+            hook1 = module.register_forward_pre_hook(forward_pre_hook)
+            hook2 = module.register_full_backward_hook(backward_post_hook)
+            self._forward_hooks.append(hook1)
+            self._backward_hooks.append(hook2)
     
-    def _gather_parameter(self, name: str, param: torch.Tensor):
-        """Gather parameter from all ranks"""
-        if not dist.is_initialized():
+    def _offload_optimizer_state_to_cpu(self, param_id: int):
+        """
+        FIX: Offload optimizer state to pinned CPU memory for faster transfers.
+        """
+        if param_id not in self.optimizer_state_partitions:
             return
         
-        # Create buffer for gathering
-        full_param = torch.empty(param.shape, dtype=param.dtype, device=param.device)
+        state = self.optimizer_state_partitions[param_id]
         
-        # All-gather parameter
-        dist.all_gather_into_tensor(full_param, param.data)
-        param.data = full_param
+        # Offload tensors in state dict to CPU with pinned memory
+        for key, value in state.items():
+            if isinstance(value, torch.Tensor):
+                state[key] = value.to('cpu', non_blocking=True).pin_memory()
     
     def step(self):
-        """Execute optimizer step with ZeRO partitioning"""
+        """
+        FIX: Execute optimizer step with proper ZeRO partitioning.
+        Synchronizes gradients and parameters as needed.
+        """
         if self.stage == ZeROStage.DISABLED:
             self.optimizer.step()
             return
         
-        # Synchronize gradients if needed
-        if self.stage == ZeROStage.OPTIMIZER_STATES:
-            self._sync_gradients()
+        # FIX: Wait for any pending async operations
+        self._wait_for_communication()
         
-        # Update local partition
+        # For ZeRO-1, gradients are already synchronized via all-reduce
+        # For ZeRO-2/3, gradients are partitioned via reduce-scatter
+        
+        # FIX: Move optimizer states back to GPU if offloaded
+        if self.cpu_offload:
+            for param_id in self.optimizer_state_partitions:
+                self._restore_optimizer_state_from_cpu(param_id)
+        
+        # Update local partition only
         self.optimizer.step()
         
-        # Broadcast updated parameters if ZeRO-3
+        # FIX: Offload back to CPU after update
+        if self.cpu_offload:
+            for param_id in self.optimizer_state_partitions:
+                self._offload_optimizer_state_to_cpu(param_id)
+        
+        # For ZeRO-3, broadcast updated parameters from owning ranks
         if self.stage == ZeROStage.PARAMETERS:
             self._broadcast_parameters()
     
-    def _sync_gradients(self):
-        """Synchronize gradients across ranks for ZeRO-1"""
-        if dist.is_initialized():
-            for param in self.model.parameters():
-                if param.grad is not None:
-                    dist.all_reduce(param.grad, op=dist.ReduceOp.SUM)
-                    param.grad /= self.world_size
+    def _restore_optimizer_state_from_cpu(self, param_id: int):
+        """Restore optimizer state from CPU to GPU"""
+        if param_id not in self.optimizer_state_partitions:
+            return
+        
+        state = self.optimizer_state_partitions[param_id]
+        
+        for key, value in state.items():
+            if isinstance(value, torch.Tensor) and value.device.type == 'cpu':
+                state[key] = value.cuda(non_blocking=True)
+    
+    def _wait_for_communication(self):
+        """Wait for all async communication operations to complete"""
+        for handle in self.comm_handles:
+            handle.wait()
+        self.comm_handles.clear()
     
     def _broadcast_parameters(self):
-        """Broadcast updated parameters from owning rank"""
-        for name, param in self.model.named_parameters():
-            param_rank = hash(name) % self.world_size
-            if dist.is_initialized():
-                dist.broadcast(param.data, src=param_rank)
+        """
+        FIX: Broadcast updated parameters from owning ranks after optimizer step.
+        """
+        if not dist.is_initialized():
+            return
+        
+        for param in self.model.parameters():
+            param_id = id(param)
+            owning_rank = self.param_to_rank.get(param_id)
+            
+            if owning_rank is not None:
+                # Broadcast from owning rank
+                dist.broadcast(param.data, src=owning_rank)
     
     def set_expert_active(self, expert_name: str, active: bool):
         """
@@ -292,16 +489,18 @@ class ZeROStageManager:
     
     def get_memory_stats(self) -> Dict[str, float]:
         """Return memory statistics for current ZeRO stage"""
-        allocated = torch.cuda.memory_allocated() / 1e9  # GB
-        reserved = torch.cuda.memory_reserved() / 1e9
+        allocated = torch.cuda.memory_allocated() / 1e9 if torch.cuda.is_available() else 0
+        reserved = torch.cuda.memory_reserved() / 1e9 if torch.cuda.is_available() else 0
         
         return {
             'stage': self.stage.value,
+            'rank': self.rank,
             'allocated_gb': allocated,
             'reserved_gb': reserved,
-            'num_param_partitions': len(self.param_partitions),
+            'num_owned_params': len(self.rank_to_params[self.rank]),
             'num_gradient_partitions': len(self.gradient_partitions),
             'num_optimizer_partitions': len(self.optimizer_state_partitions),
+            'num_cpu_offload_buffers': len(self.cpu_offload_buffers),
         }
     
     def cleanup(self):
@@ -312,6 +511,14 @@ class ZeROStageManager:
         self._gradient_hooks.clear()
         self._forward_hooks.clear()
         self._backward_hooks.clear()
+        
+        # Wait for pending communications
+        self._wait_for_communication()
+        
+        # Clear buffers
+        self.cpu_offload_buffers.clear()
+        self.full_params.clear()
+        self.gradient_partitions.clear()
 
 
 class ZeROConfig:
