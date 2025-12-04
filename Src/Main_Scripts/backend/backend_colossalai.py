@@ -9,16 +9,24 @@ import torch.nn as nn
 from pathlib import Path
 from typing import Dict, Any, Optional
 
-# Add local Colossal-AI repo to path
-COLOSSALAI_PATH = Path(__file__).parent.parent / "ColossalAI.colossalai"
-sys.path.insert(0, str(COLOSSALAI_PATH))
+# Add ColossalAI parent directory to path
+# Structure: ColossalAI/colossalai/__init__.py
+COLOSSALAI_PATH = Path(__file__).parent.parent / "ColossalAI"
+if str(COLOSSALAI_PATH) not in sys.path:
+    sys.path.insert(0, str(COLOSSALAI_PATH))
 
-import colossalai.colossalai
-from colossalai.colossalai.booster import Booster
-from colossalai.colossalai.booster.plugin import GeminiPlugin, LowLevelZeroPlugin
-from colossalai.colossalai.cluster import DistCoordinator
-from colossalai.colossalai.nn.optimizer import HybridAdam
-from colossalai.colossalai.nn.lr_scheduler import CosineAnnealingWarmupLR
+# Try importing ColossalAI
+try:
+    import colossalai  # This now finds ColossalAI/colossalai/
+    from colossalai.booster import Booster
+    from colossalai.booster.plugin import GeminiPlugin, LowLevelZeroPlugin
+    from colossalai.cluster import DistCoordinator
+    from colossalai.nn.optimizer import HybridAdam
+    COLOSSALAI_AVAILABLE = True
+    logging.info("✓ ColossalAI loaded from local repo")
+except ImportError as e:
+    COLOSSALAI_AVAILABLE = False
+    logging.warning(f"⚠ ColossalAI not available: {e}")
 
 COLOSSALAI_AVAILABLE = True
 

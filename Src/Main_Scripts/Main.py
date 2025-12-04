@@ -1859,7 +1859,7 @@ def main():
     # 16. BACKEND PARAMS
     # ========================================================================
     backend_params = {
-        'backend': 'colossalai',  # Options: 'fsdp', 'deepspeed', 'colossalai', 'pytorch'
+        'backend': 'fsdp',  # Options: 'fsdp', 'deepspeed', 'colossalai', 'pytorch' colossalai not recommended
         
         # FSDP specific
         'use_fsdp': False,
