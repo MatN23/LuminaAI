@@ -1,7 +1,5 @@
-"""
-Offload Manager for LuminaAI DeepSpeed Backend
-Handles CPU and NVMe offloading for optimizer states, parameters, and gradients.
-"""
+# Copyright (c) 2025 MatN23. All rights reserved.
+# Licensed under the Custom License below. CPU and NVMe offloading for optimizer states, parameters, and gradients.
 
 import torch
 import os

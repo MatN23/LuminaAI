@@ -1,7 +1,5 @@
-"""
-Learning Rate Schedulers for ZeRO-Compatible Optimizers
-Compatible with partitioned optimizers and expert-aware scheduling.
-"""
+# Copyright (c) 2025 MatN23. All rights reserved.
+# Licensed under the Custom License below.
 
 import torch
 import math
@@ -23,7 +21,8 @@ class ZeROLRScheduler(_LRScheduler):
         expert_registry: Optional[Dict] = None,
     ):
         self.expert_registry = expert_registry or {}
-        super().__init__(optimizer, last_epoch, verbose)
+        # FIX: Pass verbose as keyword argument, not positional
+        super().__init__(optimizer, last_epoch=last_epoch)
     
     def get_lr(self):
         """Override this method in subclasses"""
@@ -52,7 +51,7 @@ class CosineAnnealingWarmRestarts(ZeROLRScheduler):
         self.T_cur = last_epoch
         self.T_i = T_0
         
-        super().__init__(optimizer, last_epoch, verbose, expert_registry)
+        super().__init__(optimizer, last_epoch=last_epoch)
     
     def get_lr(self):
         return [
@@ -111,7 +110,7 @@ class LinearWarmupCosineDecay(ZeROLRScheduler):
         self.max_steps = max_steps
         self.min_lr = min_lr
         
-        super().__init__(optimizer, last_epoch, verbose, expert_registry)
+        super().__init__(optimizer, last_epoch=last_epoch)
     
     def get_lr(self):
         if self.last_epoch < self.warmup_steps:
@@ -146,7 +145,7 @@ class InverseSquareRootSchedule(ZeROLRScheduler):
         expert_registry: Optional[Dict] = None,
     ):
         self.warmup_steps = warmup_steps
-        super().__init__(optimizer, last_epoch, verbose, expert_registry)
+        super().__init__(optimizer, last_epoch=last_epoch)
     
     def get_lr(self):
         step = max(1, self.last_epoch)
@@ -179,7 +178,7 @@ class PolynomialDecay(ZeROLRScheduler):
         self.end_lr = end_lr
         self.power = power
         
-        super().__init__(optimizer, last_epoch, verbose, expert_registry)
+        super().__init__(optimizer, last_epoch=last_epoch)
     
     def get_lr(self):
         if self.last_epoch >= self.max_steps:
@@ -212,7 +211,7 @@ class ExponentialDecay(ZeROLRScheduler):
         self.decay_steps = decay_steps
         self.staircase = staircase
         
-        super().__init__(optimizer, last_epoch, verbose, expert_registry)
+        super().__init__(optimizer, last_epoch=last_epoch)
     
     def get_lr(self):
         if self.staircase:
@@ -254,7 +253,7 @@ class OneCycleLR(ZeROLRScheduler):
         self.step_size_up = int(total_steps * pct_start)
         self.step_size_down = total_steps - self.step_size_up
         
-        super().__init__(optimizer, last_epoch, verbose, expert_registry)
+        super().__init__(optimizer, last_epoch=last_epoch)
     
     def get_lr(self):
         step = self.last_epoch
@@ -305,23 +304,26 @@ class ExpertAwareLRScheduler(ZeROLRScheduler):
         self.max_steps = max_steps
         self.schedule_kwargs = schedule_kwargs
         
-        # Create base scheduler
+        # Create base scheduler (will be initialized after super().__init__)
+        self.base_scheduler = None
+        
+        super().__init__(optimizer, last_epoch=last_epoch)
+        
+        # Now create base scheduler after parent initialization
         if base_schedule == 'cosine':
             self.base_scheduler = LinearWarmupCosineDecay(
-                optimizer, warmup_steps, max_steps, **schedule_kwargs
+                optimizer, warmup_steps, max_steps, last_epoch=last_epoch, **schedule_kwargs
             )
         elif base_schedule == 'inverse_sqrt':
             self.base_scheduler = InverseSquareRootSchedule(
-                optimizer, warmup_steps, **schedule_kwargs
+                optimizer, warmup_steps, last_epoch=last_epoch, **schedule_kwargs
             )
         elif base_schedule == 'polynomial':
             self.base_scheduler = PolynomialDecay(
-                optimizer, max_steps, **schedule_kwargs
+                optimizer, max_steps, last_epoch=last_epoch, **schedule_kwargs
             )
         else:
             raise ValueError(f"Unknown schedule: {base_schedule}")
-        
-        super().__init__(optimizer, last_epoch, verbose, expert_registry)
         
         # Build parameter to expert mapping
         self.param_to_expert: Dict[int, str] = {}
@@ -335,6 +337,9 @@ class ExpertAwareLRScheduler(ZeROLRScheduler):
     
     def get_lr(self):
         """Get learning rates with expert-specific multipliers"""
+        if self.base_scheduler is None:
+            return self.base_lrs
+            
         base_lrs = self.base_scheduler.get_lr()
         
         # Apply expert multipliers
@@ -355,7 +360,8 @@ class ExpertAwareLRScheduler(ZeROLRScheduler):
     
     def step(self, epoch=None):
         """Step both base scheduler and apply expert multipliers"""
-        self.base_scheduler.step(epoch)
+        if self.base_scheduler:
+            self.base_scheduler.step(epoch)
         super().step(epoch)
 
 
@@ -374,7 +380,7 @@ class WarmupThenConstant(ZeROLRScheduler):
         expert_registry: Optional[Dict] = None,
     ):
         self.warmup_steps = warmup_steps
-        super().__init__(optimizer, last_epoch, verbose, expert_registry)
+        super().__init__(optimizer, last_epoch=last_epoch)
     
     def get_lr(self):
         if self.last_epoch < self.warmup_steps:

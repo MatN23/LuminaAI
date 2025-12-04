@@ -1,7 +1,5 @@
-"""
-Utility functions for LuminaAI DeepSpeed Backend.
-Logging, helper functions, and parameter state utilities.
-"""
+# Copyright (c) 2025 MatN23. All rights reserved.
+# Licensed under the Custom License below.
 
 import torch
 import torch.distributed as dist

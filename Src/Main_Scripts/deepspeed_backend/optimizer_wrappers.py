@@ -1,7 +1,5 @@
-"""
-ZeRO-Compatible Optimizer Wrappers for LuminaAI
-Wraps standard and 8-bit optimizers for ZeRO stage compliance.
-"""
+# Copyright (c) 2025 MatN23. All rights reserved.
+# Licensed under the Custom License below.
 
 import torch
 import torch.optim as optim
@@ -9,9 +7,10 @@ from typing import Dict, List, Optional, Any, Callable, Iterable
 from collections import defaultdict
 
 
-class ZeROOptimizer:
+class ZeROOptimizer(torch.optim.Optimizer):
     """
     Base wrapper for ZeRO-compatible optimizers.
+    Now inherits from torch.optim.Optimizer for scheduler compatibility.
     Handles state partitioning, gradient clipping, and expert-aware updates.
     """
     
@@ -25,6 +24,7 @@ class ZeROOptimizer:
         gradient_clipping: Optional[float] = None,
         offload_manager: Optional[Any] = None,
     ):
+        # Store the wrapped optimizer
         self.optimizer = optimizer
         self.zero_stage = zero_stage
         self.partition_rank = partition_rank
@@ -32,6 +32,9 @@ class ZeROOptimizer:
         self.expert_registry = expert_registry or {}
         self.gradient_clipping = gradient_clipping
         self.offload_manager = offload_manager
+        
+        # Initialize parent Optimizer class with empty params (we delegate to wrapped optimizer)
+        super().__init__([], {})
         
         # Track which parameters this rank owns
         self.owned_params: List[torch.nn.Parameter] = []
@@ -42,6 +45,21 @@ class ZeROOptimizer:
         
         # Expert-specific learning rates
         self.expert_lr_scales: Dict[str, float] = {}
+    
+    @property
+    def param_groups(self):
+        """Expose wrapped optimizer's param_groups"""
+        return self.optimizer.param_groups
+    
+    @param_groups.setter
+    def param_groups(self, value):
+        """Allow schedulers to modify param_groups"""
+        self.optimizer.param_groups = value
+    
+    @property
+    def state(self):
+        """Expose wrapped optimizer's state"""
+        return self.optimizer.state
     
     def _partition_parameters(self):
         """Determine which parameters this rank owns based on ZeRO stage"""
@@ -143,11 +161,6 @@ class ZeROOptimizer:
             scale: Learning rate multiplier
         """
         self.expert_lr_scales[expert_name] = scale
-    
-    @property
-    def param_groups(self):
-        """Expose param_groups for compatibility"""
-        return self.optimizer.param_groups
 
 
 class ZeROAdamW(ZeROOptimizer):

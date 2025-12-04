@@ -1,7 +1,5 @@
-"""
-ZeRO Stage Manager for LuminaAI
-Implements ZeRO stages 1, 2, 3 with hooks for MoE/MoD expert partitioning.
-"""
+# Copyright (c) 2025 MatN23. All rights reserved.
+# Licensed under the Custom License below.
 
 import torch
 import torch.distributed as dist

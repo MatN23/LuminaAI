@@ -1,7 +1,5 @@
-"""
-Profiling utilities for ZeRO-optimized training.
-GPU memory tracking, FLOP counting, and stage-specific profiling.
-"""
+# Copyright (c) 2025 MatN23. All rights reserved.
+# Licensed under the Custom License below.
 
 import torch
 import torch.distributed as dist
