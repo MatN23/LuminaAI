@@ -1859,7 +1859,7 @@ def main():
     # 16. BACKEND PARAMS
     # ========================================================================
     backend_params = {
-        'backend': 'deepspeed_remake',  # Options: 'fsdp', 'deepspeed', 'colossalai', 'pytorch'
+        'backend': 'colossalai',  # Options: 'fsdp', 'deepspeed', 'colossalai', 'pytorch'
         
         # FSDP specific
         'use_fsdp': False,
@@ -1870,17 +1870,7 @@ def main():
         'use_deepspeed': False,
         'zero_stage': 3,
         
-        # DeepSpeed Remake specific
-        'use_deepspeed_remake': True,
-        'deepspeed_remake_config': {
-            'zero_stage': 2,  # 1, 2, or 3
-            'cpu_offload': True,
-            'cpu_offload_parameters': False,
-            'nvme_path': None,  # Set to path for NVMe offload
-            'partition_size': int(1e9),  # 1GB partitions
-            'overlap_comm': True,
-            'gradient_clipping': 1.0,
-        }
+
     }
     # ========================================================================
     # END CONFIGURATION SECTION
