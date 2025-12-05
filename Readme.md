@@ -1,4 +1,4 @@
-# LuminaAI
+# Adaptive Training System
 
 <div align="center">
 
@@ -39,7 +39,7 @@
 
 ## Overview
 
-LuminaAI is a transformer training framework implementing Mixture of Experts (MoE) and Mixture of Depths (MoD) architectures with autonomous training optimization. Supports models from 500M to 300B+ parameters with production-grade infrastructure.
+Adaptive Training System is a transformer training framework implementing Mixture of Experts (MoE) and Mixture of Depths (MoD) architectures with autonomous training optimization. Supports models from 500M to 300B+ parameters with production-grade infrastructure.
 
 **Core capabilities:**
 - Sparse architectures: MoE (8-64 experts), MoD (dynamic depth), hybrid configurations
@@ -66,7 +66,8 @@ The adaptive orchestrator monitors 20+ metrics every N steps and triggers interv
 - Teams needing framework-independent infrastructure
 
 **Not included:**
-- Pre-trained weights (training system only)
+- Pre-trained model weights (configuration presets only, train from scratch)
+- Model checkpoints or existing trained models
 - High-level abstractions (direct control provided)
 - Tutorial content (assumes ML engineering background)
 
@@ -186,9 +187,13 @@ Combined token-level (MoE) and layer-level (MoD) sparsity.
 
 ---
 
-## Model Configurations
+## Model Configuration Presets
 
-Pre-configured presets spanning 500K to 300B parameters. Each preset specifies architecture dimensions, MoE/MoD parameters, and hardware targets.
+Pre-configured architecture presets for training models from scratch, spanning 500K to 300B parameters. These are 
+
+**configuration templates, not pre-trained models**. 
+
+Each preset specifies architecture dimensions, MoE/MoD parameters, and hardware targets for initializing and training new models. These models listed are not trained currently, but may be in the future.
 
 | Config | Active Params | Total Params | Hidden | Layers | Heads | KV Heads | Experts | Top-K | Hardware | Memory (FP16) | Throughput |
 |--------|--------------|--------------|--------|--------|-------|----------|---------|-------|----------|---------------|------------|
@@ -214,6 +219,10 @@ Pre-configured presets spanning 500K to 300B parameters. Each preset specifies a
 - **Production fine-tuning:** `b7` for quality/efficiency balance
 - **Large-scale pre-training:** `b30`+ for maximum model capacity
 - **Extreme scale:** `b100`+ requires cluster infrastructure and distributed expertise
+
+**Important:** 
+
+These presets define untrained model architectures. Training starts from random initialization following standard practices (Xavier/Kaiming initialization for weights, zero initialization for biases). The framework does not provide pre-trained checkpoints.
 
 **Customization:**
 
@@ -375,8 +384,8 @@ Free GPU training demonstration requiring no local setup.
 
 **Installation:**
 ```bash
-git clone https://github.com/matn23/luminaai
-cd luminaai
+git clone https://github.com/matn23/AdaptiveTrainingSystem
+cd AdaptiveTrainingSystem
 pip install -r requirements.txt
 cd Src/Main_Scripts
 python Main.py
@@ -1146,7 +1155,7 @@ Throughput measurements on reference hardware configurations. All benchmarks use
 
 ## Production Deployment
 
-Considerations for deploying LuminaAI-trained models in production environments.
+Considerations for deploying trained models in production environments made with this system.
 
 ### Model Export
 
@@ -1208,7 +1217,7 @@ Standard PyTorch state dict compatible with transformers library. Can export to 
 
 ## Licensing
 
-LuminaAI is available under a commercial license. Framework provided for evaluation via demo notebook. Production use requires license agreement.
+This system is available under a commercial license. Framework provided for evaluation via demo notebook. Production use requires license agreement.
 
 **License tiers:**
 
@@ -1234,7 +1243,7 @@ LuminaAI is available under a commercial license. Framework provided for evaluat
 - Custom modifications available
 - Pricing: Contact for enterprise pricing
 
-**Contact:** licensing@luminaai.dev
+**Contact:** matiasnhmb@gmail.com
 
 **Evaluation license:**
 Demo notebook and local installation for evaluation purposes. 30-day evaluation period. No production use. Watermarked outputs during evaluation.
@@ -1284,11 +1293,11 @@ Demo notebook and local installation for evaluation purposes. 30-day evaluation 
 ## Citation
 
 ```bibtex
-@software{luminaai2025,
-  title = {LuminaAI: Modular Transformer Training with MoE/MoD},
+@software{Adaptive Training System2025,
+  title = {Adaptive Training System: Modular Transformer Training with MoE/MoD},
   author = {MatN23},
   year = {2025},
-  url = {https://github.com/matn23/luminaai},
+  url = {https://github.com/matn23/Adaptive Training System},
   note = {Production-grade training framework with adaptive optimization}
 }
 ```
@@ -1301,18 +1310,16 @@ Demo notebook and local installation for evaluation purposes. 30-day evaluation 
 
 **Discussions:** GitHub discussions for questions and community support
 
-**Email:** support@luminaai.dev for licensing and technical inquiries
-
-**Documentation:** Full documentation at docs.luminaai.dev (coming soon)
+**Email:** matiasnhmb@gmail.com for licensing and technical inquiries
 
 ---
 
 <div align="center">
 
-**LuminaAI**
+**Adaptive Training System**
 
 *Production transformer training for ML engineers*
 
-[GitHub](https://github.com/matn23/luminaai) • [Demo](https://colab.research.google.com/drive/1tH1z9e7px2G8NGqWUN9gdqxs1CnUC7p1) • [License](LICENSE)
+[GitHub](https://github.com/matn23/AdaptiveTrainingSystem) • [Demo](https://colab.research.google.com/drive/1tH1z9e7px2G8NGqWUN9gdqxs1CnUC7p1) • [License](LICENSE)
 
 </div>
