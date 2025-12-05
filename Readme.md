@@ -343,14 +343,14 @@ Free GPU training demonstration requiring no local setup.
 **Environment:**
 - Hardware: Google Colab T4 GPU (15.8GB memory, Turing architecture)
 - CUDA: 11.8 or 12.x (varies by Colab environment)
-- Runtime: ~5 minutes for complete training run
+- Runtime: ~5 hours for complete training run
 
 **Configuration:**
-- Model: `b1` preset (1B active, 8B total parameters, 8-expert MoE)
+- Model: `debug` preset (14m total, 2m active, 8 experts, 2 top-k)
 - Dataset: Small conversational corpus (~200 samples, ~2.5M tokens)
-- Training: 3 epochs, batch_size=8, gradient_accumulation=8, effective_batch_size=64
+- Training: 12 epochs, batch_size=25, gradient_accumulation=8, effective_batch_size=200
 - Precision: Mixed FP16 (automatic for T4)
-- Learning rate: 1e-4 with linear warmup
+- Learning rate: 1e-4 with cosine warmup and decay
 
 **Observable behaviors:**
 - System diagnostics: Hardware detection, precision selection
