@@ -46,6 +46,8 @@ LuminaAI is a transformer training framework implementing Mixture of Experts (Mo
 - Adaptive orchestrator: 18 autonomous intervention methods for training optimization
 - Chinchilla scaling: Automatic epoch calculation based on compute-optimal principles
 - DeepSpeed ZeRO: Multi-GPU training with memory optimization (stages 1-3)
+- FSDP: Multi-GPU training with memory optimization like deepspeed
+- ColossalAI: Multi-GPU training with memory optimization like deepspeed or FSDP
 - Precision support: FP32, FP16, BF16, mixed precision, FP8 (H100+)
 - Hardware targets: CUDA (Volta-Hopper), Apple Silicon (M1-M4), CPU
 - Data handling: Memory-mapped datasets, Apache Arrow zero-copy, automatic caching
