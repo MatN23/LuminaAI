@@ -2317,7 +2317,22 @@ def main():
                 model = model.to(device)
                 using_backend = "PyTorch (FSDP fallback)"
         elif backend_choice == 'colossalai':
-            model = create_colossalai_backend(base_model, config)
+            print("\n" + "="*80)
+            print("INITIALIZING COLOSSAL-AI BACKEND")
+            print("="*80)
+            
+            try:
+                model = create_colossalai_backend(base_model, config)
+                using_backend = "Colossal-AI"
+                print("✓ Colossal-AI backend initialized successfully")
+            except Exception as e:
+                print(f"✗ Colossal-AI initialization failed: {e}")
+                print("Falling back to PyTorch backend...")
+                model = base_model
+                device = torch.device('cuda' if torch.cuda.is_available() else 
+                                    ('mps' if is_mps else 'cpu'))
+                model = model.to(device)
+                using_backend = "PyTorch (Colossal-AI fallback)"
 
         elif (backend_choice == 'deepspeed' or use_deepspeed) and BACKEND_DEEPSPEED_AVAILABLE:
             print("\n" + "="*80)
