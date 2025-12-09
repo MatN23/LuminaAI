@@ -1,4 +1,4 @@
-# LuminaAI Model Benchmarks
+# Adaptive Training System Model Benchmarks
 
 *Realistic performance metrics for budget-conscious cloud training*
 
