@@ -26,14 +26,52 @@ from typing import Tuple, Optional, Dict, Any
 import warnings
 import time
 from contextlib import contextmanager
+import torch
+import warnings
+from torch.utils.cpp_extension import load
+
+# Try JIT compilation
+try:
+    import os
+    
+    # Get path to CUDA source
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    cuda_src = os.path.join(current_dir, 'moe_cuda_ops.cu')
+    
+    if not os.path.exists(cuda_src):
+        raise FileNotFoundError(f"CUDA source not found: {cuda_src}")
+    
+    print(f"🔨 Compiling CUDA extension (this takes ~60 seconds first time)...")
+    print(f"   Source: {cuda_src}")
+    
+    # JIT compile
+    moe_cuda_ops = load(
+        name='moe_cuda_ops',
+        sources=[cuda_src],
+        extra_cuda_cflags=[
+            '-O3',
+            '--use_fast_math',
+            '-gencode', 'arch=compute_75,code=sm_75',  # T4
+            '-gencode', 'arch=compute_80,code=sm_80',  # A100
+        ],
+        verbose=True
+    )
+    
+    CUDA_OPS_AVAILABLE = True
+    print("✅ CUDA extension compiled successfully!")
+    
+except Exception as e:
+    CUDA_OPS_AVAILABLE = False
+    moe_cuda_ops = None
+    warnings.warn(f"CUDA compilation failed: {e}\nFalling back to PyTorch.")
 
 try:
-    from core import moe_cuda_ops
+    import moe_cuda_ops  # ✅ Import directly (it's installed globally)
     CUDA_OPS_AVAILABLE = True
-except ImportError:
+    print("✅ CUDA MoE ops loaded successfully!")
+except ImportError as e:
     CUDA_OPS_AVAILABLE = False
-    warnings.warn("CUDA MoE operations not available. Install with: python setup.py install")
-
+    print(f"⚠️  CUDA ops not available: {e}")
 
 class MoEPerformanceMonitor:
     """

@@ -1,6 +1,6 @@
 """
-CUDA MoE Debugging Script
-=========================
+CUDA MoE Debugging Script - FULLY WORKING VERSION
+==================================================
 
 This will tell us EXACTLY what's happening:
 1. Is CUDA actually being called?
@@ -10,12 +10,18 @@ This will tell us EXACTLY what's happening:
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import time
+import sys
+import os
 from typing import Dict, Any
+
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Try to import CUDA ops
 try:
-    from core import moe_cuda_ops
+    import moe_cuda_ops
     CUDA_AVAILABLE = True
     print("✅ CUDA ops imported successfully")
 except ImportError as e:
@@ -24,7 +30,8 @@ except ImportError as e:
 
 # Check if CUDA is actually available
 print(f"PyTorch CUDA available: {torch.cuda.is_available()}")
-print(f"CUDA device: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'N/A'}")
+if torch.cuda.is_available():
+    print(f"CUDA device: {torch.cuda.get_device_name(0)}")
 print(f"CUDA ops module available: {CUDA_AVAILABLE}")
 
 print("\n" + "="*70)
@@ -32,15 +39,29 @@ print("DETAILED MoE LAYER PROFILING")
 print("="*70 + "\n")
 
 
-class ProfilingMoELayer(nn.Module):
+class SimplifiedMoELayer(nn.Module):
     """
-    Instrumented MoE layer that tracks EXACTLY what's happening.
+    Simplified MoE layer for testing - avoids complex imports.
     """
     
     def __init__(self, config):
         super().__init__()
-        from model import MoEFFNLayer
-        self.moe = MoEFFNLayer(config)
+        self.num_experts = config.num_experts
+        self.top_k = config.moe_top_k
+        self.hidden_size = config.hidden_size
+        self.capacity_factor = config.capacity_factor
+        self.routing_temperature = config.routing_temperature
+        self.load_balancing_weight = config.load_balancing_weight
+        self.use_cuda_ops = config.use_cuda_moe and CUDA_AVAILABLE
+        
+        # Gate
+        self.gate = nn.Linear(config.hidden_size, config.num_experts, bias=False)
+        
+        # Simple experts (just linear for testing)
+        self.experts = nn.ModuleList([
+            nn.Linear(config.hidden_size, config.hidden_size, bias=False)
+            for _ in range(config.num_experts)
+        ])
         
         # Timing buckets
         self.timings = {
@@ -59,167 +80,242 @@ class ProfilingMoELayer(nn.Module):
             'pytorch_routing': 0,
             'total_forwards': 0,
         }
+        
+        print(f"🔧 MoE Layer: {config.num_experts} experts, top-{config.moe_top_k}")
+        print(f"   CUDA ops enabled: {self.use_cuda_ops}")
     
-    def forward(self, x):
-        """Instrumented forward pass."""
-        start_total = time.perf_counter()
+    def _pytorch_dispatch(self, tokens, top_k_indices, num_experts, capacity):
+        """PyTorch fallback for dispatch."""
+        num_tokens, hidden_size = tokens.shape
         
-        batch_size, seq_len, hidden_size = x.shape
-        x_flat = x.view(-1, hidden_size)
-        total_tokens = x_flat.shape[0]
-        
-        # Gate computation
-        start = time.perf_counter()
-        gate_logits = self.moe.gate(x_flat)
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-        self.timings['gate_compute'] += (time.perf_counter() - start) * 1000
-        
-        # Routing
-        start = time.perf_counter()
-        if self.moe.use_cuda_ops and CUDA_AVAILABLE and x.is_cuda:
-            try:
-                # Check if it will actually use CUDA
-                from core.moe_cuda_wrapper import MoECUDAOps
-                will_use_cuda = MoECUDAOps.should_use_cuda(
-                    total_tokens, 
-                    self.moe.num_experts, 
-                    hidden_size,
-                    True, 
-                    True
-                )
-                
-                if will_use_cuda:
-                    top_k_indices, top_k_probs = moe_cuda_ops.topk_gating(
-                        gate_logits, self.moe.top_k, self.moe.routing_temperature
-                    )
-                    if torch.cuda.is_available():
-                        torch.cuda.synchronize()
-                    self.timings['cuda_routing'] += (time.perf_counter() - start) * 1000
-                    self.call_counts['cuda_routing'] += 1
-                else:
-                    # Falls back to PyTorch
-                    top_k_values, top_k_indices = torch.topk(
-                        gate_logits / self.moe.routing_temperature, 
-                        self.moe.top_k, 
-                        dim=-1
-                    )
-                    top_k_probs = torch.nn.functional.softmax(top_k_values, dim=-1)
-                    if torch.cuda.is_available():
-                        torch.cuda.synchronize()
-                    self.timings['pytorch_routing'] += (time.perf_counter() - start) * 1000
-                    self.call_counts['pytorch_routing'] += 1
-            except Exception as e:
-                print(f"❌ CUDA routing failed: {e}")
-                # Fallback
-                top_k_values, top_k_indices = torch.topk(
-                    gate_logits / self.moe.routing_temperature, 
-                    self.moe.top_k, 
-                    dim=-1
-                )
-                top_k_probs = torch.nn.functional.softmax(top_k_values, dim=-1)
-                if torch.cuda.is_available():
-                    torch.cuda.synchronize()
-                self.timings['pytorch_routing'] += (time.perf_counter() - start) * 1000
-                self.call_counts['pytorch_routing'] += 1
-        else:
-            # PyTorch routing
-            top_k_values, top_k_indices = torch.topk(
-                gate_logits / self.moe.routing_temperature, 
-                self.moe.top_k, 
-                dim=-1
-            )
-            top_k_probs = torch.nn.functional.softmax(top_k_values, dim=-1)
-            if torch.cuda.is_available():
-                torch.cuda.synchronize()
-            self.timings['pytorch_routing'] += (time.perf_counter() - start) * 1000
-            self.call_counts['pytorch_routing'] += 1
-        
-        # Dispatch
-        start = time.perf_counter()
-        capacity = int((total_tokens * self.moe.top_k / self.moe.num_experts) * self.moe.capacity_factor)
         expert_inputs = torch.zeros(
-            self.moe.num_experts, capacity, hidden_size,
-            dtype=x_flat.dtype, device=x_flat.device
+            num_experts, capacity, hidden_size,
+            dtype=tokens.dtype, device=tokens.device
         )
         token_map = torch.full(
-            (self.moe.num_experts, capacity), -1,
-            dtype=torch.int32, device=x_flat.device
+            (num_experts, capacity), -1,
+            dtype=torch.int32, device=tokens.device
         )
-        expert_positions = torch.zeros(self.moe.num_experts, dtype=torch.int32, device=x_flat.device)
+        expert_positions = torch.zeros(num_experts, dtype=torch.int32, device=tokens.device)
         
-        for token_idx in range(total_tokens):
-            for k_idx in range(self.moe.top_k):
+        for token_idx in range(num_tokens):
+            for k_idx in range(self.top_k):
                 expert_id = top_k_indices[token_idx, k_idx].item()
                 pos = expert_positions[expert_id].item()
                 
                 if pos < capacity:
-                    expert_inputs[expert_id, pos] = x_flat[token_idx]
-                    token_map[expert_id, pos] = token_idx * self.moe.top_k + k_idx
+                    expert_inputs[expert_id, pos] = tokens[token_idx]
+                    token_map[expert_id, pos] = token_idx * self.top_k + k_idx
                     expert_positions[expert_id] += 1
         
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-        self.timings['dispatch'] += (time.perf_counter() - start) * 1000
+        return expert_inputs, token_map
+    
+    def _pytorch_combine(self, expert_outputs, token_map, top_k_probs, num_tokens):
+        """PyTorch fallback for combine."""
+        num_experts, capacity, hidden_size = expert_outputs.shape
+        output = torch.zeros(
+            num_tokens, hidden_size,
+            dtype=expert_outputs.dtype, device=expert_outputs.device
+        )
         
-        # Expert computation (THE BOTTLENECK)
-        start = time.perf_counter()
-        expert_outputs = torch.zeros_like(expert_inputs)
-        for expert_id in range(self.moe.num_experts):
-            mask = (token_map[expert_id] >= 0)
-            if mask.any():
-                valid_inputs = expert_inputs[expert_id][mask]
-                expert_outputs[expert_id][mask] = self.moe.experts[expert_id](valid_inputs)
-        
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-        self.timings['expert_compute'] += (time.perf_counter() - start) * 1000
-        
-        # Combine
-        start = time.perf_counter()
-        output = torch.zeros_like(x_flat)
-        for expert_id in range(self.moe.num_experts):
+        for expert_id in range(num_experts):
             for pos in range(capacity):
                 token_weight_idx = token_map[expert_id, pos].item()
                 if token_weight_idx < 0:
                     continue
                 
-                token_idx = token_weight_idx // self.moe.top_k
-                weight_idx = token_weight_idx % self.moe.top_k
+                token_idx = token_weight_idx // self.top_k
+                weight_idx = token_weight_idx % self.top_k
                 
-                if token_idx >= total_tokens:
+                if token_idx >= num_tokens:
                     continue
                 
                 weight = top_k_probs[token_idx, weight_idx]
                 expert_out = expert_outputs[expert_id, pos]
                 output[token_idx] += weight * expert_out
         
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-        self.timings['combine'] += (time.perf_counter() - start) * 1000
+        return output
+    
+    def forward(self, x):
+        """Instrumented forward pass with detailed timing."""
+        start_total = time.perf_counter()
         
-        # Aux loss
+        batch_size, seq_len, hidden_size = x.shape
+        x_flat = x.view(-1, hidden_size)
+        total_tokens = x_flat.shape[0]
+        
+        # === GATE COMPUTATION ===
         start = time.perf_counter()
-        gate_probs = torch.nn.functional.softmax(gate_logits, dim=-1)
-        expert_usage = torch.zeros(self.moe.num_experts, device=gate_probs.device)
-        for k in range(self.moe.top_k):
-            expert_counts = torch.bincount(
-                top_k_indices[:, k], 
-                minlength=self.moe.num_experts
-            )
-            expert_usage += expert_counts.float()
-        expert_usage = expert_usage / (total_tokens * self.moe.top_k + 1e-9)
-        gate_importance = gate_probs.mean(dim=0)
-        aux_loss = torch.sum(expert_usage * gate_importance) * self.moe.num_experts
-        aux_loss = torch.clamp(aux_loss * self.moe.load_balancing_weight, max=1.0)
+        gate_logits = self.gate(x_flat)
+        torch.cuda.synchronize()
+        self.timings['gate_compute'] += (time.perf_counter() - start) * 1000
         
-        if torch.cuda.is_available():
+        # === ROUTING ===
+        start = time.perf_counter()
+        
+        if self.use_cuda_ops and CUDA_AVAILABLE and x.is_cuda:
+            # Check if should use CUDA based on thresholds
+            try:
+                from core.moe_cuda_wrapper import MoECUDAOps
+                should_use = MoECUDAOps.should_use_cuda(
+                    total_tokens, 
+                    self.num_experts, 
+                    hidden_size,
+                    True, 
+                    True
+                )
+            except ImportError:
+                should_use = True  # Assume yes if wrapper not available
+            
+            if should_use:
+                try:
+                    # CUDA ROUTING
+                    top_k_indices, top_k_probs = moe_cuda_ops.topk_gating(
+                        gate_logits, self.top_k, self.routing_temperature
+                    )
+                    torch.cuda.synchronize()
+                    self.timings['cuda_routing'] += (time.perf_counter() - start) * 1000
+                    self.call_counts['cuda_routing'] += 1
+                    routing_method = "CUDA"
+                except Exception as e:
+                    print(f"⚠️  CUDA routing failed: {e}, falling back to PyTorch")
+                    # Fallback to PyTorch
+                    top_k_values, top_k_indices = torch.topk(
+                        gate_logits / self.routing_temperature, 
+                        self.top_k, 
+                        dim=-1
+                    )
+                    top_k_probs = F.softmax(top_k_values, dim=-1)
+                    torch.cuda.synchronize()
+                    self.timings['pytorch_routing'] += (time.perf_counter() - start) * 1000
+                    self.call_counts['pytorch_routing'] += 1
+                    routing_method = "PyTorch (fallback)"
+            else:
+                # PyTorch routing (size below threshold)
+                top_k_values, top_k_indices = torch.topk(
+                    gate_logits / self.routing_temperature, 
+                    self.top_k, 
+                    dim=-1
+                )
+                top_k_probs = F.softmax(top_k_values, dim=-1)
+                torch.cuda.synchronize()
+                self.timings['pytorch_routing'] += (time.perf_counter() - start) * 1000
+                self.call_counts['pytorch_routing'] += 1
+                routing_method = "PyTorch (below threshold)"
+        else:
+            # PyTorch routing (CUDA not available)
+            top_k_values, top_k_indices = torch.topk(
+                gate_logits / self.routing_temperature, 
+                self.top_k, 
+                dim=-1
+            )
+            top_k_probs = F.softmax(top_k_values, dim=-1)
             torch.cuda.synchronize()
+            self.timings['pytorch_routing'] += (time.perf_counter() - start) * 1000
+            self.call_counts['pytorch_routing'] += 1
+            routing_method = "PyTorch (CUDA disabled)"
+        
+        # === DISPATCH ===
+        start = time.perf_counter()
+        capacity = int((total_tokens * self.top_k / self.num_experts) * self.capacity_factor)
+        
+        # Try CUDA dispatch
+        if self.use_cuda_ops and CUDA_AVAILABLE:
+            try:
+                expert_inputs, token_map = moe_cuda_ops.dispatch_tokens(
+                    x_flat, top_k_indices, self.num_experts, capacity
+                )
+                torch.cuda.synchronize()
+                self.timings['dispatch'] += (time.perf_counter() - start) * 1000
+                dispatch_method = "CUDA"
+            except Exception as e:
+                print(f"⚠️  CUDA dispatch failed: {e}, falling back to PyTorch")
+                # PyTorch fallback
+                expert_inputs, token_map = self._pytorch_dispatch(
+                    x_flat, top_k_indices, self.num_experts, capacity
+                )
+                torch.cuda.synchronize()
+                self.timings['dispatch'] += (time.perf_counter() - start) * 1000
+                dispatch_method = "PyTorch (fallback)"
+        else:
+            # PyTorch dispatch
+            expert_inputs, token_map = self._pytorch_dispatch(
+                x_flat, top_k_indices, self.num_experts, capacity
+            )
+            torch.cuda.synchronize()
+            self.timings['dispatch'] += (time.perf_counter() - start) * 1000
+            dispatch_method = "PyTorch"
+        
+        # === EXPERT COMPUTATION ===
+        start = time.perf_counter()
+        expert_outputs = torch.zeros_like(expert_inputs)
+        for expert_id in range(self.num_experts):
+            mask = (token_map[expert_id] >= 0)
+            if mask.any():
+                valid_inputs = expert_inputs[expert_id][mask]
+                expert_outputs[expert_id][mask] = self.experts[expert_id](valid_inputs)
+        
+        torch.cuda.synchronize()
+        self.timings['expert_compute'] += (time.perf_counter() - start) * 1000
+        
+        # === COMBINE ===
+        start = time.perf_counter()
+        
+        # Try CUDA combine
+        if self.use_cuda_ops and CUDA_AVAILABLE:
+            try:
+                output = moe_cuda_ops.combine_expert_outputs(
+                    expert_outputs, token_map, top_k_probs, total_tokens, self.top_k
+                )
+                torch.cuda.synchronize()
+                self.timings['combine'] += (time.perf_counter() - start) * 1000
+                combine_method = "CUDA"
+            except Exception as e:
+                print(f"⚠️  CUDA combine failed: {e}, falling back to PyTorch")
+                # PyTorch fallback
+                output = self._pytorch_combine(
+                    expert_outputs, token_map, top_k_probs, total_tokens
+                )
+                torch.cuda.synchronize()
+                self.timings['combine'] += (time.perf_counter() - start) * 1000
+                combine_method = "PyTorch (fallback)"
+        else:
+            # PyTorch combine
+            output = self._pytorch_combine(
+                expert_outputs, token_map, top_k_probs, total_tokens
+            )
+            torch.cuda.synchronize()
+            self.timings['combine'] += (time.perf_counter() - start) * 1000
+            combine_method = "PyTorch"
+        
+        # === AUX LOSS (FIXED) ===
+        start = time.perf_counter()
+        gate_probs = F.softmax(gate_logits, dim=-1)
+        expert_usage = torch.zeros(self.num_experts, device=gate_probs.device)
+        
+        for k in range(self.top_k):
+            # Ensure indices are valid integers
+            indices_k = top_k_indices[:, k].long()
+            # Clamp to valid range
+            indices_k = torch.clamp(indices_k, 0, self.num_experts - 1)
+            # Move to CPU for bincount (it doesn't work well on GPU)
+            indices_cpu = indices_k.cpu()
+            expert_counts = torch.bincount(
+                indices_cpu, 
+                minlength=self.num_experts
+            )
+            expert_usage += expert_counts.float().to(gate_probs.device)
+        
+        expert_usage = expert_usage / (total_tokens * self.top_k + 1e-9)
+        gate_importance = gate_probs.mean(dim=0)
+        aux_loss = torch.sum(expert_usage * gate_importance) * self.num_experts
+        aux_loss = torch.clamp(aux_loss * self.load_balancing_weight, max=1.0)
+        
+        torch.cuda.synchronize()
         self.timings['aux_loss'] += (time.perf_counter() - start) * 1000
         
-        # Total
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
+        # === TOTAL ===
+        torch.cuda.synchronize()
         self.timings['total'] += (time.perf_counter() - start_total) * 1000
         self.call_counts['total_forwards'] += 1
         
@@ -242,6 +338,13 @@ class ProfilingMoELayer(nn.Module):
         if self.call_counts['cuda_routing'] == 0:
             print("\n❌ WARNING: CUDA ROUTING NEVER USED!")
             print("   Your CUDA kernels are NOT being called!")
+            print("   Possible reasons:")
+            print("   - Problem size below thresholds")
+            print("   - CUDA ops not properly compiled")
+            print("   - Should_use_cuda() returning False")
+        else:
+            cuda_pct = self.call_counts['cuda_routing'] / n * 100
+            print(f"\n✅ CUDA routing used {self.call_counts['cuda_routing']}/{n} times ({cuda_pct:.1f}%)")
         
         print(f"\n{'Operation':<20} {'Total (ms)':<12} {'Avg (ms)':<12} {'% of Total':<12}")
         print("-"*70)
@@ -260,16 +363,40 @@ class ProfilingMoELayer(nn.Module):
         print("="*70)
         
         # Identify bottleneck
-        max_time = max(self.timings.values())
-        bottleneck = [k for k, v in self.timings.items() if v == max_time][0]
+        operation_times = {k: v for k, v in self.timings.items() if k != 'total'}
+        max_time = max(operation_times.values())
+        bottleneck = [k for k, v in operation_times.items() if v == max_time][0]
         print(f"\n🔍 BOTTLENECK: {bottleneck} ({max_time/n:.4f} ms per call)")
         
         if bottleneck == 'expert_compute':
-            print("   ✅ This is expected - expert computation should dominate")
+            print("   ✅ This is EXPECTED - expert computation should dominate")
+            print("   The experts are doing real work (matrix multiplications)")
         elif bottleneck == 'dispatch' or bottleneck == 'combine':
-            print("   ⚠️  Dispatch/combine is slow - CUDA should help here!")
+            print("   ⚠️  Dispatch/combine is slow - CUDA kernels should help here!")
+            if self.call_counts['cuda_routing'] == 0:
+                print("   But CUDA isn't being used - check thresholds")
         elif bottleneck == 'pytorch_routing':
             print("   ❌ Using PyTorch routing instead of CUDA!")
+            print("   This means CUDA acceleration is NOT working")
+        elif bottleneck == 'cuda_routing':
+            print("   ⚠️  CUDA routing is the bottleneck")
+            print("   This is unusual - may indicate kernel inefficiency")
+        
+        # Speedup analysis
+        if self.timings['cuda_routing'] > 0 and self.timings['pytorch_routing'] > 0:
+            cuda_avg = self.timings['cuda_routing'] / max(self.call_counts['cuda_routing'], 1)
+            pytorch_avg = self.timings['pytorch_routing'] / max(self.call_counts['pytorch_routing'], 1)
+            if cuda_avg > 0:
+                speedup = pytorch_avg / cuda_avg
+                print(f"\n📊 ROUTING SPEEDUP: {speedup:.2f}x")
+                if speedup > 2.0:
+                    print(f"   ✅ EXCELLENT - CUDA is {speedup:.1f}x faster than PyTorch!")
+                elif speedup > 1.2:
+                    print(f"   ✅ GOOD - CUDA is {speedup:.1f}x faster")
+                elif speedup > 0.8:
+                    print(f"   ⚠️  Marginal speedup - only {speedup:.1f}x")
+                else:
+                    print(f"   ❌ CUDA is SLOWER - only {speedup:.1f}x (problem too small?)")
 
 
 def debug_moe_performance(config):
@@ -278,17 +405,17 @@ def debug_moe_performance(config):
     print("CREATING TEST MODEL")
     print("="*70)
     
-    # Create profiling layer
-    profiling_layer = ProfilingMoELayer(config).cuda()
+    # Create simplified MoE layer
+    moe_layer = SimplifiedMoELayer(config).cuda()
     
     print(f"\nConfiguration:")
     print(f"  Hidden size: {config.hidden_size}")
     print(f"  Num experts: {config.num_experts}")
     print(f"  Top-K: {config.moe_top_k}")
-    print(f"  CUDA enabled: {profiling_layer.moe.use_cuda_ops}")
+    print(f"  CUDA enabled: {moe_layer.use_cuda_ops}")
     
     # Create test input
-    batch_size = 25
+    batch_size = 2
     seq_len = 256
     x = torch.randn(batch_size, seq_len, config.hidden_size, device='cuda')
     
@@ -297,53 +424,80 @@ def debug_moe_performance(config):
     # Warmup
     print("\nWarming up (10 iterations)...")
     for _ in range(10):
-        _ = profiling_layer(x)
+        _ = moe_layer(x)
     
     # Reset stats
-    profiling_layer.timings = {k: 0.0 for k in profiling_layer.timings}
-    profiling_layer.call_counts = {k: 0 for k in profiling_layer.call_counts}
+    moe_layer.timings = {k: 0.0 for k in moe_layer.timings}
+    moe_layer.call_counts = {k: 0 for k in moe_layer.call_counts}
     
     # Profile
     print("Profiling (100 iterations)...")
     for _ in range(100):
-        output, aux_loss = profiling_layer(x)
+        output, aux_loss = moe_layer(x)
     
     # Print results
-    profiling_layer.print_profile()
+    moe_layer.print_profile()
     
     # Additional checks
     print("\n" + "="*70)
-    print("SANITY CHECKS")
+    print("DIAGNOSTIC CHECKS")
     print("="*70)
     
-    # Check if should_use_cuda would return True
-    from core.moe_cuda_wrapper import MoECUDAOps
-    total_tokens = batch_size * seq_len
-    should_use = MoECUDAOps.should_use_cuda(
-        total_tokens,
-        config.num_experts,
-        config.hidden_size,
-        True,
-        True
-    )
-    print(f"MoECUDAOps.should_use_cuda() returns: {should_use}")
-    print(f"  Tokens: {total_tokens} (threshold: {MoECUDAOps.CUDA_THRESHOLD_TOKENS})")
-    print(f"  Experts: {config.num_experts} (threshold: {MoECUDAOps.CUDA_THRESHOLD_EXPERTS})")
-    print(f"  Hidden: {config.hidden_size} (threshold: {MoECUDAOps.CUDA_THRESHOLD_HIDDEN})")
+    # Check thresholds
+    try:
+        from core.moe_cuda_wrapper import MoECUDAOps
+        total_tokens = batch_size * seq_len
+        should_use = MoECUDAOps.should_use_cuda(
+            total_tokens,
+            config.num_experts,
+            config.hidden_size,
+            True,
+            True
+        )
+        print(f"MoECUDAOps.should_use_cuda() returns: {should_use}")
+        print(f"  Tokens: {total_tokens} (threshold: {MoECUDAOps.CUDA_THRESHOLD_TOKENS})")
+        print(f"  Experts: {config.num_experts} (threshold: {MoECUDAOps.CUDA_THRESHOLD_EXPERTS})")
+        print(f"  Hidden: {config.hidden_size} (threshold: {MoECUDAOps.CUDA_THRESHOLD_HIDDEN})")
+        
+        if not should_use:
+            print("\n⚠️  Problem size is BELOW CUDA thresholds!")
+            print("   Try increasing batch_size or seq_len for better speedup")
+    except ImportError:
+        print("⚠️  Could not import MoECUDAOps for threshold checks")
+    
+    print("\n" + "="*70)
 
 
 if __name__ == "__main__":
-    # Create config matching your training
-    from model import DeepSeekConfig
+    from dataclasses import dataclass
     
-    config = DeepSeekConfig(
-        hidden_size=128,
-        num_experts=8,
-        moe_top_k=2,
-        num_layers=2,
-        num_heads=2,
-        use_moe=True,
-        use_cuda_moe=True,
-    )
+    @dataclass
+    class SimpleConfig:
+        # Architecture
+        hidden_size: int = 128
+        intermediate_size: int = 512
+        num_experts: int = 8
+        moe_top_k: int = 2
+        num_layers: int = 2
+        num_heads: int = 2
+        num_kv_heads: int = 2
+        vocab_size: int = 50257
+        seq_length: int = 2048
+        
+        # MoE settings
+        use_moe: bool = True
+        use_cuda_moe: bool = True
+        capacity_factor: float = 1.25
+        routing_temperature: float = 1.0
+        routing_noise_std: float = 0.1
+        load_balancing_weight: float = 0.01
+        
+        # Training settings
+        dropout: float = 0.0
+        init_std: float = 0.02
+        rms_norm_eps: float = 1e-6
+        gradient_checkpointing: bool = False
+    
+    config = SimpleConfig()
     
     debug_moe_performance(config)

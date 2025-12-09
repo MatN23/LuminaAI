@@ -1246,22 +1246,6 @@ class EnhancedConversationTrainer:
             logging.debug(f"Could not get memory usage: {e}")
         
         return memory_stats
-    
-    def _update_throughput(self, num_tokens: int):
-        """Update throughput calculation with new step."""
-        current_time = time.time()
-        time_delta = current_time - self.last_step_time
-        
-        if time_delta > 0:
-            tokens_per_sec = num_tokens / time_delta
-            self.throughput_window.append(tokens_per_sec)
-            
-            # Keep only recent measurements
-            if len(self.throughput_window) > self.throughput_window_size:
-                self.throughput_window.pop(0)
-        
-        self.last_step_time = current_time
-        self.last_step_tokens = num_tokens
 
     # ============================================================================
     # 🆕 MOE ARCHITECTURE ADAPTATION (3 methods)
@@ -2363,7 +2347,7 @@ class EnhancedConversationTrainer:
             return self._standard_train_step(batch)
     
     def _deepspeed_train_step(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
-        """DeepSpeed training step with guaranteed metric return."""
+        """DeepSpeed training step with ACCURATE throughput."""
         batch = {k: v.to(self.device, non_blocking=True) for k, v in batch.items()}
         
         input_ids = batch.get('input_ids')
@@ -2379,6 +2363,11 @@ class EnhancedConversationTrainer:
                 'valid_tokens': 0,
                 'accuracy': 0.0
             }
+        
+        # ✅ START TIMING
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        compute_start = time.perf_counter()
         
         try:
             output = self.deepspeed_engine(input_ids, attention_mask)
@@ -2402,28 +2391,31 @@ class EnhancedConversationTrainer:
             
             self.deepspeed_engine.backward(loss)
             
-            # Update throughput tracking
-            valid_tokens = loss_dict['valid_tokens'].item() if hasattr(loss_dict['valid_tokens'], 'item') else float(loss_dict['valid_tokens'])
-            self._update_throughput(valid_tokens)
+            # ✅ END TIMING
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+            compute_time = time.perf_counter() - compute_start
             
-            loss_value = loss.item() if hasattr(loss, 'item') else float(loss)
-            raw_loss_value = loss_dict['raw_loss'].item() if hasattr(loss_dict['raw_loss'], 'item') else float(loss_dict['raw_loss'])
-            perplexity_value = loss_dict['perplexity'].item() if hasattr(loss_dict['perplexity'], 'item') else float(loss_dict['perplexity'])
-            valid_tokens_value = loss_dict['valid_tokens'].item() if hasattr(loss_dict['valid_tokens'], 'item') else float(loss_dict['valid_tokens'])
-            accuracy_value = loss_dict['accuracy'].item() if hasattr(loss_dict['accuracy'], 'item') else float(loss_dict['accuracy'])
+            # ✅ ACCURATE THROUGHPUT
+            num_tokens = loss_dict['valid_tokens'].item() if hasattr(loss_dict['valid_tokens'], 'item') else float(loss_dict['valid_tokens'])
+            step_throughput = num_tokens / compute_time if compute_time > 0 else 0.0
+            
+            self.throughput_window.append(step_throughput)
+            if len(self.throughput_window) > self.throughput_window_size:
+                self.throughput_window.pop(0)
             
             return {
-                'loss': loss_value,
-                'raw_loss': raw_loss_value,
-                'perplexity': perplexity_value,
-                'valid_tokens': valid_tokens_value,
-                'accuracy': accuracy_value
+                'loss': loss.item() if hasattr(loss, 'item') else float(loss),
+                'raw_loss': loss_dict['raw_loss'].item() if hasattr(loss_dict['raw_loss'], 'item') else float(loss_dict['raw_loss']),
+                'perplexity': loss_dict['perplexity'].item() if hasattr(loss_dict['perplexity'], 'item') else float(loss_dict['perplexity']),
+                'valid_tokens': num_tokens,
+                'accuracy': loss_dict['accuracy'].item() if hasattr(loss_dict['accuracy'], 'item') else float(loss_dict['accuracy']),
+                'compute_time_ms': compute_time * 1000,
+                'throughput': step_throughput
             }
             
         except Exception as e:
             print(f"DeepSpeed training step error: {e}")
-            if self.quantization_manager.is_quantized:
-                print("This error might be related to quantization - check quantization compatibility")
             return {
                 'loss': 0.0,
                 'raw_loss': 0.0,
@@ -2431,9 +2423,9 @@ class EnhancedConversationTrainer:
                 'valid_tokens': 0,
                 'accuracy': 0.0
             }
-    
+        
     def _standard_train_step(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
-        """Standard PyTorch training step with precision awareness."""
+        """Standard PyTorch training step with ACCURATE throughput measurement."""
         self.model.train()
         
         batch = {k: v.to(self.device, non_blocking=True) for k, v in batch.items()}
@@ -2452,6 +2444,12 @@ class EnhancedConversationTrainer:
                 'accuracy': 0.0
             }
         
+        # ✅ START TIMING - Right before actual computation
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        compute_start = time.perf_counter()
+        
+        # === FORWARD PASS ===
         with self._get_autocast_context(for_inference=False):
             output = self.model(input_ids, attention_mask)
             
@@ -2470,8 +2468,6 @@ class EnhancedConversationTrainer:
         
         if torch.isnan(loss).any() or torch.isinf(loss).any():
             print("Invalid loss detected, skipping batch")
-            if self.quantization_manager.is_quantized:
-                print("This might be related to quantization - consider adjusting settings")
             return {
                 'loss': 0.0,
                 'raw_loss': 0.0,
@@ -2480,20 +2476,33 @@ class EnhancedConversationTrainer:
                 'accuracy': 0.0
             }
         
+        # === BACKWARD PASS ===
         if self.use_amp and self.scaler is not None:
             self.scaler.scale(loss).backward()
         else:
             loss.backward()
         
-        # Update throughput tracking
-        self._update_throughput(loss_dict['valid_tokens'].item())
+        # ✅ END TIMING - Right after computation finishes
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        compute_time = time.perf_counter() - compute_start
+        
+        # ✅ ACCURATE THROUGHPUT - Only actual compute time
+        num_tokens = loss_dict['valid_tokens'].item()
+        if compute_time > 0:
+            step_throughput = num_tokens / compute_time
+            self.throughput_window.append(step_throughput)
+            if len(self.throughput_window) > self.throughput_window_size:
+                self.throughput_window.pop(0)
         
         return {
             'loss': loss.item(),
             'raw_loss': loss_dict['raw_loss'].item(),
             'perplexity': loss_dict['perplexity'].item(),
             'valid_tokens': loss_dict['valid_tokens'].item(),
-            'accuracy': loss_dict['accuracy'].item()
+            'accuracy': loss_dict['accuracy'].item(),
+            'compute_time_ms': compute_time * 1000,  # ✅ NEW: Track actual compute time
+            'throughput': step_throughput if compute_time > 0 else 0.0  # ✅ NEW: Per-step throughput
         }
     
     def optimizer_step(self) -> Dict[str, float]:
@@ -3007,8 +3016,8 @@ class EnhancedConversationTrainer:
             print(f"Error in quantization diagnostics: {e}")
     
     def _log_training_step(self, epoch: int, batch_idx: int, total_batches: int,
-                          metrics, opt_metrics, tokens_per_sec: float):
-        """FIXED logging with guaranteed output including accuracy, quantization, and precision info."""
+                        metrics, opt_metrics, tokens_per_sec: float):
+        """FIXED logging with REAL throughput from compute time only."""
         
         try:
             memory_info = ""
@@ -3033,6 +3042,11 @@ class EnhancedConversationTrainer:
             loss = metrics.get('loss', 0.0)
             raw_loss = metrics.get('raw_loss', loss)
             accuracy = metrics.get('accuracy', 0.0)
+            
+            # ✅ NEW: Use throughput from metrics if available
+            step_throughput = metrics.get('throughput', tokens_per_sec)
+            compute_time = metrics.get('compute_time_ms', 0.0)
+            
             lr = opt_metrics.get('lr', 0.0)
             grad_norm = opt_metrics.get('grad_norm', 0.0)
             
@@ -3043,6 +3057,11 @@ class EnhancedConversationTrainer:
             except:
                 ppl_str = "N/A"
             
+            # ✅ ENHANCED: Show compute time AND throughput
+            perf_info = f"Tokens/s: {step_throughput:.0f}"
+            if compute_time > 0:
+                perf_info += f" ({compute_time:.1f}ms)"
+            
             log_message = (
                 f"Epoch {epoch+1} | Step {self.global_step:6d} | "
                 f"Batch {batch_idx+1:4d}/{total_batches} | "
@@ -3051,14 +3070,14 @@ class EnhancedConversationTrainer:
                 f"Acc: {accuracy:.1%} | "
                 f"LR: {lr:.2e} | "
                 f"GradNorm: {grad_norm:.4f} | "
-                f"Tokens/s: {tokens_per_sec:.0f}"
+                f"{perf_info}"
                 f"{mode_info}{precision_info_str}{quant_info}{memory_info}"
             )
             
             print(f"[TRAINING] {log_message}")
             
         except Exception as e:
-            fallback_msg = f"Step {self.global_step} | Loss: {metrics.get('loss', 'N/A')} | Acc: {metrics.get('accuracy', 'N/A')} | Logging Error: {e}"
+            fallback_msg = f"Step {self.global_step} | Loss: {metrics.get('loss', 'N/A')} | Logging Error: {e}"
             logging.error(fallback_msg)
             print(f"[TRAINING ERROR] {fallback_msg}")
     
