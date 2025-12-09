@@ -1525,6 +1525,7 @@ def main():
     training_params = {
         'use_moe': True,
         'use_mod': True,
+        'use_cuda_moe': False,
         'num_epochs': 20,
         'learning_rate': 1e-4,
         'min_lr': 1e-6,
