@@ -1514,7 +1514,7 @@ def main():
     # ========================================================================
     
     # Base model configuration
-    config_choice = 'debug'  # Options: 'debug', 'debug_200m', 'b1', 'b7', 'b14', 'b50', 'b100', 'b200', 'b300'
+    config_choice = 'moe_stress_test'  # Options: 'debug', 'debug_200m', 'b1', 'b7', 'b14', 'b50', 'b100', 'b200', 'b300'
     
     # Training mode selection
     use_adaptive_training = TRAINING_INFRASTRUCTURE_AVAILABLE  # Orchestrator with AI-driven optimization
@@ -1831,7 +1831,7 @@ def main():
         'generate_data_reports': True,
         'estimate_training_time': True,
         'generate_training_reports': True,
-        'auto_tune_batch_size': False,
+        'auto_tune_batch_size': True,
         'continuous_checkpointing': True,
         'enable_profiling': False,
         'save_optimizer_states': True,

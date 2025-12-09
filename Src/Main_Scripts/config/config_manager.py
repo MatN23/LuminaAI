@@ -821,6 +821,68 @@ class ConfigPresets:
         )
     
     @staticmethod
+    def moe_stress_test() -> Config:
+        """Config designed specifically to benchmark MoE CUDA vs PyTorch routing."""
+        return Config(
+            # Bigger than debug, but nowhere near full model scale
+            vocab_size=4096,
+            hidden_size=768,              # routing starts to matter here
+            num_layers=6,                 # gives depth + stable timing
+            num_heads=8,
+            num_kv_heads=2,
+            seq_length=512,
+
+            # MoE-heavy FFN (forces dispatch + combine to be real work)
+            intermediate_size=4096,
+
+            # Enough tokens to stress routing, but still fast
+            batch_size=4,
+            micro_batch_size=1,
+            gradient_accumulation_steps=1,
+
+            # MoE settings — THIS is what makes the CUDA path shine
+            use_moe=True,
+            num_experts=32,               # enough to make routing nontrivial
+            moe_top_k=2,                  # makes dispatch 2× heavier
+            capacity_factor=1.25,         # realistic routing load
+            load_balancing_weight=0.01,
+            expert_parallel_size=4,       # uses EP kernels if you have them
+
+            # Performance toggles
+            compile=True,
+            use_flash_attention=True,
+            gradient_checkpointing=False, # keep timing consistent
+
+            # Precision + stability
+            precision="auto",
+            inference_precision="auto",
+            auto_tune_precision=False,
+            dynamic_precision=False,
+
+            # Training loop params (mostly irrelevant for benchmarking)
+            num_epochs=1,
+            learning_rate=2e-4,
+            weight_decay=0.01,
+
+            # Monitoring
+            experiment_name="moe_stress_test",
+            log_level="INFO",
+            eval_every_n_batches=200,
+            save_every_n_batches=500,
+            save_total_limit=1,
+
+            # Infra
+            use_deepspeed=False,          # avoids DS overhead in timings
+            zero_stage=0,
+            cpu_offload=False,
+
+            # Memory
+            max_memory_usage=0.9,
+            streaming_threshold_gb=1.5,
+        )
+
+    
+    @staticmethod
     def debug_200m() -> Config:
         """~200M hybrid MoE model tuned for T4 GPUs."""
         return Config(
