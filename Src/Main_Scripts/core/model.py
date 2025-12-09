@@ -582,6 +582,9 @@ class DenseGroupedQueryAttention(nn.Module):
         
         logging.debug(f"GQA initialized: {self.num_heads} heads, {self.num_kv_heads} KV heads, "
                      f"flash_attn={self.use_flash}")
+        
+        self.use_cuda_ops = getattr(config, 'use_cuda_moe', True) and HAS_CUDA_OPS
+        print(f"🔍 MoEFFNLayer init: use_cuda_ops={self.use_cuda_ops}, HAS_CUDA_OPS={HAS_CUDA_OPS}")
     
     def _init_weights(self):
         """
@@ -861,6 +864,8 @@ class MoDRouter(nn.Module):
             routing_probs: Soft routing probabilities [batch, seq_len, 1]
             aux_loss: Load balancing auxiliary loss (optional)
         """
+
+
         batch_size, seq_len, hidden_size = x.shape
         
         # Compute routing logits
@@ -902,6 +907,23 @@ class MoDRouter(nn.Module):
             actual_ratio = routing_mask.mean()
             target_ratio = self.capacity_factor
             aux_loss = F.mse_loss(actual_ratio, torch.tensor(target_ratio, device=x.device))
+
+            import time
+    
+            # Time routing
+            start = time.perf_counter()
+            
+            if self.use_cuda_ops and x.is_cuda:
+                top_k_indices, top_k_probs = MoECUDAOps.topk_gating(...)
+                routing_type = "CUDA"
+            else:
+                top_k_indices, top_k_probs = self._pytorch_routing(...)
+                routing_type = "PyTorch"
+            
+            routing_time = (time.perf_counter() - start) * 1000  # ms
+            
+            if self.training and torch.rand(1).item() < 0.01:  # Log 1% of the time
+                print(f"🔍 Routing: {routing_type} | Time: {routing_time:.3f}ms")
             
         else:
             # During inference: use threshold-based routing (more efficient)
