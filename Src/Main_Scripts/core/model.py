@@ -1123,7 +1123,7 @@ class MoEFFNLayer(nn.Module):
         # === ROUTING ===
         gate_logits = self.gate(x_flat)
         
-        if self.use_cuda_ops and x.is_cuda and not torch.is_grad_enabled():
+        if self.use_cuda_ops and x.is_cuda:
             # Only use CUDA ops during inference (no gradient checkpointing issues)
             try:
                 top_k_indices, top_k_probs = MoECUDAOps.topk_gating(
