@@ -62,4 +62,5 @@ ray
 sentencepiece
 google
 protobuf
+ninja
 transformers==4.36.2

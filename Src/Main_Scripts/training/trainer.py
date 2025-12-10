@@ -2830,9 +2830,21 @@ class EnhancedConversationTrainer:
             if self.should_stop:
                 break
                 
-            step_start_time = time.time()
+            accumulation_start_time = None
+            accumulation_total_tokens = 0
 
-            step_metrics = self.train_step(batch)
+            for batch_idx, batch in enumerate(train_dataloader):
+                if self.should_stop:
+                    break
+                
+                # ✅ Start timing at beginning of accumulation cycle
+                if accumulation_start_time is None:
+                    if torch.cuda.is_available():
+                        torch.cuda.synchronize()
+                    accumulation_start_time = time.perf_counter()
+                    accumulation_total_tokens = 0
+
+                step_metrics = self.train_step(batch)
 
             if hasattr(self, '_monitoring_queue'):
                 try:

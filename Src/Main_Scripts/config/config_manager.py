@@ -788,8 +788,8 @@ class ConfigPresets:
             
             # MoE settings - 8x pattern but smaller
             use_moe=True,
-            num_experts=8,
-            moe_top_k=1,
+            num_experts=32,
+            moe_top_k=2,
             capacity_factor=1.1,
             load_balancing_weight=0.005,
             expert_parallel_size=2,

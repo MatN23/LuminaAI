@@ -1935,8 +1935,8 @@ def main():
         
         if hasattr(ConfigPresets, config_choice):
             config = getattr(ConfigPresets, config_choice)()
-            config.use_cuda_moe = False  # Force disable CUDA MoE
             print(f"Base configuration loaded successfully")
+            config.use_cuda_moe = False
         else:
             raise ValueError(f"Unknown config preset: {config_choice}")
 

@@ -2220,7 +2220,7 @@ class DeepSeekConfig:
     seq_length: int = 2048
 
     # CUDA MoE acceleration
-    use_cuda_moe: bool = True  # Enable CUDA-accelerated MoE operations
+    use_cuda_moe: bool = False  # Enable CUDA-accelerated MoE operations
     
     # Regularization
     dropout: float = 0.0
