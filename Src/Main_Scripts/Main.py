@@ -1511,7 +1511,7 @@ def main():
     # ========================================================================
     
     # Base model configuration
-    config_choice = 'moe_stress_test'  # Options: 'debug', 'debug_200m', 'b1', 'b7', 'b14', 'b50', 'b100', 'b200', 'b300'
+    config_choice = 'debug'  # Options: 'debug', 'debug_200m', 'b1', 'b7', 'b14', 'b50', 'b100', 'b200', 'b300'
     
     # Training mode selection
     use_adaptive_training = TRAINING_INFRASTRUCTURE_AVAILABLE  # Orchestrator with AI-driven optimization
@@ -1935,6 +1935,7 @@ def main():
         
         if hasattr(ConfigPresets, config_choice):
             config = getattr(ConfigPresets, config_choice)()
+            config.use_cuda_moe = False  # Force disable CUDA MoE
             print(f"Base configuration loaded successfully")
         else:
             raise ValueError(f"Unknown config preset: {config_choice}")
