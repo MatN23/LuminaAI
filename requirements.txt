@@ -63,4 +63,4 @@ sentencepiece
 google
 protobuf
 ninja
-transformers==4.36.2
+transformers==4.57.3
