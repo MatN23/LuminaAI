@@ -830,7 +830,7 @@ class ConfigPresets:
             num_layers=6,                 # gives depth + stable timing
             num_heads=8,
             num_kv_heads=2,
-            seq_length=512,
+            seq_length=256,
 
             # MoE-heavy FFN (forces dispatch + combine to be real work)
             intermediate_size=4096,
