@@ -1071,8 +1071,8 @@ class MoEFFNLayer(nn.Module):
         self.hidden_size = config.hidden_size
         self.capacity_factor = getattr(config, 'capacity_factor', 1.25)
         
-        # Enable CUDA acceleration if available
-        self.use_cuda_ops = getattr(config, 'use_cuda_moe', True) and HAS_CUDA_OPS
+        # ✅ CORRECT: Enable CUDA acceleration if available AND explicitly enabled
+        self.use_cuda_ops = getattr(config, 'use_cuda_moe', False) and HAS_CUDA_OPS
         
         # Gating network
         self.gate = nn.Linear(config.hidden_size, config.num_experts, bias=False)
@@ -1100,9 +1100,11 @@ class MoEFFNLayer(nn.Module):
         
         self._init_weights()
         
+        # ✅ CORRECT: Log CUDA status
         op_type = "CUDA-accelerated" if self.use_cuda_ops else "PyTorch"
-        logging.debug(f"MoE initialized: {config.num_experts} experts, "
-                     f"top-{config.moe_top_k} routing ({op_type})")
+        logging.info(f"🔍 MoEFFNLayer initialized: {config.num_experts} experts, "
+                    f"top-{config.moe_top_k} routing ({op_type})")
+        print(f"🔍 MoEFFNLayer init: use_cuda_ops={self.use_cuda_ops}, HAS_CUDA_OPS={HAS_CUDA_OPS}")
     
     def _init_weights(self):
         """Initialize gating network with small weights for stability."""
