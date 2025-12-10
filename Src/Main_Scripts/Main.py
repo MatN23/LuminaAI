@@ -5,7 +5,6 @@ import os
 import sys
 import logging
 import traceback
-import traceback
 import psutil
 import gc
 import json
@@ -13,7 +12,6 @@ import time
 import math
 import signal
 import shutil
-import traceback
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List, Tuple
@@ -1120,8 +1118,7 @@ def estimate_and_display_training_time(config, dataset_size: int):
             print(f"    Consider cloud training for reliability")
     
     except Exception as e:
-        print(f"  Error estimating training time: {e}")
-        import traceback
+        print(f"  Error estimating training time: {e}")        
         traceback.print_exc()
         print("  Continuing without time estimates...")
 
@@ -2127,7 +2124,6 @@ def main():
 
         except Exception as e:
             print(f"\n✗ Dataset loading failed: {e}")
-            import traceback
             traceback.print_exc()
             return 1
 
@@ -2263,7 +2259,6 @@ def main():
                 
             except Exception as e:
                 print(f"✗ DeepSpeed Remake initialization failed: {e}")
-                import traceback
                 traceback.print_exc()
                 print("Falling back to PyTorch backend...")
                 model = base_model
@@ -2605,12 +2600,10 @@ def main():
                         
                     except Exception as e:
                         print(f"✗ DeepSpeed Remake integration failed: {e}")
-                        import traceback
                         traceback.print_exc()
                         print("Continuing with standard optimizer...")
             except Exception as e:
-                print(f"\nERROR: Failed to initialize orchestrator: {e}")
-                import traceback
+                print(f"\nERROR: Failed to initialize orchestrator: {e}")                
                 traceback.print_exc()
                 return 1
             
@@ -2936,7 +2929,6 @@ def main():
         except Exception as e:
             print(f"  ❌ PIPELINE TEST FAILED: {e}")
             print(f"  ⚠️  Adaptive features will be limited!")
-            import traceback
             traceback.print_exc()
         
         print("="*80 + "\n")
@@ -3102,7 +3094,6 @@ def main():
         print(f"Error Type: {type(e).__name__}")
         print(f"Error Message: {e}")
         print("\nFull Traceback:")
-        import traceback
         traceback.print_exc()
         print("="*80)
         return 1

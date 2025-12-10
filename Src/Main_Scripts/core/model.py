@@ -582,9 +582,6 @@ class DenseGroupedQueryAttention(nn.Module):
         
         logging.debug(f"GQA initialized: {self.num_heads} heads, {self.num_kv_heads} KV heads, "
                      f"flash_attn={self.use_flash}")
-        
-        self.use_cuda_ops = getattr(config, 'use_cuda_moe', True) and HAS_CUDA_OPS
-        print(f"🔍 MoEFFNLayer init: use_cuda_ops={self.use_cuda_ops}, HAS_CUDA_OPS={HAS_CUDA_OPS}")
     
     def _init_weights(self):
         """
