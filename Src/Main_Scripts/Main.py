@@ -1828,7 +1828,7 @@ def main():
         'generate_data_reports': True,
         'estimate_training_time': True,
         'generate_training_reports': True,
-        'auto_tune_batch_size': True,
+        'auto_tune_batch_size': False,
         'continuous_checkpointing': True,
         'enable_profiling': False,
         'save_optimizer_states': True,

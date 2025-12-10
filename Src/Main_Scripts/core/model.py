@@ -1071,7 +1071,7 @@ class MoEFFNLayer(nn.Module):
         self.hidden_size = config.hidden_size
         self.capacity_factor = getattr(config, 'capacity_factor', 1.25)
         
-        # ✅ CORRECT: Enable CUDA acceleration if available AND explicitly enabled
+        # Default to False for safety - user must opt-in
         self.use_cuda_ops = getattr(config, 'use_cuda_moe', False) and HAS_CUDA_OPS
         
         # Gating network
