@@ -1,5 +1,6 @@
 #!/bin/bash
-# Save this as: compile_kernels.sh
+# Copyright (c) 2025 MatN23. All rights reserved.
+# Licensed under the Custom License below.
 
 set -e
 

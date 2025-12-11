@@ -1,11 +1,15 @@
+# Copyright (c) 2025 MatN23. All rights reserved.
+# Licensed under the Custom License below.
+
 """
-Transformer CUDA Operations Python Wrapper
+Transformer CUDA Operations Python Wrapper with Autograd Support
 Provides RMSNorm, RoPE, and SwiGLU with automatic fallback
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.autograd import Function
 import ctypes
 import math
 from pathlib import Path
@@ -75,6 +79,185 @@ def _load_transformer_ops():
         return False
 
 
+# ============================================================================
+# AUTOGRAD FUNCTIONS FOR CUDA KERNELS
+# ============================================================================
+
+class RMSNormFunction(Function):
+    """Autograd function for RMSNorm CUDA kernel"""
+    
+    @staticmethod
+    def forward(ctx, x, weight, eps):
+        original_shape = x.shape
+        x_flat = x.view(-1, weight.shape[0]).contiguous().float()
+        
+        batch_seq = x_flat.size(0)
+        hidden_size = weight.shape[0]
+        output = torch.empty_like(x_flat)
+        
+        stream = torch.cuda.current_stream().cuda_stream
+        
+        _transformer_ops_lib.rms_norm_launcher(
+            ctypes.c_void_p(x_flat.data_ptr()),
+            ctypes.c_void_p(weight.data.data_ptr()),
+            ctypes.c_void_p(output.data_ptr()),
+            ctypes.c_int(batch_seq),
+            ctypes.c_int(hidden_size),
+            ctypes.c_float(eps),
+            ctypes.c_void_p(stream)
+        )
+        
+        torch.cuda.synchronize()
+        
+        # Save for backward
+        ctx.save_for_backward(x_flat, weight, output)
+        ctx.eps = eps
+        ctx.original_shape = original_shape
+        
+        return output.view(original_shape)
+    
+    @staticmethod
+    def backward(ctx, grad_output):
+        x_flat, weight, output = ctx.saved_tensors
+        eps = ctx.eps
+        
+        grad_output_flat = grad_output.contiguous().view_as(x_flat)
+        
+        # Compute gradients using PyTorch (fallback for backward pass)
+        # This is acceptable as backward is typically much less frequent
+        hidden_size = weight.shape[0]
+        variance = x_flat.pow(2).mean(-1, keepdim=True)
+        rstd = torch.rsqrt(variance + eps)
+        
+        # Gradient w.r.t. weight
+        grad_weight = (grad_output_flat * x_flat * rstd.expand_as(x_flat)).sum(0)
+        
+        # Gradient w.r.t. input
+        grad_input = grad_output_flat * weight.unsqueeze(0) * rstd
+        
+        # Mean-centering correction
+        mean_grad = (grad_input * x_flat).sum(-1, keepdim=True) / hidden_size
+        grad_input = grad_input - x_flat * mean_grad * rstd.pow(2)
+        
+        return grad_input.view(ctx.original_shape), grad_weight, None
+
+
+class RoPEFunction(Function):
+    """Autograd function for RoPE CUDA kernel"""
+    
+    @staticmethod
+    def forward(ctx, q, k, cos_cache, sin_cache, position_offset):
+        batch_size, num_heads, seq_len, head_dim = q.shape
+        
+        # Make contiguous copies for CUDA kernel
+        q_out = q.contiguous().float().clone()
+        k_out = k.contiguous().float().clone()
+        
+        stream = torch.cuda.current_stream().cuda_stream
+        
+        _transformer_ops_lib.rope_apply_launcher(
+            ctypes.c_void_p(q_out.data_ptr()),
+            ctypes.c_void_p(k_out.data_ptr()),
+            ctypes.c_void_p(cos_cache.data_ptr()),
+            ctypes.c_void_p(sin_cache.data_ptr()),
+            ctypes.c_int(batch_size),
+            ctypes.c_int(num_heads),
+            ctypes.c_int(seq_len),
+            ctypes.c_int(head_dim),
+            ctypes.c_int(position_offset),
+            ctypes.c_void_p(stream)
+        )
+        
+        torch.cuda.synchronize()
+        
+        # Save for backward
+        ctx.save_for_backward(cos_cache, sin_cache)
+        ctx.position_offset = position_offset
+        ctx.shape = (batch_size, num_heads, seq_len, head_dim)
+        
+        return q_out, k_out
+    
+    @staticmethod
+    def backward(ctx, grad_q, grad_k):
+        cos_cache, sin_cache = ctx.saved_tensors
+        position_offset = ctx.position_offset
+        batch_size, num_heads, seq_len, head_dim = ctx.shape
+        
+        # Apply inverse rotation (same as forward but with negated sin)
+        half_dim = head_dim // 2
+        
+        positions = torch.arange(position_offset, position_offset + seq_len, device=grad_q.device)
+        cos = cos_cache[positions].unsqueeze(0).unsqueeze(0)
+        sin = sin_cache[positions].unsqueeze(0).unsqueeze(0)
+        
+        # Inverse rotation for grad_q
+        grad_q1, grad_q2 = grad_q[..., :half_dim], grad_q[..., half_dim:]
+        grad_q_rot = torch.cat([
+            grad_q1 * cos + grad_q2 * sin,
+            -grad_q1 * sin + grad_q2 * cos
+        ], dim=-1)
+        
+        # Inverse rotation for grad_k
+        grad_k1, grad_k2 = grad_k[..., :half_dim], grad_k[..., half_dim:]
+        grad_k_rot = torch.cat([
+            grad_k1 * cos + grad_k2 * sin,
+            -grad_k1 * sin + grad_k2 * cos
+        ], dim=-1)
+        
+        return grad_q_rot, grad_k_rot, None, None, None
+
+
+class SwiGLUFunction(Function):
+    """Autograd function for SwiGLU CUDA kernel"""
+    
+    @staticmethod
+    def forward(ctx, gate, up):
+        total_tokens, intermediate_size = gate.shape
+        
+        output = torch.empty_like(gate)
+        
+        stream = torch.cuda.current_stream().cuda_stream
+        
+        _transformer_ops_lib.swiglu_launcher(
+            ctypes.c_void_p(gate.data_ptr()),
+            ctypes.c_void_p(up.data_ptr()),
+            ctypes.c_void_p(output.data_ptr()),
+            ctypes.c_int(total_tokens),
+            ctypes.c_int(intermediate_size),
+            ctypes.c_void_p(stream)
+        )
+        
+        torch.cuda.synchronize()
+        
+        # Save for backward
+        ctx.save_for_backward(gate, up)
+        
+        return output
+    
+    @staticmethod
+    def backward(ctx, grad_output):
+        gate, up = ctx.saved_tensors
+        
+        # SwiGLU: gate * silu(up)
+        # silu(x) = x * sigmoid(x)
+        sigmoid_up = torch.sigmoid(up)
+        silu_up = up * sigmoid_up
+        
+        # Gradient w.r.t. gate
+        grad_gate = grad_output * silu_up
+        
+        # Gradient w.r.t. up
+        # d/dx[x * sigmoid(x)] = sigmoid(x) + x * sigmoid(x) * (1 - sigmoid(x))
+        dsilu_up = sigmoid_up + up * sigmoid_up * (1 - sigmoid_up)
+        grad_up = grad_output * gate * dsilu_up
+        
+        return grad_gate, grad_up
+
+
+# ============================================================================
+# MODULE WRAPPERS
+# ============================================================================
+
 class FusedRMSNorm(nn.Module):
     """
     Fused RMS Normalization with CUDA acceleration.
@@ -105,33 +288,10 @@ class FusedRMSNorm(nn.Module):
             return self._pytorch_fallback(x)
         
         try:
-            return self._cuda_implementation(x)
+            return RMSNormFunction.apply(x, self.weight, self.eps)
         except Exception as e:
             logger.warning(f"CUDA RMSNorm failed: {e}, falling back to PyTorch")
             return self._pytorch_fallback(x)
-    
-    def _cuda_implementation(self, x: torch.Tensor) -> torch.Tensor:
-        """Use custom CUDA kernel"""
-        original_shape = x.shape
-        x_flat = x.view(-1, self.hidden_size).contiguous().float()
-        
-        batch_seq = x_flat.size(0)
-        output = torch.empty_like(x_flat)
-        
-        stream = torch.cuda.current_stream().cuda_stream
-        
-        _transformer_ops_lib.rms_norm_launcher(
-            ctypes.c_void_p(x_flat.data_ptr()),
-            ctypes.c_void_p(self.weight.data.data_ptr()),
-            ctypes.c_void_p(output.data_ptr()),
-            ctypes.c_int(batch_seq),
-            ctypes.c_int(self.hidden_size),
-            ctypes.c_float(self.eps),
-            ctypes.c_void_p(stream)
-        )
-        
-        torch.cuda.synchronize()
-        return output.view(original_shape)
     
     def _pytorch_fallback(self, x: torch.Tensor) -> torch.Tensor:
         """PyTorch fallback implementation"""
@@ -223,41 +383,10 @@ class FusedRoPE(nn.Module):
             return self._pytorch_fallback(q, k, position_offset)
         
         try:
-            return self._cuda_implementation(q, k, position_offset)
+            return RoPEFunction.apply(q, k, self.cos_cache, self.sin_cache, position_offset)
         except Exception as e:
             logger.warning(f"CUDA RoPE failed: {e}, falling back to PyTorch")
             return self._pytorch_fallback(q, k, position_offset)
-    
-    def _cuda_implementation(
-        self, 
-        q: torch.Tensor, 
-        k: torch.Tensor, 
-        position_offset: int
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Use custom CUDA kernel"""
-        batch_size, num_heads, seq_len, head_dim = q.shape
-        
-        # Make contiguous and float32
-        q = q.contiguous().float()
-        k = k.contiguous().float()
-        
-        stream = torch.cuda.current_stream().cuda_stream
-        
-        _transformer_ops_lib.rope_apply_launcher(
-            ctypes.c_void_p(q.data_ptr()),
-            ctypes.c_void_p(k.data_ptr()),
-            ctypes.c_void_p(self.cos_cache.data_ptr()),
-            ctypes.c_void_p(self.sin_cache.data_ptr()),
-            ctypes.c_int(batch_size),
-            ctypes.c_int(num_heads),
-            ctypes.c_int(seq_len),
-            ctypes.c_int(head_dim),
-            ctypes.c_int(position_offset),
-            ctypes.c_void_p(stream)
-        )
-        
-        torch.cuda.synchronize()
-        return q, k
     
     def _pytorch_fallback(
         self, 
@@ -326,45 +455,26 @@ class FusedSwiGLU(nn.Module):
         Returns:
             Output: [batch, seq_len, intermediate_size]
         """
-        if not self.cuda_enabled or not x.is_cuda or _transformer_ops_lib is None:
-            return self._pytorch_fallback(x)
-        
-        try:
-            return self._cuda_implementation(x)
-        except Exception as e:
-            logger.warning(f"CUDA SwiGLU failed: {e}, falling back to PyTorch")
-            return self._pytorch_fallback(x)
-    
-    def _cuda_implementation(self, x: torch.Tensor) -> torch.Tensor:
-        """Use custom CUDA kernel"""
-        original_shape = x.shape
-        x_flat = x.view(-1, self.hidden_size).contiguous().float()
-        total_tokens = x_flat.size(0)
-        
         # Compute projections
-        gate = self.gate_proj(x_flat)
-        up = self.up_proj(x_flat)
-        
-        output = torch.empty(total_tokens, self.intermediate_size, device=x.device, dtype=torch.float32)
-        
-        stream = torch.cuda.current_stream().cuda_stream
-        
-        _transformer_ops_lib.swiglu_launcher(
-            ctypes.c_void_p(gate.data_ptr()),
-            ctypes.c_void_p(up.data_ptr()),
-            ctypes.c_void_p(output.data_ptr()),
-            ctypes.c_int(total_tokens),
-            ctypes.c_int(self.intermediate_size),
-            ctypes.c_void_p(stream)
-        )
-        
-        torch.cuda.synchronize()
-        return output.view(original_shape[0], original_shape[1], self.intermediate_size)
-    
-    def _pytorch_fallback(self, x: torch.Tensor) -> torch.Tensor:
-        """PyTorch fallback implementation"""
         gate = self.gate_proj(x)
         up = self.up_proj(x)
+        
+        if not self.cuda_enabled or not x.is_cuda or _transformer_ops_lib is None:
+            return self._pytorch_fallback(gate, up)
+        
+        try:
+            original_shape = x.shape
+            gate_flat = gate.view(-1, self.intermediate_size).contiguous().float()
+            up_flat = up.view(-1, self.intermediate_size).contiguous().float()
+            
+            output = SwiGLUFunction.apply(gate_flat, up_flat)
+            return output.view(original_shape[0], original_shape[1], self.intermediate_size)
+        except Exception as e:
+            logger.warning(f"CUDA SwiGLU failed: {e}, falling back to PyTorch")
+            return self._pytorch_fallback(gate, up)
+    
+    def _pytorch_fallback(self, gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
+        """PyTorch fallback implementation"""
         return gate * F.silu(up)
 
 
@@ -400,7 +510,7 @@ def test_transformer_ops():
         # Test 1: RMSNorm
         print("\n1. Testing FusedRMSNorm...")
         rms_norm = FusedRMSNorm(hidden_size).to(device)
-        x = torch.randn(batch_size, seq_len, hidden_size, device=device)
+        x = torch.randn(batch_size, seq_len, hidden_size, device=device, requires_grad=True)
         
         output = rms_norm(x)
         print(f"   ✅ Input shape: {x.shape}")
@@ -412,12 +522,14 @@ def test_transformer_ops():
         loss = output.sum()
         loss.backward()
         print(f"   ✅ Backward pass successful")
+        print(f"   ✅ Input grad shape: {x.grad.shape}")
+        print(f"   ✅ Weight grad shape: {rms_norm.weight.grad.shape}")
         
         # Test 2: RoPE
         print("\n2. Testing FusedRoPE...")
         rope = FusedRoPE(head_dim).to(device)
-        q = torch.randn(batch_size, num_heads, seq_len, head_dim, device=device)
-        k = torch.randn(batch_size, num_heads, seq_len, head_dim, device=device)
+        q = torch.randn(batch_size, num_heads, seq_len, head_dim, device=device, requires_grad=True)
+        k = torch.randn(batch_size, num_heads, seq_len, head_dim, device=device, requires_grad=True)
         
         q_rot, k_rot = rope(q, k)
         print(f"   ✅ Q shape: {q.shape} -> {q_rot.shape}")
@@ -425,10 +537,17 @@ def test_transformer_ops():
         print(f"   ✅ Q norm preserved: {torch.allclose(q.norm(), q_rot.norm(), rtol=1e-3)}")
         print(f"   ✅ K norm preserved: {torch.allclose(k.norm(), k_rot.norm(), rtol=1e-3)}")
         
+        # Test backward
+        loss = q_rot.sum() + k_rot.sum()
+        loss.backward()
+        print(f"   ✅ Backward pass successful")
+        print(f"   ✅ Q grad shape: {q.grad.shape}")
+        print(f"   ✅ K grad shape: {k.grad.shape}")
+        
         # Test 3: SwiGLU
         print("\n3. Testing FusedSwiGLU...")
         swiglu = FusedSwiGLU(hidden_size, hidden_size * 4).to(device)
-        x = torch.randn(batch_size, seq_len, hidden_size, device=device)
+        x = torch.randn(batch_size, seq_len, hidden_size, device=device, requires_grad=True)
         
         output = swiglu(x)
         print(f"   ✅ Input shape: {x.shape}")
@@ -440,6 +559,7 @@ def test_transformer_ops():
         loss = output.sum()
         loss.backward()
         print(f"   ✅ Backward pass successful")
+        print(f"   ✅ Input grad shape: {x.grad.shape}")
         
         print("\n" + "="*80)
         print("✅ ALL TESTS PASSED!")

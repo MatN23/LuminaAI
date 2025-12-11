@@ -1,4 +1,7 @@
 #!/bin/bash
+# Copyright (c) 2025 MatN23. All rights reserved.
+# Licensed under the Custom License below.
+
 # compile_transformer_ops.sh
 # Compile RMSNorm, RoPE, and SwiGLU CUDA kernels
 

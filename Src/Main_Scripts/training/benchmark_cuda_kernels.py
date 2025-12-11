@@ -1,3 +1,6 @@
+# Copyright (c) 2025 MatN23. All rights reserved.
+# Licensed under the Custom License below.
+
 """
 CUDA Kernel Performance Benchmark
 Tests speed differences between PyTorch and custom CUDA implementations.

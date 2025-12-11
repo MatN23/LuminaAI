@@ -1,3 +1,6 @@
+// Copyright (c) 2025 MatN23. All rights reserved.
+// Licensed under the Custom License below.
+
 // fused_grad_clip.cu
 // Fused gradient norm computation + clipping in ONE pass
 // Speedup: 1.5-2x over PyTorch's clip_grad_norm_
