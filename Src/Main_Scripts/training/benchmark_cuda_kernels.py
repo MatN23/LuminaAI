@@ -261,7 +261,7 @@ def benchmark_gradient_clipping(
     # Initialize CUDA kernel if available
     if KERNELS_AVAILABLE:
         fused_clip = FusedGradClip()
-        if not fused_clip.enabled:
+        if not fused_clip.cuda_enabled:
             print("\n⚠️  CUDA kernel not enabled, skipping CUDA benchmark")
             cuda_results = None
     else:
