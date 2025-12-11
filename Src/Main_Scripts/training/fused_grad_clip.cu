@@ -3,11 +3,13 @@
 // Speedup: 1.5-2x over PyTorch's clip_grad_norm_
 //
 // Compile with:
-// nvcc -O3 -arch=sm_80 --ptxas-options=-v -c fused_grad_clip.cu -o fused_grad_clip.o
+// nvcc -O3 -arch=sm_75 --compiler-options '-fPIC' --use_fast_math --ptxas-options=-v -shared fused_grad_clip.cu -o fused_grad_clip.so
 
 #include <cuda_runtime.h>
 #include <cmath>
 #include <cfloat>
+#include <cstdio>
+#include <cstdlib>
 
 // Warp reduction for sum of squares
 __device__ __forceinline__ float warp_reduce_sum(float val) {
