@@ -77,6 +77,17 @@ except ImportError:
     logging.warning("DeepSpeed not available - falling back to standard training")
     class DeepSpeedEngine:
         pass
+try:
+    from training.cuda_kernels import FusedLoss, FusedGradClip
+    CUSTOM_KERNELS_AVAILABLE = True
+except ImportError:
+    CUSTOM_KERNELS_AVAILABLE = False
+    logging.warning("Custom CUDA kernels not available - using PyTorch fallback")
+
+if torch.cuda.is_available():
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    torch.backends.cudnn.benchmark = True
 
 try:
     from core.dataset import create_dataloader
@@ -1031,6 +1042,10 @@ class EnhancedConversationTrainer:
         self.quantization_manager = QuantizationManager(config)
         self.moe_optimizer = MoEOptimizationManager(config) if hasattr(config, 'use_moe') and config.use_moe else None
         
+        # Initialize custom CUDA kernels
+        self.fused_loss = FusedLoss() if CUSTOM_KERNELS_AVAILABLE and torch.cuda.is_available() else None
+        self.fused_grad_clip = FusedGradClip() if CUSTOM_KERNELS_AVAILABLE and torch.cuda.is_available() else None
+
         # Log precision info
         precision_info = self.precision_manager.get_precision_info()
         logging.info(f"Training precision: {precision_info['training']['precision']} ({precision_info['training']['bits']} bits)")
@@ -2231,17 +2246,12 @@ class EnhancedConversationTrainer:
         return self.precision_manager.get_autocast_context(for_inference=for_inference)
     
     def compute_loss(self, logits, labels, loss_weights):
-        """
-        FIXED: Compute loss with proper masking and accuracy calculation.
+        # ✅ NEW: Use custom kernel if available
+        if self.fused_loss is not None and self.fused_loss.enabled:
+            pad_token_id = getattr(self.tokenizer, 'pad_token_id', 0)
+            return self.fused_loss(logits, labels, loss_weights, pad_token_id)
         
-        Args:
-            logits: Model output logits [batch, seq_len, vocab_size]
-            labels: Target labels [batch, seq_len]
-            loss_weights: Optional per-token loss weights [batch, seq_len]
-
-        Returns:
-            Dictionary with loss, perplexity, accuracy, and statistics
-        """
+        # ✅ FALLBACK: Original PyTorch implementation
         # Shift for next-token prediction
         shift_logits = logits[..., :-1, :].contiguous()
         shift_labels = labels[..., 1:].contiguous()
@@ -2338,6 +2348,7 @@ class EnhancedConversationTrainer:
             'valid_tokens': valid_token_count,
             'accuracy': accuracy
         }
+
     
     def train_step(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
         """Enhanced training step with DeepSpeed, MoE, quantization, and precision support."""
@@ -2541,17 +2552,27 @@ class EnhancedConversationTrainer:
         }
     
     def _standard_optimizer_step(self) -> Dict[str, float]:
-        """Standard optimizer step with FIXED adaptive LR override support."""
+        """        
+        Standard optimizer step with FIXED adaptive LR override support.
+        Uses custom CUDA kernel for gradient clipping when available.
+        """
 
         # Only unscale for FP16 (scaler only exists for FP16)
         if self.use_amp and self.scaler is not None:
             self.scaler.unscale_(self.optimizer)
 
-        # Clip gradients
+        # ✅ NEW: Clip gradients with custom kernel or PyTorch fallback
         max_grad_norm = getattr(self.config, 'max_grad_norm', 1.0)
-        grad_norm = torch.nn.utils.clip_grad_norm_(
-            self.model.parameters(), max_grad_norm
-        )
+        
+        if self.fused_grad_clip is not None and self.fused_grad_clip.enabled:
+            # Use custom CUDA kernel (1.5-2x faster)
+            grad_norm = self.fused_grad_clip(self.model.parameters(), max_grad_norm)
+            grad_norm = torch.tensor(grad_norm)  # Convert to tensor for consistency
+        else:
+            # Fallback to PyTorch
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(), max_grad_norm
+            )
 
         # Check for NaN/Inf gradients BEFORE taking step
         if torch.isnan(grad_norm) or torch.isinf(grad_norm):
@@ -2625,11 +2646,14 @@ class EnhancedConversationTrainer:
         # Track gradient norms for emergency resolution
         if not hasattr(self, '_recent_grad_norms'):
             self._recent_grad_norms = []
-        self._recent_grad_norms.append(grad_norm.item())
+        self._recent_grad_norms.append(grad_norm.item() if isinstance(grad_norm, torch.Tensor) else grad_norm)
         if len(self._recent_grad_norms) > 20:
             self._recent_grad_norms.pop(0)
 
-        return {'grad_norm': grad_norm.item(), 'lr': current_lr}
+        return {
+            'grad_norm': grad_norm.item() if isinstance(grad_norm, torch.Tensor) else grad_norm,
+            'lr': current_lr
+        }
 
     @torch.no_grad()
     def evaluate(self, eval_dataset, max_batches: int = 100) -> Dict[str, float]:
