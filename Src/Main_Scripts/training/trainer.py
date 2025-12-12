@@ -2915,30 +2915,31 @@ class EnhancedConversationTrainer:
             # Take optimizer step after full accumulation
             if (batch_idx + 1) % gradient_accumulation_steps == 0:
                 opt_metrics = self.optimizer_step()
-                if self.global_step % 50 == 0:  # Debug every 50 steps
-                print(f"\n{'='*80}")
-                print(f"🔍 THROUGHPUT DEBUG - Step {self.global_step}")
-                print(f"{'='*80}")
-                print(f"Accumulation metrics:")
-                print(f"  Total tokens in cycle: {accumulation_metrics['tokens']}")
-                print(f"  Compute time (seconds): {accumulation_compute_time:.4f}")
-                print(f"  Gradient accum steps: {gradient_accumulation_steps}")
                 
-                if accumulation_compute_time > 0:
-                    calculated_throughput = accumulation_metrics['tokens'] / accumulation_compute_time
-                    print(f"\nCalculated throughput:")
-                    print(f"  {accumulation_metrics['tokens']} tokens / {accumulation_compute_time:.4f}s = {calculated_throughput:.0f} tokens/sec")
-                
-                print(f"\nThroughput window:")
-                print(f"  Current window: {self.throughput_window}")
-                print(f"  Window average: {self._calculate_throughput():.0f} tokens/sec")
-                
-                print(f"\nStep metrics breakdown:")
-                for i in range(gradient_accumulation_steps):
-                    if i < len(self.throughput_window):
-                        print(f"  Micro-batch {i}: {self.throughput_window[i]:.0f} tokens/sec")
-                
-                print(f"{'='*80}\n")
+                #if self.global_step % 50 == 0:  # Debug every 50 steps
+                #    print(f"\n{'='*80}")
+                #    print(f"🔍 THROUGHPUT DEBUG - Step {self.global_step}")
+                #    print(f"{'='*80}")
+                #    print(f"Accumulation metrics:")
+                #    print(f"  Total tokens in cycle: {accumulation_metrics['tokens']}")
+                #    print(f"  Compute time (seconds): {accumulation_compute_time:.4f}")
+                #    print(f"  Gradient accum steps: {gradient_accumulation_steps}")
+                #    
+                #    if accumulation_compute_time > 0:
+                #        calculated_throughput = accumulation_metrics['tokens'] / accumulation_compute_time
+                #        print(f"\nCalculated throughput:")
+                #        print(f"  {accumulation_metrics['tokens']} tokens / {accumulation_compute_time:.4f}s = {calculated_throughput:.0f} tokens/sec")
+                #    
+                #    print(f"\nThroughput window:")
+                #    print(f"  Current window: {self.throughput_window}")
+                #    print(f"  Window average: {self._calculate_throughput():.0f} tokens/sec")
+                    
+                #    print(f"\nStep metrics breakdown:")
+                #    for i in range(gradient_accumulation_steps):
+                #        if i < len(self.throughput_window):
+                #            print(f"  Micro-batch {i}: {self.throughput_window[i]:.0f} tokens/sec")
+                #    
+                #    print(f"{'='*80}\n")
                 self.global_step += 1
 
                 # ✅ Calculate ACCURATE throughput over full accumulation cycle
