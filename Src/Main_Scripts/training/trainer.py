@@ -2246,11 +2246,12 @@ class EnhancedConversationTrainer:
         return self.precision_manager.get_autocast_context(for_inference=for_inference)
     
     def compute_loss(self, logits, labels, loss_weights):
-        # ✅ NEW: Use custom kernel if available
-        if self.fused_loss is not None and self.fused_loss.enabled:
-            pad_token_id = getattr(self.tokenizer, 'pad_token_id', 0)
-            return self.fused_loss(logits, labels, loss_weights, pad_token_id)
-        
+        try:
+            if self.fused_loss is not None:
+                pad_token_id = getattr(self.tokenizer, 'pad_token_id', 0)
+                return self.fused_loss(logits, labels, loss_weights, pad_token_id)
+        except Exception as e:
+            logging.debug(f"FusedLoss failed, using PyTorch fallback: {e}")
         # ✅ FALLBACK: Original PyTorch implementation
         # Shift for next-token prediction
         shift_logits = logits[..., :-1, :].contiguous()
@@ -2560,16 +2561,22 @@ class EnhancedConversationTrainer:
         # Only unscale for FP16 (scaler only exists for FP16)
         if self.use_amp and self.scaler is not None:
             self.scaler.unscale_(self.optimizer)
-
-        # ✅ NEW: Clip gradients with custom kernel or PyTorch fallback
-        max_grad_norm = getattr(self.config, 'max_grad_norm', 1.0)
         
-        if self.fused_grad_clip is not None and self.fused_grad_clip.enabled:
-            # Use custom CUDA kernel (1.5-2x faster)
-            grad_norm = self.fused_grad_clip(self.model.parameters(), max_grad_norm)
-            grad_norm = torch.tensor(grad_norm)  # Convert to tensor for consistency
-        else:
-            # Fallback to PyTorch
+        max_grad_norm = getattr(self.config, 'max_grad_norm', 1.0)
+
+        try:
+            if self.fused_grad_clip is not None:
+                # Use custom CUDA kernel (1.5-2x faster)
+                grad_norm = self.fused_grad_clip(self.model.parameters(), max_grad_norm)
+                grad_norm = torch.tensor(grad_norm)  # Convert to tensor for consistency
+            else:
+                # Fallback to PyTorch
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(), max_grad_norm
+                )
+        except Exception as e:
+            # If custom kernel fails, fall back to PyTorch
+            logging.debug(f"FusedGradClip failed, using PyTorch fallback: {e}")
             grad_norm = torch.nn.utils.clip_grad_norm_(
                 self.model.parameters(), max_grad_norm
             )
