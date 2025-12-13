@@ -820,6 +820,66 @@ class ConfigPresets:
             streaming_threshold_gb=1.0
         )
     
+    def debug_300m() -> Config:
+        """Minimal config for debugging and testing."""
+        return Config(
+            # Tiny model for fast iteration
+            vocab_size=1024,
+            hidden_size=786,
+            num_layers=6,
+            num_heads=4,
+            num_kv_heads=4,
+            seq_length=512,
+            intermediate_size=768,
+            
+            # Fast training settings
+            batch_size=2,
+            micro_batch_size=1,
+            gradient_accumulation_steps=2,
+            num_epochs=1,
+            learning_rate=5e-5,
+            weight_decay=0.01,
+            eval_every_n_batches=50,
+            save_every_n_batches=100,
+            precision="auto",
+            inference_precision="auto",
+            compile=True,
+            num_workers=0,
+            
+            # MoE settings - 8x pattern but smaller
+            use_moe=True,
+            num_experts=8,
+            moe_top_k=2,
+            capacity_factor=1.1,
+            load_balancing_weight=0.005,
+            expert_parallel_size=2,
+            
+            # DeepSpeed settings
+            use_deepspeed=True,
+            zero_stage=1,
+            cpu_offload=False,
+            
+            # Monitoring and stability
+            experiment_name="debug_run",
+            log_level="DEBUG",
+            health_check_interval=10,
+            save_total_limit=3,
+            early_stopping_patience=None,
+            max_retries=1,
+            lr_scheduler="cosine",
+            gradient_checkpointing=False,
+            use_flash_attention=True,
+            
+            # Precision settings
+            auto_tune_precision=True,
+            precision_target="balanced",
+            dynamic_precision=False,
+            
+            # Memory settings
+            max_memory_usage=0.7,
+            streaming_threshold_gb=1.0
+        )
+    
     @staticmethod
     def moe_stress_test() -> Config:
         """Config designed specifically to benchmark MoE CUDA vs PyTorch routing."""
